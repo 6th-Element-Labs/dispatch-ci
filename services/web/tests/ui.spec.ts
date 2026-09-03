@@ -111,12 +111,42 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
 
 test('filters conversations by all, unread, and read state', async ({ page }) => {
   await page.goto('/')
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
   await page.getByRole('button', { name: 'Unread', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await page.getByRole('button', { name: 'Read', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(0)
+  await expect(page.locator('.dispatch-message-list-empty')).toHaveText('No read messages in the connected inboxes.')
   await page.getByRole('button', { name: 'All', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+})
+
+test('shows cached conversations immediately while Gmail refreshes', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    await route.fulfill({ json: { source: 'demo', conversations } })
+  })
+  await page.reload()
+  await expect(page.locator('[data-mail-source]')).toHaveText('Refreshing')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await expect(page.locator('[data-mail-source]')).toHaveText('Demo mail')
+})
+
+test('derives an immediate unread view from the cached All inbox', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=unread/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    await route.fulfill({ json: { source: 'demo', conversations } })
+  })
+  await page.getByRole('button', { name: 'Unread', exact: true }).click()
+  await expect(page.locator('[data-mail-source]')).toHaveText('Refreshing')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await expect(page.locator('[data-mail-source]')).toHaveText('Demo mail')
 })
 
 test('answers Codex approval requests without changing the request id type', async ({ page }) => {

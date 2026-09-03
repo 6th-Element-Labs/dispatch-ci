@@ -93,6 +93,7 @@ let mailState: MailStateFilter = 'all'
 let selected: ConversationProjection | undefined
 let selectedConversationId: string | undefined
 let selectionSequence = 0
+let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
 let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
 let apps: AppSummary[] = []
@@ -168,14 +169,28 @@ function resizePanel(name: 'messagesWidth' | 'agentWidth', event: PointerEvent):
   window.addEventListener('pointerup', stop)
 }
 
-function renderList(): void {
+function defaultEmptyListMessage(): string {
+  if (mailState === 'unread') return 'No unread messages in the connected inboxes.'
+  if (mailState === 'read') return 'No read messages in the connected inboxes.'
+  return 'No messages in the connected inboxes.'
+}
+
+function renderList(emptyMessage = defaultEmptyListMessage()): void {
   elements.list.innerHTML = ''
+  if (conversations.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'dispatch-message-list-empty'
+    empty.textContent = emptyMessage
+    elements.list.append(empty)
+    return
+  }
   for (const conversation of conversations) {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'dispatch-message'
     button.dataset.conversationId = conversation.id
     button.setAttribute('aria-selected', String(selectedConversationId === conversation.id))
+    button.setAttribute('aria-label', `${conversation.sender.name}, ${conversation.subject}${conversation.unread ? ', unread' : ''}`)
     button.classList.toggle('dispatch-message-unread', conversation.unread)
     const avatar = document.createElement('span')
     avatar.className = 'dispatch-avatar'
@@ -610,25 +625,72 @@ async function sendPrompt(): Promise<void> {
 }
 
 async function loadConversations(): Promise<void> {
-  elements.mailSource.textContent = 'Loading'
+  const loadSequence = ++conversationLoadSequence
+  const cacheKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailState}`
+  let usedCache = false
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[] } | null
+    if (cached?.savedAt && Date.now() - cached.savedAt < 86_400_000 && Array.isArray(cached.conversations)) {
+      conversations = cached.conversations
+      usedCache = true
+    } else {
+      conversations = []
+    }
+  } catch {
+    conversations = []
+  }
+  if (!usedCache && mailState !== 'all') {
+    try {
+      const allKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:all`
+      const cachedAll = JSON.parse(localStorage.getItem(allKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[] } | null
+      if (cachedAll?.savedAt && Date.now() - cachedAll.savedAt < 86_400_000 && Array.isArray(cachedAll.conversations)) {
+        conversations = cachedAll.conversations.filter((conversation) => mailState === 'unread' ? conversation.unread : !conversation.unread)
+        usedCache = true
+      }
+    } catch {
+      // A malformed optional cache must not block a live Gmail refresh.
+    }
+  }
+  elements.mailSource.textContent = usedCache ? 'Refreshing' : 'Loading'
   elements.mailError.hidden = true
   selected = undefined
   selectedConversationId = undefined
   selectionSequence += 1
   elements.reader.hidden = true
   elements.readerEmpty.hidden = false
+  elements.readerEmpty.textContent = usedCache && conversations.length > 0 ? 'Select a message' : `Loading ${mailState === 'all' ? '' : `${mailState} `}messages…`
   app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mailState === mailState))
   })
+  renderList(usedCache ? defaultEmptyListMessage() : 'Loading messages…')
+  if (usedCache && conversations[0]) void selectConversation(conversations[0].id)
   try {
     const result = await api.listConversations(mailState, selectedAccountId)
+    if (loadSequence !== conversationLoadSequence) return
     conversations = result.conversations
+    localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), conversations }))
     elements.mailSource.textContent = result.source === 'demo'
       ? 'Demo mail'
       : (!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected')
     renderList()
-    if (conversations[0]) await selectConversation(conversations[0].id)
+    if (conversations[0]) {
+      if (!selectedConversationId || !conversations.some((conversation) => conversation.id === selectedConversationId)) await selectConversation(conversations[0].id)
+    } else {
+      selected = undefined
+      selectedConversationId = undefined
+      elements.reader.hidden = true
+      elements.readerEmpty.hidden = false
+      elements.readerEmpty.textContent = defaultEmptyListMessage()
+      elements.context.textContent = 'No email selected'
+    }
   } catch (error) {
+    if (loadSequence !== conversationLoadSequence) return
+    if (usedCache) {
+      elements.mailSource.textContent = 'Cached mail'
+      elements.mailError.hidden = false
+      elements.mailError.textContent = 'Could not refresh Gmail. Showing the last successful inbox.'
+      return
+    }
     elements.mailSource.textContent = 'Unavailable'
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)

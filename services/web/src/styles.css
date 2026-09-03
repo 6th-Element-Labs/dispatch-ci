@@ -58,7 +58,8 @@ button { cursor: pointer; }
 .dispatch-message { width: 100%; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 9px; border: 0; border-radius: 9px; padding: 11px 9px; text-align: left; background: transparent; margin-bottom: 2px; }
 .dispatch-message[aria-selected="true"] { background: var(--dispatch-selected); }
 .dispatch-message-unread .dispatch-message-top strong, .dispatch-message-unread b { font-weight: 760; }
-.dispatch-avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--dispatch-soft); color: var(--dispatch-muted); font-size: 11px; font-weight: 750; }
+.dispatch-avatar { position: relative; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--dispatch-soft); color: var(--dispatch-muted); font-size: 11px; font-weight: 750; }
+.dispatch-message-unread .dispatch-avatar::after { content: ""; position: absolute; top: -1px; right: -1px; width: 8px; height: 8px; border: 2px solid var(--dispatch-sidebar); border-radius: 50%; background: var(--dispatch-accent); }
 .dispatch-message-top { display: flex; gap: 6px; align-items: baseline; }
 .dispatch-message-top strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .dispatch-message time { color: var(--dispatch-muted); font-size: 10px; }
@@ -67,6 +68,7 @@ button { cursor: pointer; }
 .dispatch-message small { margin-top: 4px; color: var(--dispatch-muted); font-size: 11px; }
 .dispatch-message-account { display: block; margin-top: 5px; color: var(--dispatch-accent); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dispatch-pane-error { padding: 12px; color: #c43d3d; font-size: 11px; }
+.dispatch-message-list-empty { padding: 28px 14px; color: var(--dispatch-muted); font-size: 11px; line-height: 1.5; text-align: center; }
 
 .dispatch-reader { min-width: 0; min-height: 0; position: relative; background: var(--dispatch-paper); }
 .dispatch-reader > [data-reader] { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
