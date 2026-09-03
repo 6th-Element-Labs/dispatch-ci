@@ -151,6 +151,26 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 502, { error: 'gmail_search_failed', detail: errorMessage(error) })
       }
     }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/search-messages') {
+      try {
+        const payload = await body(request)
+        const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
+        const query = typeof payload.query === 'string' ? payload.query : 'in:inbox -in:spam -in:trash'
+        const maxResults = typeof payload.maxResults === 'number' ? Math.max(1, Math.min(50, Math.trunc(payload.maxResults))) : 20
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.searchMessages) return json(response, 503, { error: 'gmail_message_search_unavailable' })
+        if (!gmail.accounts.some((account) => account.linkId === linkId)) return json(response, 400, { error: 'unknown_gmail_account' })
+        const result = await runtime.request('mcpServer/tool/call', {
+          server: gmail.server,
+          threadId: await connectorThread(),
+          tool: gmail.tools.searchMessages,
+          arguments: { link_id: linkId, query, max_results: maxResults, next_page_token: '' },
+        })
+        return json(response, 200, result)
+      } catch (error) {
+        return json(response, 502, { error: 'gmail_message_search_failed', detail: errorMessage(error) })
+      }
+    }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/read') {
       try {
         const payload = await body(request)
@@ -172,6 +192,27 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 502, { error: 'gmail_read_failed', detail: errorMessage(error) })
       }
     }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/read-thread') {
+      try {
+        const payload = await body(request)
+        const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
+        const threadId = typeof payload.threadId === 'string' ? payload.threadId : ''
+        const maxMessages = typeof payload.maxMessages === 'number' ? Math.max(1, Math.min(100, Math.trunc(payload.maxMessages))) : 50
+        if (!threadId) return json(response, 400, { error: 'threadId_required' })
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.readThread) return json(response, 503, { error: 'gmail_thread_read_unavailable' })
+        if (!gmail.accounts.some((account) => account.linkId === linkId)) return json(response, 400, { error: 'unknown_gmail_account' })
+        const result = await runtime.request('mcpServer/tool/call', {
+          server: gmail.server,
+          threadId: await connectorThread(),
+          tool: gmail.tools.readThread,
+          arguments: { link_id: linkId, thread_id: threadId, max_messages: maxMessages },
+        })
+        return json(response, 200, result)
+      } catch (error) {
+        return json(response, 502, { error: 'gmail_thread_read_failed', detail: errorMessage(error) })
+      }
+    }
     if (request.method === 'POST' && url.pathname === '/v1/threads') {
       try {
         return json(response, 201, await runtime.request('thread/start', {
@@ -182,6 +223,18 @@ export function createAgentServer(runtime: AgentRuntime) {
         }))
       } catch (error) {
         return json(response, 502, { error: 'app_server_request_failed', detail: errorMessage(error) })
+      }
+    }
+
+    const resumeMatch = /^\/v1\/threads\/([^/]+)\/resume$/.exec(url.pathname)
+    if (request.method === 'POST' && resumeMatch?.[1]) {
+      try {
+        return json(response, 200, await runtime.request('thread/resume', {
+          threadId: decodeURIComponent(resumeMatch[1]),
+          approvalPolicy: 'on-request',
+        }))
+      } catch (error) {
+        return json(response, 502, { error: 'thread_resume_failed', detail: errorMessage(error) })
       }
     }
 

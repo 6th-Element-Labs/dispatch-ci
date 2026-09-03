@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { fileURLToPath } from 'node:url'
 import { DemoMailProvider } from './demo-provider.js'
 import { GmailConnectorProvider } from './gmail-provider.js'
+import type { MailStateFilter } from './model.js'
 
 const provider = new DemoMailProvider()
 
@@ -22,7 +23,13 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage'>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'>
+
+function stateFilter(value: string | null): MailStateFilter | undefined {
+  if (value === null || value === 'all') return 'all'
+  if (value === 'read' || value === 'unread') return value
+  return undefined
+}
 
 export function createMailServer(gmail: GmailProvider = new GmailConnectorProvider()) {
   return createServer(async (request, response) => {
@@ -34,6 +41,37 @@ export function createMailServer(gmail: GmailProvider = new GmailConnectorProvid
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
       return writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'demo' })
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/conversations') {
+      const state = stateFilter(url.searchParams.get('state'))
+      if (!state) return writeJson(response, 400, { error: 'invalid_state_filter' })
+      const accountId = url.searchParams.get('account')
+      try {
+        const accounts = await gmail.accounts()
+        if (accounts.length > 0) {
+          const conversations = accountId
+            ? await gmail.listConversations(accountId, state)
+            : await gmail.listUnifiedConversations(state)
+          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations })
+        }
+      } catch (error) {
+        return writeJson(response, 502, { error: 'gmail_conversation_list_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
+      return writeJson(response, 200, { source: 'demo', scope: 'demo', state, conversations: provider.listConversations(state) })
+    }
+    const conversationMatch = /^\/v1\/conversations\/([^/]+)$/.exec(url.pathname)
+    if (request.method === 'GET' && conversationMatch?.[1]) {
+      const threadId = decodeURIComponent(conversationMatch[1])
+      const accountId = url.searchParams.get('account')
+      if (accountId) {
+        try {
+          return writeJson(response, 200, { conversation: await gmail.readConversation(accountId, threadId) })
+        } catch (error) {
+          return writeJson(response, 502, { error: 'gmail_conversation_read_failed', detail: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      const conversation = provider.readConversation(threadId)
+      return conversation ? writeJson(response, 200, { conversation }) : writeJson(response, 404, { error: 'conversation_not_found' })
     }
     if (request.method === 'GET' && url.pathname === '/v1/messages') {
       const accountId = url.searchParams.get('account')

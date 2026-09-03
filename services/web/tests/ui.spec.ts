@@ -11,13 +11,28 @@ const messages = [
   },
 ]
 
+const conversations = messages.map((message) => ({
+  ...message,
+  id: `demo:${message.threadId}`,
+  latestMessageId: message.id,
+  messageCount: 1,
+}))
+
 test.beforeEach(async ({ page }) => {
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
-  await page.route('http://127.0.0.1:8411/v1/messages', (route) => route.fulfill({ json: { source: 'demo', messages } }))
-  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/(.+)/, (route) => {
-    const id = route.request().url().split('/').pop()
-    const summary = messages.find((message) => message.id === id) ?? messages[0]!
-    return route.fulfill({ json: { message: { ...summary, source: 'demo', body: { kind: 'sanitized-html', content: '<p>Hello <strong>Steve</strong>.</p><script>window.attacked=true</script>' }, attachments: [] } } })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/, (route) => {
+    const state = new URL(route.request().url()).searchParams.get('state')
+    const filtered = conversations.filter((conversation) => state === 'all' || (state === 'unread' ? conversation.unread : !conversation.unread))
+    return route.fulfill({ json: { source: 'demo', conversations: filtered } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/, (route) => {
+    const threadId = new URL(route.request().url()).pathname.split('/').pop()
+    const summary = conversations.find((conversation) => conversation.threadId === threadId) ?? conversations[0]!
+    const message = { ...messages.find((item) => item.threadId === summary.threadId)!, source: 'demo', body: { kind: 'sanitized-html', content: '<p>Hello <strong>Steve</strong>.</p><blockquote>Earlier message</blockquote><script>window.attacked=true</script>' }, attachments: [] }
+    const threadMessages = summary.threadId === 't1'
+      ? [{ ...message, id: 'm0', receivedAt: '2026-09-03T07:30:00+12:00', receivedLabel: 'Sep 3, 7:30 AM', receivedFullLabel: 'September 3, 2026 at 7:30 AM' }, message]
+      : [message]
+    return route.fulfill({ json: { conversation: { ...summary, messageCount: threadMessages.length, source: 'demo', messages: threadMessages } } })
   })
   await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: { id: 'd1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'Re: Opua berth confirmation', bodyText: 'Thanks.', state: 'draft' } } }))
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ status: 503, json: { status: 'not_ready' } }))
@@ -29,15 +44,18 @@ test('renders the three-panel mail surface and sanitizes provider HTML', async (
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Codex' })).toBeVisible()
   await expect(page.locator('[data-context]')).toContainText('Opua berth confirmation · Ana Morales')
-  await expect(page.locator('[data-message-id="m1"] time')).toHaveText('Sep 4, 9:42 AM')
+  await expect(page.locator('[data-conversation-id="demo:t1"] time')).toHaveText('Sep 4, 9:42 AM')
   await expect(page.locator('[data-time]')).toHaveText('September 4, 2026 at 9:42 AM')
   await expect(page.locator('[data-body] script')).toHaveCount(0)
-  await expect(page.locator('[data-agent-status]')).toHaveText('Unavailable')
+  await expect(page.locator('.dispatch-thread-message')).toHaveCount(2)
+  await expect(page.getByText('Quoted history')).toHaveCount(2)
+  await expect(page.locator('.dispatch-thread-message time').first()).toHaveText('September 3, 2026 at 7:30 AM')
+  await expect(page.locator('[data-agent-status]')).toHaveText('Reconnecting')
 })
 
 test('changes selection and opens a mail-service-owned draft', async ({ page }) => {
   await page.goto('/')
-  await page.locator('[data-message-id="m2"]').click()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
   await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
   await page.getByRole('button', { name: 'Reply', exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Thanks.')
@@ -47,15 +65,14 @@ test('renders a connector-selected Gmail account without trusting list markup', 
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
   const hostile = {
-    ...messages[0]!,
+    ...conversations[0]!,
     sender: { name: '<img src=x onerror=window.attacked=true>', address: 'sender@example.com', initials: 'X' },
     subject: '<script>window.attacked=true</script>',
     accountId: 'link-one',
     accountLabel: 'work@example.com',
   }
-  await page.unroute('http://127.0.0.1:8411/v1/messages')
-  await page.route('http://127.0.0.1:8411/v1/messages', (route) => route.fulfill({ json: { source: 'gmail', scope: 'unified', messages: [hostile] } }))
-  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/m1\?account=link-one/, (route) => route.fulfill({ json: { message: { ...hostile, source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Safe body</p>' }, attachments: [] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', scope: 'unified', conversations: [hostile] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...hostile, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Safe body</p>' }, attachments: [] }] } } }))
   await page.goto('/')
   await expect(page.locator('[data-mail-source]')).toHaveText('Gmail connected')
   await expect(page.getByRole('combobox', { name: 'Gmail account' })).toHaveValue('')
@@ -90,4 +107,14 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await page.mouse.up()
   const after = await messagesPanel.boundingBox()
   expect(after!.width).toBeGreaterThan(before!.width + 30)
+})
+
+test('filters conversations by all, unread, and read state', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Unread', exact: true }).click()
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await page.getByRole('button', { name: 'Read', exact: true }).click()
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(0)
+  await page.getByRole('button', { name: 'All', exact: true }).click()
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
 })

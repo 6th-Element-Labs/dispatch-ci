@@ -1,7 +1,7 @@
-import DOMPurify from 'dompurify'
 import './styles.css'
 import { api } from './api.js'
-import type { AppSummary, DraftProjection, GmailAccount, MessageProjection, MessageSummary } from './contracts.js'
+import { renderEmailContent } from './email-renderer.js'
+import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, MailStateFilter, MessageProjection } from './contracts.js'
 import { contextLabel, gmailAppId } from './model.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -19,6 +19,7 @@ app.innerHTML = `
       <aside class="dispatch-messages" aria-label="Messages">
         <div class="dispatch-pane-heading"><h1>Messages</h1><span data-mail-source>Loading</span></div>
         <label class="dispatch-account" hidden><span>Account</span><select data-account aria-label="Gmail account"></select></label>
+        <div class="dispatch-mail-filters" aria-label="Message state"><button type="button" data-mail-state="all" aria-pressed="true">All</button><button type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button type="button" data-mail-state="read" aria-pressed="false">Read</button></div>
         <label class="dispatch-search"><span>⌕</span><input placeholder="Search mail" aria-label="Search mail"></label>
         <div class="dispatch-message-list" data-message-list></div>
         <div class="dispatch-pane-error" data-mail-error hidden></div>
@@ -85,13 +86,17 @@ const elements = {
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
 }
 
-let messages: MessageSummary[] = []
+let conversations: ConversationSummary[] = []
 let accounts: GmailAccount[] = []
 let selectedAccountId: string | undefined
-let selected: MessageProjection | undefined
-let threadId: string | undefined
+let mailState: MailStateFilter = 'all'
+let selected: ConversationProjection | undefined
+let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
 let apps: AppSummary[] = []
 let activeAgentMessage: HTMLElement | undefined
+let agentEvents: EventSource | undefined
+let reconnectTimer: number | undefined
+let agentConnecting = false
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -162,41 +167,75 @@ function resizePanel(name: 'messagesWidth' | 'agentWidth', event: PointerEvent):
 
 function renderList(): void {
   elements.list.innerHTML = ''
-  for (const message of messages) {
+  for (const conversation of conversations) {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'dispatch-message'
-    button.dataset.messageId = message.id
-    button.setAttribute('aria-selected', String(selected?.id === message.id))
+    button.dataset.conversationId = conversation.id
+    button.setAttribute('aria-selected', String(selected?.id === conversation.id))
+    button.classList.toggle('dispatch-message-unread', conversation.unread)
     const avatar = document.createElement('span')
     avatar.className = 'dispatch-avatar'
-    avatar.textContent = message.sender.initials
+    avatar.textContent = conversation.sender.initials
     const content = document.createElement('span')
     const top = document.createElement('span')
     top.className = 'dispatch-message-top'
     const sender = document.createElement('strong')
-    sender.textContent = message.sender.name
+    sender.textContent = conversation.sender.name
     const time = document.createElement('time')
-    time.textContent = message.receivedLabel
+    time.textContent = conversation.receivedLabel
     top.append(sender, time)
     const subject = document.createElement('b')
-    subject.textContent = message.subject
+    subject.textContent = conversation.subject
     const preview = document.createElement('small')
-    preview.textContent = message.preview
+    preview.textContent = conversation.preview
     const account = document.createElement('span')
     account.className = 'dispatch-message-account'
-    account.textContent = message.accountLabel ?? ''
+    account.textContent = conversation.accountLabel ?? ''
     content.append(top, subject, preview)
-    if (message.accountLabel && accounts.length > 1) content.append(account)
+    if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
-    button.addEventListener('click', () => { void selectMessage(message.id) })
+    button.addEventListener('click', () => { void selectConversation(conversation.id) })
     elements.list.append(button)
   }
 }
 
-async function selectMessage(id: string): Promise<void> {
-  const summary = messages.find((message) => message.id === id)
-  selected = await api.readMessage(id, summary?.accountId ?? selectedAccountId)
+function renderThreadMessage(message: MessageProjection): HTMLElement {
+  const article = document.createElement('article')
+  article.className = 'dispatch-thread-message'
+  const header = document.createElement('header')
+  const identity = document.createElement('div')
+  const name = document.createElement('strong')
+  name.textContent = message.sender.name
+  const address = document.createElement('small')
+  address.textContent = message.sender.address
+  identity.append(name, address)
+  const time = document.createElement('time')
+  time.dateTime = message.receivedAt
+  time.textContent = message.receivedFullLabel
+  header.append(identity, time)
+  const content = renderEmailContent(message.body.kind, message.body.content)
+  const attachmentList = document.createElement('div')
+  attachmentList.className = 'dispatch-thread-attachments'
+  for (const attachment of message.attachments) {
+    const item = document.createElement('button')
+    item.type = 'button'
+    const attachmentName = document.createElement('strong')
+    attachmentName.textContent = attachment.name
+    const size = document.createElement('small')
+    size.textContent = attachment.sizeLabel
+    item.append(attachmentName, size)
+    attachmentList.append(item)
+  }
+  article.append(header, content)
+  if (message.attachments.length > 0) article.append(attachmentList)
+  return article
+}
+
+async function selectConversation(id: string): Promise<void> {
+  const summary = conversations.find((conversation) => conversation.id === id)
+  if (!summary) return
+  selected = await api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId)
   renderList()
   elements.readerEmpty.hidden = true
   elements.reader.hidden = false
@@ -210,21 +249,8 @@ async function selectMessage(id: string): Promise<void> {
   elements.time.textContent = selected.receivedFullLabel
   elements.time.dateTime = selected.receivedAt
   elements.context.textContent = `Working with · ${contextLabel(selected)}`
-  elements.body.innerHTML = selected.body.kind === 'sanitized-html'
-    ? DOMPurify.sanitize(selected.body.content, { USE_PROFILES: { html: true } })
-    : `<p>${selected.body.content.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('\n', '<br>')}</p>`
-  elements.attachments.replaceChildren(...selected.attachments.map((attachment) => {
-    const button = document.createElement('button')
-    button.type = 'button'
-    const icon = document.createElement('span')
-    icon.textContent = 'FILE'
-    const name = document.createElement('strong')
-    name.textContent = attachment.name
-    const size = document.createElement('small')
-    size.textContent = attachment.sizeLabel
-    button.append(icon, name, size)
-    return button
-  }))
+  elements.body.replaceChildren(...selected.messages.map(renderThreadMessage))
+  elements.attachments.replaceChildren()
 }
 
 async function openDraft(): Promise<void> {
@@ -233,7 +259,7 @@ async function openDraft(): Promise<void> {
     addAgentMessage('error', 'Gmail draft creation is not enabled until connector approvals are wired.')
     return
   }
-  const draft: DraftProjection = await api.createDraft(selected.id)
+  const draft: DraftProjection = await api.createDraft(selected.latestMessageId)
   elements.body.hidden = true
   elements.attachments.hidden = true
   elements.draft.hidden = false
@@ -269,13 +295,24 @@ function handleAgentEvent(message: { method?: string; params?: unknown }): void 
   if (message.method === 'error') addAgentMessage('error', 'Codex reported an error. Review the agent service logs.')
 }
 
+function scheduleAgentReconnect(): void {
+  if (reconnectTimer !== undefined) return
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = undefined
+    void connectAgent()
+  }, 1500)
+}
+
 async function connectAgent(): Promise<void> {
+  if (agentConnecting) return
+  agentConnecting = true
   if (!await api.agentReady()) {
-    elements.agentStatus.textContent = 'Unavailable'
-    elements.connector.textContent = 'Codex App Server unavailable'
+    elements.agentStatus.textContent = 'Reconnecting'
+    elements.connector.textContent = 'Waiting for Codex App Server'
+    agentConnecting = false
+    scheduleAgentReconnect()
     return
   }
-  elements.agentStatus.textContent = 'Connected'
   try {
     apps = accounts
       .filter((account) => account.connectorId)
@@ -283,13 +320,27 @@ async function connectAgent(): Promise<void> {
     if (apps.length === 0) apps = await api.listApps()
     const gmail = gmailAppId(apps)
     elements.connector.textContent = gmail ? 'Gmail available' : 'No Gmail connector'
-    threadId = await api.startThread()
-    const events = api.events(threadId)
-    events.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as { method?: string; params?: unknown })
-    events.onerror = () => { elements.agentStatus.textContent = 'Reconnecting' }
+    if (threadId) {
+      try { threadId = await api.resumeThread(threadId) } catch { threadId = await api.startThread() }
+    } else {
+      threadId = await api.startThread()
+    }
+    localStorage.setItem('dispatch.codex.threadId', threadId)
+    agentEvents?.close()
+    agentEvents = api.events(threadId)
+    agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
+    agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as { method?: string; params?: unknown })
+    agentEvents.onerror = () => {
+      agentEvents?.close()
+      elements.agentStatus.textContent = 'Reconnecting'
+      scheduleAgentReconnect()
+    }
   } catch (error) {
-    elements.agentStatus.textContent = 'Unavailable'
+    elements.agentStatus.textContent = 'Reconnecting'
     elements.connector.textContent = error instanceof Error ? error.message : String(error)
+    scheduleAgentReconnect()
+  } finally {
+    agentConnecting = false
   }
 }
 
@@ -302,10 +353,34 @@ async function sendPrompt(): Promise<void> {
     await api.startTurn(threadId, {
       text,
       appId: gmailAppId(apps),
-      mailContext: selected ? { messageId: selected.id, threadId: selected.threadId, subject: selected.subject, sender: selected.sender.address } : undefined,
+      mailContext: selected ? { messageId: selected.latestMessageId, threadId: selected.threadId, subject: selected.subject, sender: selected.sender.address } : undefined,
     })
   } catch (error) {
     addAgentMessage('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function loadConversations(): Promise<void> {
+  elements.mailSource.textContent = 'Loading'
+  elements.mailError.hidden = true
+  selected = undefined
+  elements.reader.hidden = true
+  elements.readerEmpty.hidden = false
+  app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.mailState === mailState))
+  })
+  try {
+    const result = await api.listConversations(mailState, selectedAccountId)
+    conversations = result.conversations
+    elements.mailSource.textContent = result.source === 'demo'
+      ? 'Demo mail'
+      : (!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected')
+    renderList()
+    if (conversations[0]) await selectConversation(conversations[0].id)
+  } catch (error) {
+    elements.mailSource.textContent = 'Unavailable'
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
   }
 }
 
@@ -326,27 +401,24 @@ async function start(): Promise<void> {
       }))
       elements.accountWrap.hidden = false
     }
-    const result = await api.listMessages(selectedAccountId)
-    messages = result.messages
-    elements.mailSource.textContent = result.source === 'demo'
-      ? 'Demo mail'
-      : (!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected')
-    renderList()
-    if (messages[0]) await selectMessage(messages[0].id)
   } catch (error) {
     elements.mailSource.textContent = 'Unavailable'
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    return
   }
-  await connectAgent()
+  await Promise.all([loadConversations(), connectAgent()])
 }
 
 app.querySelector('[data-refresh]')?.addEventListener('click', () => location.reload())
 elements.account.addEventListener('change', () => {
   selectedAccountId = elements.account.value || undefined
-  selected = undefined
-  void start()
+  void loadConversations()
 })
+app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => button.addEventListener('click', () => {
+  mailState = button.dataset.mailState as MailStateFilter
+  void loadConversations()
+}))
 app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => {
   const name = button.dataset.panel as PanelName
   const visibleCount = Number(panels.messages) + Number(panels.reader) + Number(panels.agent)

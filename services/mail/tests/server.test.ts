@@ -14,6 +14,9 @@ async function start() {
     listMessages: async () => [],
     listUnifiedMessages: async () => [],
     readMessage: async () => { throw new Error('not configured') },
+    listConversations: async () => [],
+    listUnifiedConversations: async () => [],
+    readConversation: async () => { throw new Error('not configured') },
   })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -44,6 +47,16 @@ describe('dispatch-mail', () => {
     expect(body.draft).toMatchObject({ state: 'draft', inReplyToMessageId: 'demo-message-opua' })
   })
 
+  it('exposes threaded conversations with read-state filters', async () => {
+    const base = await start()
+    const unread = await (await fetch(`${base}/v1/conversations?state=unread`)).json()
+    expect(unread.conversations).toHaveLength(2)
+    const read = await (await fetch(`${base}/v1/conversations?state=read`)).json()
+    expect(read.conversations).toHaveLength(1)
+    const thread = await (await fetch(`${base}/v1/conversations/demo-thread-opua`)).json()
+    expect(thread.conversation).toMatchObject({ threadId: 'demo-thread-opua', messageCount: 1 })
+  })
+
   it('uses the Gmail provider as one unified inbox when accounts are available', async () => {
     const listUnifiedMessages = async () => [{
       id: 'm1', threadId: 't1', sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' },
@@ -56,6 +69,9 @@ describe('dispatch-mail', () => {
       listMessages: async () => [],
       listUnifiedMessages,
       readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [],
+      listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
     })
     servers.push(server)
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))

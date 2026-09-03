@@ -16,7 +16,7 @@ describe('Gmail inventory', () => {
       available: true,
       server: 'codex_apps',
       accounts: [{ connectorId: 'connector-gmail', linkId: 'link-one', name: 'Work', email: 'work@example.com' }],
-      tools: { search: 'gmail.search_email_ids', read: 'gmail.read_email', readThread: null, createDraft: null },
+      tools: { search: 'gmail.search_email_ids', searchMessages: null, read: 'gmail.read_email', readThread: null, createDraft: null },
     })
   })
 

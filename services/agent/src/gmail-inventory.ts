@@ -11,6 +11,7 @@ export interface GmailInventory {
   readonly accounts: readonly GmailAccount[]
   readonly tools: {
     readonly search: string | null
+    readonly searchMessages: string | null
     readonly read: string | null
     readonly readThread: string | null
     readonly createDraft: string | null
@@ -94,6 +95,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
     accounts: [...accounts.values()],
     tools: {
       search: find('search_email_ids'),
+      searchMessages: find('search_emails'),
       read: find('read_email'),
       readThread: find('read_email_thread'),
       createDraft: find('create_draft'),

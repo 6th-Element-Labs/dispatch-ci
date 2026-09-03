@@ -42,3 +42,26 @@ export interface DraftProjection {
   readonly bodyText: string
   readonly state: 'draft'
 }
+
+export type MailStateFilter = 'all' | 'unread' | 'read'
+
+export interface ConversationSummary {
+  readonly id: string
+  readonly threadId: string
+  readonly accountId?: string
+  readonly accountLabel?: string
+  readonly latestMessageId: string
+  readonly sender: MailAddress
+  readonly subject: string
+  readonly receivedAt: string
+  readonly receivedLabel: string
+  readonly receivedFullLabel: string
+  readonly preview: string
+  readonly unread: boolean
+  readonly messageCount: number
+}
+
+export interface ConversationProjection extends ConversationSummary {
+  readonly messages: readonly MessageProjection[]
+  readonly source: 'demo' | 'gmail'
+}

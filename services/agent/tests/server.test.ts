@@ -45,6 +45,14 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('resumes an existing Codex thread after an adapter restart', async () => {
+    const { base, fake } = await start()
+    fake.request.mockResolvedValueOnce({ thread: { id: 'thread-1' } })
+    const response = await fetch(`${base}/v1/threads/thread-1/resume`, { method: 'POST' })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('thread/resume', { threadId: 'thread-1', approvalPolicy: 'on-request' })
+  })
+
   it('normalizes installed connector state for the thin client', async () => {
     const { base, fake } = await start()
     fake.request.mockResolvedValueOnce({ apps: [{ id: 'gmail', runtimeName: 'Gmail', enabled: true, callable: true }] })
@@ -60,5 +68,26 @@ describe('dispatch-agent', () => {
     const response = await fetch(`${base}/v1/apps`)
     await expect(response.json()).resolves.toEqual({ data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true, callable: true }] })
     expect(fake.request).toHaveBeenNthCalledWith(2, 'app/list', { cursor: null, limit: 20, forceRefetch: false })
+  })
+
+  it('reads a complete Gmail thread through the Codex connector', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.read_email_thread': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one', link_owner_profile: { email: 'work@example.com' } } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      if (method === 'mcpServer/tool/call') return { structuredContent: { messages: [] } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/read-thread`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', threadId: 'gmail-thread', maxMessages: 20 }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      server: 'codex_apps', tool: 'gmail.read_email_thread',
+      arguments: { link_id: 'link-one', thread_id: 'gmail-thread', max_messages: 20 },
+    }))
   })
 })

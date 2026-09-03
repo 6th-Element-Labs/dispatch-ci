@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { GmailConnectorProvider, projectGmailMessage } from '../src/gmail-provider.js'
+import { GmailConnectorProvider, projectGmailMessage, projectGmailSearchEmail } from '../src/gmail-provider.js'
 
 const servers: ReturnType<typeof createServer>[] = []
 afterEach(async () => Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve())))))
@@ -31,11 +31,22 @@ describe('GmailConnectorProvider', () => {
     })
   })
 
+  it('projects bounded Gmail search results without a second read call', () => {
+    expect(projectGmailSearchEmail({
+      id: 'm1', thread_id: 't1', from_: 'Ana <ana@example.com>', subject: 'Hello', snippet: 'Preview', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-03T21:42:00Z',
+    }, { id: 'one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' })).toMatchObject({
+      id: 'm1', threadId: 't1', unread: true, accountId: 'one', receivedAt: '2026-09-03T21:42:00.000Z',
+    })
+  })
+
   it('uses the agent service instead of reading connector state directly', async () => {
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
       if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
-      if (request.url === '/v1/connectors/gmail/search') return response.end(JSON.stringify({ structuredContent: { message_ids: ['gmail-message-1'] } }))
+      if (request.url === '/v1/connectors/gmail/search-messages') return response.end(JSON.stringify({ structuredContent: { emails: [{
+        id: 'gmail-message-1', thread_id: 'gmail-thread-1', from_: 'Ana Morales <ana@example.com>', subject: 'Berth confirmation', snippet: 'A short preview', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-03T21:42:00Z',
+      }] } }))
+      if (request.url === '/v1/connectors/gmail/read-thread') return response.end(JSON.stringify({ structuredContent: { messages: [gmailMessage.structuredContent] } }))
       if (request.url === '/v1/connectors/gmail/read') return response.end(JSON.stringify(gmailMessage))
       response.statusCode = 404
       response.end('{}')
@@ -46,5 +57,6 @@ describe('GmailConnectorProvider', () => {
     expect(await provider.accounts()).toEqual([{ id: 'link-one', connectorId: '', name: 'Work', email: 'work@example.com' }])
     expect(await provider.listMessages('link-one', 1)).toHaveLength(1)
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })
+    expect(await provider.readConversation('link-one', 'gmail-thread-1')).toMatchObject({ threadId: 'gmail-thread-1', messageCount: 1, source: 'gmail' })
   })
 })

@@ -1,4 +1,5 @@
-import type { DraftProjection, MessageProjection, MessageSummary } from './model.js'
+import { groupConversations, projectConversation } from './conversation.js'
+import type { ConversationProjection, ConversationSummary, DraftProjection, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 const messages: readonly MessageProjection[] = [
   {
@@ -67,6 +68,15 @@ export class DemoMailProvider {
 
   readMessage(id: string): MessageProjection | undefined {
     return messages.find((message) => message.id === id)
+  }
+
+  listConversations(state: MailStateFilter): readonly ConversationSummary[] {
+    return groupConversations(messages, state)
+  }
+
+  readConversation(threadId: string): ConversationProjection | undefined {
+    const thread = messages.filter((message) => message.threadId === threadId)
+    return thread.length > 0 ? projectConversation(thread, 'demo') : undefined
   }
 
   createDraft(messageId: string): DraftProjection | undefined {

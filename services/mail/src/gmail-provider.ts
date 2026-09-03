@@ -1,4 +1,5 @@
-import type { AttachmentProjection, MailAddress, MessageProjection, MessageSummary } from './model.js'
+import { groupConversations, projectConversation } from './conversation.js'
+import type { AttachmentProjection, ConversationProjection, ConversationSummary, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -113,6 +114,27 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
   return projection
 }
 
+export function projectGmailSearchEmail(value: unknown, account: GmailAccountProjection): MessageSummary {
+  const email = record(value) ?? {}
+  const receivedAt = received(text(email.email_ts))
+  const id = text(email.id)
+  const threadId = text(email.thread_id)
+  if (!id || !threadId) throw new Error('Gmail search result is missing stable message identity')
+  return {
+    id,
+    threadId,
+    sender: sender(text(email.from_) || 'Unknown sender'),
+    subject: text(email.subject) || '(No subject)',
+    receivedAt: receivedAt.iso,
+    receivedLabel: receivedAt.label,
+    receivedFullLabel: receivedAt.fullLabel,
+    preview: text(email.snippet),
+    unread: array(email.labels).includes('UNREAD'),
+    accountId: account.id,
+    accountLabel: account.email || account.name,
+  }
+}
+
 export class GmailConnectorProvider {
   readonly #agentBase: string
 
@@ -146,22 +168,34 @@ export class GmailConnectorProvider {
       .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
   }
 
+  async listConversations(accountId: string, state: MailStateFilter, maxResults = 20): Promise<readonly ConversationSummary[]> {
+    return groupConversations(await this.listMessages(accountId, maxResults), state)
+  }
+
+  async listUnifiedConversations(state: MailStateFilter, maxResultsPerAccount = 20): Promise<readonly ConversationSummary[]> {
+    return groupConversations(await this.listUnifiedMessages(maxResultsPerAccount), state)
+  }
+
   async #listAccountMessages(account: GmailAccountProjection, maxResults: number): Promise<readonly MessageSummary[]> {
-    const search = await this.#post('/v1/connectors/gmail/search', {
+    const search = await this.#post('/v1/connectors/gmail/search-messages', {
       linkId: account.id, query: 'in:inbox -in:spam -in:trash', maxResults,
     })
-    const ids = array(structured(search).message_ids).map(text).filter(Boolean)
-    return Promise.all(ids.map(async (id) => {
-      const value = await this.#post('/v1/connectors/gmail/read', { linkId: account.id, messageId: id, format: 'metadata' })
-      const { body: _body, attachments: _attachments, source: _source, ...summary } = projectGmailMessage(value, false, account)
-      return summary
-    }))
+    return array(structured(search).emails).map((email) => projectGmailSearchEmail(email, account))
   }
 
   async readMessage(accountId: string, messageId: string): Promise<MessageProjection> {
     const account = await this.#account(accountId)
     const value = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'full' })
     return projectGmailMessage(value, true, account)
+  }
+
+  async readConversation(accountId: string, threadId: string): Promise<ConversationProjection> {
+    const account = await this.#account(accountId)
+    const value = await this.#post('/v1/connectors/gmail/read-thread', { linkId: accountId, threadId, maxMessages: 100 })
+    const thread = structured(value)
+    const messages = array(thread.messages).map((message) => projectGmailMessage({ structuredContent: message }, true, account))
+    if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
+    return projectConversation(messages, 'gmail')
   }
 
   async #account(accountId: string): Promise<GmailAccountProjection> {

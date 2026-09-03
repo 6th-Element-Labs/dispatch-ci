@@ -28,11 +28,13 @@ Browser or Tauri WebKit
 
 ### Mail
 
-`dispatch-mail` owns browser-facing message and draft view models. It calls the agent service's typed, read-only Gmail adapter, retrieves each connector account, merges their bounded projections by source time, and converts Gmail headers and MIME parts into safe view models. An explicit in-memory demo provider remains available when no connector account is present. Gmail writes are not enabled.
+`dispatch-mail` owns browser-facing conversation, message, and draft view models. It calls the agent service's typed, read-only Gmail adapter, retrieves each connector account, groups messages by account plus Gmail thread ID, merges conversation projections by source time, and converts Gmail headers and MIME parts into safe view models. It owns All, Unread, and Read filter semantics. An explicit in-memory demo provider remains available when no connector account is present. Gmail writes are not enabled.
 
 ### Agent
 
 `dispatch-agent` is the only service that starts and communicates with Codex App Server. It exposes a small HTTP and server-sent-event adapter for account state, installed apps, threads, turns, and streamed items. It does not implement a model loop.
+
+The browser persists the current Codex thread ID. After an agent-service restart, it resumes that thread through App Server before reopening the event stream. If App Server is temporarily unavailable, the browser shows `Reconnecting` and retries. It does not report a disconnected stream as connected.
 
 ## SimpleMark reuse
 

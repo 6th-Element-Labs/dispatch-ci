@@ -1,4 +1,4 @@
-import type { AppSummary, DraftProjection, GmailAccount, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -18,6 +18,16 @@ export const api = {
   async listMessages(accountId?: string): Promise<{ source: 'demo' | 'gmail'; messages: MessageSummary[] }> {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     return request(`${MAIL}/v1/messages${query}`)
+  },
+  async listConversations(state: MailStateFilter, accountId?: string): Promise<{ source: 'demo' | 'gmail'; conversations: ConversationSummary[] }> {
+    const params = new URLSearchParams({ state })
+    if (accountId) params.set('account', accountId)
+    return request(`${MAIL}/v1/conversations?${params}`)
+  },
+  async readConversation(threadId: string, accountId?: string): Promise<ConversationProjection> {
+    const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
+    const result = await request<{ conversation: ConversationProjection }>(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}${query}`)
+    return result.conversation
   },
   async readMessage(id: string, accountId?: string): Promise<MessageProjection> {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
@@ -39,6 +49,10 @@ export const api = {
   },
   async startThread(): Promise<string> {
     const result = await request<{ thread: { id: string } }>(`${AGENT}/v1/threads`, { method: 'POST' })
+    return result.thread.id
+  },
+  async resumeThread(threadId: string): Promise<string> {
+    const result = await request<{ thread: { id: string } }>(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' })
     return result.thread.id
   },
   async startTurn(threadId: string, payload: Record<string, unknown>): Promise<void> {
