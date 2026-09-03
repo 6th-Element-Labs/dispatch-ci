@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify'
 import './styles.css'
 import { api } from './api.js'
-import type { AppSummary, DraftProjection, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, DraftProjection, GmailAccount, MessageProjection, MessageSummary } from './contracts.js'
 import { contextLabel, gmailAppId } from './model.js'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -17,6 +17,7 @@ app.innerHTML = `
     <div class="dispatch-workspace">
       <aside class="dispatch-messages" aria-label="Messages">
         <div class="dispatch-pane-heading"><h1>Messages</h1><span data-mail-source>Loading</span></div>
+        <label class="dispatch-account" hidden><span>Account</span><select data-account aria-label="Gmail account"></select></label>
         <label class="dispatch-search"><span>⌕</span><input placeholder="Search mail" aria-label="Search mail"></label>
         <div class="dispatch-message-list" data-message-list></div>
         <div class="dispatch-pane-error" data-mail-error hidden></div>
@@ -52,6 +53,8 @@ app.innerHTML = `
 const elements = {
   list: app.querySelector<HTMLElement>('[data-message-list]')!,
   mailSource: app.querySelector<HTMLElement>('[data-mail-source]')!,
+  accountWrap: app.querySelector<HTMLElement>('.dispatch-account')!,
+  account: app.querySelector<HTMLSelectElement>('[data-account]')!,
   mailError: app.querySelector<HTMLElement>('[data-mail-error]')!,
   reader: app.querySelector<HTMLElement>('[data-reader]')!,
   readerEmpty: app.querySelector<HTMLElement>('[data-reader-empty]')!,
@@ -74,6 +77,8 @@ const elements = {
 }
 
 let messages: MessageSummary[] = []
+let accounts: GmailAccount[] = []
+let selectedAccountId: string | undefined
 let selected: MessageProjection | undefined
 let threadId: string | undefined
 let apps: AppSummary[] = []
@@ -87,14 +92,30 @@ function renderList(): void {
     button.className = 'dispatch-message'
     button.dataset.messageId = message.id
     button.setAttribute('aria-selected', String(selected?.id === message.id))
-    button.innerHTML = `<span class="dispatch-avatar">${message.sender.initials}</span><span><span class="dispatch-message-top"><strong>${message.sender.name}</strong><time>${message.receivedLabel}</time></span><b>${message.subject}</b><small>${message.preview}</small></span>`
+    const avatar = document.createElement('span')
+    avatar.className = 'dispatch-avatar'
+    avatar.textContent = message.sender.initials
+    const content = document.createElement('span')
+    const top = document.createElement('span')
+    top.className = 'dispatch-message-top'
+    const sender = document.createElement('strong')
+    sender.textContent = message.sender.name
+    const time = document.createElement('time')
+    time.textContent = message.receivedLabel
+    top.append(sender, time)
+    const subject = document.createElement('b')
+    subject.textContent = message.subject
+    const preview = document.createElement('small')
+    preview.textContent = message.preview
+    content.append(top, subject, preview)
+    button.append(avatar, content)
     button.addEventListener('click', () => { void selectMessage(message.id) })
     elements.list.append(button)
   }
 }
 
 async function selectMessage(id: string): Promise<void> {
-  selected = await api.readMessage(id)
+  selected = await api.readMessage(id, selectedAccountId)
   renderList()
   elements.readerEmpty.hidden = true
   elements.reader.hidden = false
@@ -111,11 +132,26 @@ async function selectMessage(id: string): Promise<void> {
   elements.body.innerHTML = selected.body.kind === 'sanitized-html'
     ? DOMPurify.sanitize(selected.body.content, { USE_PROFILES: { html: true } })
     : `<p>${selected.body.content.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('\n', '<br>')}</p>`
-  elements.attachments.innerHTML = selected.attachments.map((attachment) => `<button type="button"><span>FILE</span><strong>${attachment.name}</strong><small>${attachment.sizeLabel}</small></button>`).join('')
+  elements.attachments.replaceChildren(...selected.attachments.map((attachment) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    const icon = document.createElement('span')
+    icon.textContent = 'FILE'
+    const name = document.createElement('strong')
+    name.textContent = attachment.name
+    const size = document.createElement('small')
+    size.textContent = attachment.sizeLabel
+    button.append(icon, name, size)
+    return button
+  }))
 }
 
 async function openDraft(): Promise<void> {
   if (!selected) return
+  if (selected.source === 'gmail') {
+    addAgentMessage('error', 'Gmail draft creation is not enabled until connector approvals are wired.')
+    return
+  }
   const draft: DraftProjection = await api.createDraft(selected.id)
   elements.body.hidden = true
   elements.attachments.hidden = true
@@ -159,7 +195,10 @@ async function connectAgent(): Promise<void> {
   }
   elements.agentStatus.textContent = 'Connected'
   try {
-    apps = await api.listApps()
+    apps = accounts
+      .filter((account) => account.connectorId)
+      .map((account) => ({ id: account.connectorId, name: 'Gmail', isAccessible: true, isEnabled: true }))
+    if (apps.length === 0) apps = await api.listApps()
     const gmail = gmailAppId(apps)
     elements.connector.textContent = gmail ? 'Gmail available' : 'No Gmail connector'
     threadId = await api.startThread()
@@ -190,9 +229,21 @@ async function sendPrompt(): Promise<void> {
 
 async function start(): Promise<void> {
   try {
-    const result = await api.listMessages()
+    accounts = await api.listAccounts()
+    if (accounts.length > 0) {
+      selectedAccountId ??= accounts[0]?.id
+      elements.account.replaceChildren(...accounts.map((account) => {
+        const option = document.createElement('option')
+        option.value = account.id
+        option.textContent = account.email || account.name
+        option.selected = account.id === selectedAccountId
+        return option
+      }))
+      elements.accountWrap.hidden = false
+    }
+    const result = await api.listMessages(selectedAccountId)
     messages = result.messages
-    elements.mailSource.textContent = result.source === 'demo' ? 'Demo mail' : 'Gmail'
+    elements.mailSource.textContent = result.source === 'demo' ? 'Demo mail' : 'Gmail connected'
     renderList()
     if (messages[0]) await selectMessage(messages[0].id)
   } catch (error) {
@@ -204,6 +255,11 @@ async function start(): Promise<void> {
 }
 
 app.querySelector('[data-refresh]')?.addEventListener('click', () => location.reload())
+elements.account.addEventListener('change', () => {
+  selectedAccountId = elements.account.value
+  selected = undefined
+  void start()
+})
 app.querySelectorAll('[data-compose], [data-reply]').forEach((button) => button.addEventListener('click', () => { void openDraft() }))
 app.querySelector('[data-ask]')?.addEventListener('click', () => elements.prompt.focus())
 app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })
@@ -219,4 +275,3 @@ elements.prompt.addEventListener('keydown', (event) => {
 })
 
 void start()
-

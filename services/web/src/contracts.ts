@@ -37,3 +37,9 @@ export interface AppSummary {
   readonly isEnabled: boolean
 }
 
+export interface GmailAccount {
+  readonly id: string
+  readonly connectorId: string
+  readonly name: string
+  readonly email: string
+}

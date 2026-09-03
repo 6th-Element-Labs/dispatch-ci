@@ -6,7 +6,7 @@ Dispatch puts Gmail and Codex in one focused workspace:
 - the selected email or draft in the middle;
 - the Codex harness on the right.
 
-Status: foundation proof. The web client and local services run. Gmail-backed message projection is not connected yet.
+Status: working read-only foundation. The web client and local services run, the installed Codex harness connects, and Gmail message projections load through the existing connector. Gmail writes remain disabled.
 
 ## Services
 
@@ -29,7 +29,7 @@ bash scripts/dev.sh
 
 Open `http://127.0.0.1:8410`.
 
-The mail surface uses explicit demo data. The agent service uses the installed Codex App Server and can report account and connector state. Sending a chat message can consume Codex usage.
+The mail surface uses the connector-selected Gmail account when available and labels fixture data as demo mail otherwise. The agent service uses the installed Codex App Server. Sending a chat message can consume Codex usage. Gmail write actions are not enabled yet.
 
 ## Verify
 
@@ -38,4 +38,3 @@ bash scripts/dispatch_ci.sh
 ```
 
 The canonical repository is private. `6th-Element-Labs/dispatch-ci` is a public, verification-only CI sandbox. Any branch pushed there becomes public.
-

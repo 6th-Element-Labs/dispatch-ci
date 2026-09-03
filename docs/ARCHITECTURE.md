@@ -28,7 +28,7 @@ Browser or Tauri WebKit
 
 ### Mail
 
-`dispatch-mail` owns browser-facing message and draft view models. The foundation uses an explicit in-memory demo provider. A Gmail adapter will replace it only after connector coverage is measured.
+`dispatch-mail` owns browser-facing message and draft view models. It calls the agent service's typed, read-only Gmail adapter and converts Gmail headers and MIME parts into bounded projections. An explicit in-memory demo provider remains available when no connector account is present. Gmail writes are not enabled.
 
 ### Agent
 
@@ -60,4 +60,3 @@ Browser development uses localhost HTTP and SSE. The macOS shell will start the 
 - Agent failure leaves email readable and shows Codex as unavailable.
 - App Server restart does not fabricate successful turns.
 - Demo mail is visibly labeled and never presented as Gmail evidence.
-

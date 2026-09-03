@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { fileURLToPath } from 'node:url'
 import { CodexProcess } from './codex-process.js'
 import type { RpcMessage } from './json-line-rpc.js'
+import { readGmailInventory, type GmailInventory } from './gmail-inventory.js'
 
 interface AgentRuntime {
   ready(): Promise<void>
@@ -55,6 +56,37 @@ async function readApps(runtime: AgentRuntime): Promise<unknown> {
 }
 
 export function createAgentServer(runtime: AgentRuntime) {
+  let gmailInventory: Promise<GmailInventory> | undefined
+  let connectorThreadId: Promise<string> | undefined
+
+  const inventory = async (): Promise<GmailInventory> => {
+    gmailInventory ??= runtime
+      .request('mcpServerStatus/list', { cursor: null, limit: 100, detail: 'toolsAndAuthOnly' })
+      .then(readGmailInventory)
+      .catch((error) => {
+        gmailInventory = undefined
+        throw error
+      })
+    return gmailInventory
+  }
+
+  const connectorThread = async (): Promise<string> => {
+    connectorThreadId ??= runtime.request('thread/start', {
+      cwd: process.cwd(),
+      approvalPolicy: 'on-request',
+      sandboxPolicy: { type: 'readOnly', access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [] } },
+      serviceName: 'dispatch-mail-connector',
+    }).then((value) => {
+      const result = value as { thread?: { id?: unknown } }
+      if (typeof result.thread?.id !== 'string') throw new Error('Codex App Server did not return a connector thread id')
+      return result.thread.id
+    }).catch((error) => {
+      connectorThreadId = undefined
+      throw error
+    })
+    return connectorThreadId
+  }
+
   return createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return json(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -90,6 +122,54 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 200, { data })
       } catch (error) {
         return json(response, 502, { error: 'app_server_request_failed', detail: errorMessage(error) })
+      }
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/connectors/gmail') {
+      try {
+        return json(response, 200, await inventory())
+      } catch (error) {
+        return json(response, 502, { error: 'gmail_inventory_failed', detail: errorMessage(error) })
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/search') {
+      try {
+        const payload = await body(request)
+        const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
+        const query = typeof payload.query === 'string' ? payload.query : 'in:inbox -in:spam -in:trash'
+        const maxResults = typeof payload.maxResults === 'number' ? Math.max(1, Math.min(50, Math.trunc(payload.maxResults))) : 20
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.search) return json(response, 503, { error: 'gmail_search_unavailable' })
+        if (!gmail.accounts.some((account) => account.linkId === linkId)) return json(response, 400, { error: 'unknown_gmail_account' })
+        const result = await runtime.request('mcpServer/tool/call', {
+          server: gmail.server,
+          threadId: await connectorThread(),
+          tool: gmail.tools.search,
+          arguments: { link_id: linkId, query, label_ids: ['INBOX'], max_results: maxResults, next_page_token: '' },
+        })
+        return json(response, 200, result)
+      } catch (error) {
+        return json(response, 502, { error: 'gmail_search_failed', detail: errorMessage(error) })
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/read') {
+      try {
+        const payload = await body(request)
+        const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
+        const messageId = typeof payload.messageId === 'string' ? payload.messageId : ''
+        const format = payload.format === 'metadata' ? 'metadata' : 'full'
+        if (!messageId) return json(response, 400, { error: 'messageId_required' })
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.read) return json(response, 503, { error: 'gmail_read_unavailable' })
+        if (!gmail.accounts.some((account) => account.linkId === linkId)) return json(response, 400, { error: 'unknown_gmail_account' })
+        const result = await runtime.request('mcpServer/tool/call', {
+          server: gmail.server,
+          threadId: await connectorThread(),
+          tool: gmail.tools.read,
+          arguments: { link_id: linkId, message_id: messageId, format },
+        })
+        return json(response, 200, result)
+      } catch (error) {
+        return json(response, 502, { error: 'gmail_read_failed', detail: errorMessage(error) })
       }
     }
     if (request.method === 'POST' && url.pathname === '/v1/threads') {

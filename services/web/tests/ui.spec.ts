@@ -12,6 +12,7 @@ const messages = [
 ]
 
 test.beforeEach(async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
   await page.route('http://127.0.0.1:8411/v1/messages', (route) => route.fulfill({ json: { source: 'demo', messages } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/(.+)/, (route) => {
     const id = route.request().url().split('/').pop()
@@ -38,4 +39,21 @@ test('changes selection and opens a mail-service-owned draft', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
   await page.getByRole('button', { name: 'Reply', exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Thanks.')
+})
+
+test('renders a connector-selected Gmail account without trusting list markup', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const hostile = {
+    ...messages[0]!,
+    sender: { name: '<img src=x onerror=window.attacked=true>', address: 'sender@example.com', initials: 'X' },
+    subject: '<script>window.attacked=true</script>',
+  }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\?account=link-one/, (route) => route.fulfill({ json: { source: 'gmail', messages: [hostile] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/m1\?account=link-one/, (route) => route.fulfill({ json: { message: { ...hostile, source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Safe body</p>' }, attachments: [] } } }))
+  await page.goto('/')
+  await expect(page.locator('[data-mail-source]')).toHaveText('Gmail connected')
+  await expect(page.getByRole('combobox', { name: 'Gmail account' })).toHaveValue('link-one')
+  await expect(page.locator('[data-message-list] img')).toHaveCount(0)
+  expect(await page.evaluate(() => (window as Window & { attacked?: boolean }).attacked)).not.toBe(true)
 })

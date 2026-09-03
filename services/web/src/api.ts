@@ -1,4 +1,4 @@
-import type { AppSummary, DraftProjection, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, DraftProjection, GmailAccount, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -11,11 +11,17 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  async listMessages(): Promise<{ source: 'demo' | 'gmail'; messages: MessageSummary[] }> {
-    return request(`${MAIL}/v1/messages`)
+  async listAccounts(): Promise<GmailAccount[]> {
+    const result = await request<{ accounts: GmailAccount[] }>(`${MAIL}/v1/accounts`)
+    return result.accounts
   },
-  async readMessage(id: string): Promise<MessageProjection> {
-    const result = await request<{ message: MessageProjection }>(`${MAIL}/v1/messages/${encodeURIComponent(id)}`)
+  async listMessages(accountId?: string): Promise<{ source: 'demo' | 'gmail'; messages: MessageSummary[] }> {
+    const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
+    return request(`${MAIL}/v1/messages${query}`)
+  },
+  async readMessage(id: string, accountId?: string): Promise<MessageProjection> {
+    const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
+    const result = await request<{ message: MessageProjection }>(`${MAIL}/v1/messages/${encodeURIComponent(id)}${query}`)
     return result.message
   },
   async createDraft(messageId: string): Promise<DraftProjection> {
@@ -44,4 +50,3 @@ export const api = {
     return new EventSource(`${AGENT}/v1/events?threadId=${encodeURIComponent(threadId)}`)
   },
 }
-

@@ -1,6 +1,6 @@
 # Dispatch product contract
 
-Status: foundation implementation
+Status: working read-only foundation
 
 ## Job
 
@@ -31,7 +31,7 @@ The first useful version lets a user:
 
 ## Current foundation
 
-The current slice proves the service boundaries, real Codex App Server handshake, and browser experience. The mail service deliberately returns demo projections until the existing Gmail connector's list, read, MIME, attachment, and resource contracts are verified.
+The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, read-only inbox search, full MIME retrieval, safe browser rendering, and the browser experience. The mail service labels demo projections explicitly when no connector account is available. Gmail draft and send actions remain disabled until the approval path is implemented and tested.
 
 ## Non-goals for the foundation
 
@@ -41,4 +41,3 @@ The current slice proves the service boundaries, real Codex App Server handshake
 - A second agent runtime.
 - A second Gmail MCP server.
 - A pure SwiftUI rewrite.
-
