@@ -22,7 +22,9 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-export function createMailServer(gmail = new GmailConnectorProvider()) {
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage'>
+
+export function createMailServer(gmail: GmailProvider = new GmailConnectorProvider()) {
   return createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return writeJson(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -35,12 +37,14 @@ export function createMailServer(gmail = new GmailConnectorProvider()) {
     }
     if (request.method === 'GET' && url.pathname === '/v1/messages') {
       const accountId = url.searchParams.get('account')
-      if (accountId) {
-        try {
-          return writeJson(response, 200, { source: 'gmail', messages: await gmail.listMessages(accountId) })
-        } catch (error) {
-          return writeJson(response, 502, { error: 'gmail_list_failed', detail: error instanceof Error ? error.message : String(error) })
+      try {
+        const accounts = await gmail.accounts()
+        if (accounts.length > 0) {
+          const messages = accountId ? await gmail.listMessages(accountId) : await gmail.listUnifiedMessages()
+          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', messages })
         }
+      } catch (error) {
+        return writeJson(response, 502, { error: 'gmail_list_failed', detail: error instanceof Error ? error.message : String(error) })
       }
       return writeJson(response, 200, { source: 'demo', messages: provider.listMessages() })
     }

@@ -19,5 +19,21 @@ describe('Gmail inventory', () => {
       tools: { search: 'gmail.search_email_ids', read: 'gmail.read_email', readThread: null, createDraft: null },
     })
   })
-})
 
+  it('discovers every account declared by the connector link contract', () => {
+    const accounts = [
+      { link_id: 'link-one', link_name: 'Work', profile_name: 'Steve', profile_email: 'work@example.com' },
+      { link_id: 'link-two', link_name: 'Personal', profile_name: 'Steve', profile_email: 'personal@example.com' },
+    ]
+    const inventory = readGmailInventory({ data: [{ name: 'codex_apps', tools: {
+      'gmail.search_email_ids': {
+        inputSchema: { properties: { link_id: { description: `Choose an account.\n${JSON.stringify(accounts)}` } } },
+        _meta: { connector_name: 'Gmail', connector_id: 'connector-gmail', link_id: 'link-one', link_owner_profile: { nickname: 'Work', email: 'work@example.com' } },
+      },
+    } }] })
+    expect(inventory.accounts).toEqual([
+      { connectorId: 'connector-gmail', linkId: 'link-one', name: 'Work', email: 'work@example.com' },
+      { connectorId: 'connector-gmail', linkId: 'link-two', name: 'Personal', email: 'personal@example.com' },
+    ])
+  })
+})

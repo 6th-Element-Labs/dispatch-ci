@@ -9,8 +9,7 @@ describe('web presentation model', () => {
   it('makes selected mail context explicit', () => {
     expect(contextLabel({
       id: 'm1', threadId: 't1', sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' },
-      subject: 'Berth', receivedAt: 'now', receivedLabel: 'Now', preview: 'Preview', unread: true,
+      subject: 'Berth', receivedAt: 'now', receivedLabel: 'Sep 4, 9:42 AM', receivedFullLabel: 'September 4, 2026 at 9:42 AM', preview: 'Preview', unread: true,
     })).toBe('Berth · Ana')
   })
 })
-

@@ -27,7 +27,7 @@ jobs:
 
       - name: Install Chromium
         run: |
-          npm --prefix services/web ci
+          npm --prefix services/web ci --prefer-offline --no-audit --no-fund
           npm --prefix services/web exec -- playwright install --with-deps chromium
 
       - name: Run the canonical gate

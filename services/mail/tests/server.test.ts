@@ -9,7 +9,12 @@ afterEach(async () => {
 })
 
 async function start() {
-  const server = createMailServer()
+  const server = createMailServer({
+    accounts: async () => [],
+    listMessages: async () => [],
+    listUnifiedMessages: async () => [],
+    readMessage: async () => { throw new Error('not configured') },
+  })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -38,5 +43,24 @@ describe('dispatch-mail', () => {
     const body = await response.json()
     expect(body.draft).toMatchObject({ state: 'draft', inReplyToMessageId: 'demo-message-opua' })
   })
-})
 
+  it('uses the Gmail provider as one unified inbox when accounts are available', async () => {
+    const listUnifiedMessages = async () => [{
+      id: 'm1', threadId: 't1', sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' },
+      subject: 'Hello', receivedAt: '2026-09-04T09:42:00Z', receivedLabel: 'Sep 4, 9:42 AM',
+      receivedFullLabel: 'September 4, 2026 at 9:42 AM', preview: 'Hello', unread: true,
+      accountId: 'one', accountLabel: 'one@example.com',
+    }]
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [],
+      listUnifiedMessages,
+      readMessage: async () => { throw new Error('not configured') },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const value = await (await fetch(`${base}/v1/messages`)).json()
+    expect(value).toMatchObject({ source: 'gmail', scope: 'unified', messages: [{ accountId: 'one' }] })
+  })
+})

@@ -7,7 +7,8 @@ const messages: readonly MessageProjection[] = [
     sender: { name: 'Ana Morales', address: 'ana@opuamarina.example', initials: 'AM' },
     subject: 'Opua berth confirmation',
     receivedAt: '2026-09-04T09:42:00+12:00',
-    receivedLabel: '9:42 AM',
+    receivedLabel: 'Sep 4, 9:42 AM',
+    receivedFullLabel: 'September 4, 2026 at 9:42 AM',
     preview: 'The quarantine berth is confirmed for your expected arrival…',
     unread: true,
     body: {
@@ -25,7 +26,8 @@ const messages: readonly MessageProjection[] = [
     sender: { name: 'James Liu', address: 'james@acme.example', initials: 'JL' },
     subject: 'Re: Services agreement',
     receivedAt: '2026-09-04T08:16:00+12:00',
-    receivedLabel: '8:16 AM',
+    receivedLabel: 'Sep 4, 8:16 AM',
+    receivedFullLabel: 'September 4, 2026 at 8:16 AM',
     preview: 'I added our comments to sections 4 and 7. The pricing schedule…',
     unread: true,
     body: {
@@ -43,7 +45,8 @@ const messages: readonly MessageProjection[] = [
     sender: { name: 'OpenInvoice', address: 'notifications@openinvoice.example', initials: 'OP' },
     subject: 'Invoice status update',
     receivedAt: '2026-09-03T16:31:00+12:00',
-    receivedLabel: 'Yesterday',
+    receivedLabel: 'Sep 3, 4:31 PM',
+    receivedFullLabel: 'September 3, 2026 at 4:31 PM',
     preview: 'Invoice TKN-2026-0001 has moved to the next review stage…',
     unread: false,
     body: {
@@ -81,4 +84,3 @@ export class DemoMailProvider {
     return draft
   }
 }
-

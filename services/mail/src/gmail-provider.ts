@@ -77,17 +77,18 @@ function attachments(payload: UnknownRecord): readonly AttachmentProjection[] {
   })
 }
 
-function received(value: string): { iso: string; label: string } {
+function received(value: string): { iso: string; label: string; fullLabel: string } {
   const numeric = Number(value)
   const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(value)
-  if (Number.isNaN(date.getTime())) return { iso: value, label: '' }
+  if (Number.isNaN(date.getTime())) return { iso: value, label: '', fullLabel: '' }
   return {
     iso: date.toISOString(),
-    label: new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(date),
+    label: new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date),
+    fullLabel: new Intl.DateTimeFormat('en', { dateStyle: 'long', timeStyle: 'short' }).format(date),
   }
 }
 
-export function projectGmailMessage(value: unknown, includeBody: boolean): MessageProjection {
+export function projectGmailMessage(value: unknown, includeBody: boolean, account?: GmailAccountProjection): MessageProjection {
   const message = structured(value)
   const payload = record(message.payload) ?? {}
   const messageHeaders = headers(payload)
@@ -99,11 +100,14 @@ export function projectGmailMessage(value: unknown, includeBody: boolean): Messa
     subject: messageHeaders.get('subject') || '(No subject)',
     receivedAt: receivedAt.iso,
     receivedLabel: receivedAt.label,
+    receivedFullLabel: receivedAt.fullLabel,
     preview: text(message.snippet),
     unread: array(message.label_ids).includes('UNREAD'),
     body: includeBody ? body(payload) : { kind: 'plain-text', content: '' },
     attachments: includeBody ? attachments(payload) : [],
     source: 'gmail',
+    accountId: account?.id,
+    accountLabel: account?.email || account?.name,
   }
   if (!projection.id || !projection.threadId) throw new Error('Gmail response is missing stable message identity')
   return projection
@@ -130,28 +134,40 @@ export class GmailConnectorProvider {
   }
 
   async listMessages(accountId: string, maxResults = 10): Promise<readonly MessageSummary[]> {
-    await this.#assertAccount(accountId)
+    const account = await this.#account(accountId)
+    return this.#listAccountMessages(account, maxResults)
+  }
+
+  async listUnifiedMessages(maxResultsPerAccount = 10): Promise<readonly MessageSummary[]> {
+    const accounts = await this.accounts()
+    const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount)))
+    return lists
+      .flat()
+      .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
+  }
+
+  async #listAccountMessages(account: GmailAccountProjection, maxResults: number): Promise<readonly MessageSummary[]> {
     const search = await this.#post('/v1/connectors/gmail/search', {
-      linkId: accountId, query: 'in:inbox -in:spam -in:trash', maxResults,
+      linkId: account.id, query: 'in:inbox -in:spam -in:trash', maxResults,
     })
     const ids = array(structured(search).message_ids).map(text).filter(Boolean)
-    const messages: MessageSummary[] = []
-    for (const id of ids) {
-      const value = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: id, format: 'metadata' })
-      const { body: _body, attachments: _attachments, source: _source, ...summary } = projectGmailMessage(value, false)
-      messages.push(summary)
-    }
-    return messages
+    return Promise.all(ids.map(async (id) => {
+      const value = await this.#post('/v1/connectors/gmail/read', { linkId: account.id, messageId: id, format: 'metadata' })
+      const { body: _body, attachments: _attachments, source: _source, ...summary } = projectGmailMessage(value, false, account)
+      return summary
+    }))
   }
 
   async readMessage(accountId: string, messageId: string): Promise<MessageProjection> {
-    await this.#assertAccount(accountId)
+    const account = await this.#account(accountId)
     const value = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'full' })
-    return projectGmailMessage(value, true)
+    return projectGmailMessage(value, true, account)
   }
 
-  async #assertAccount(accountId: string): Promise<void> {
-    if (!(await this.accounts()).some((account) => account.id === accountId)) throw new Error('Unknown Gmail account')
+  async #account(accountId: string): Promise<GmailAccountProjection> {
+    const account = (await this.accounts()).find((candidate) => candidate.id === accountId)
+    if (!account) throw new Error('Unknown Gmail account')
+    return account
   }
 
   async #post(path: string, bodyValue: UnknownRecord): Promise<unknown> {

@@ -4,14 +4,15 @@ import { api } from './api.js'
 import type { AppSummary, DraftProjection, GmailAccount, MessageProjection, MessageSummary } from './contracts.js'
 import { contextLabel, gmailAppId } from './model.js'
 
-const app = document.querySelector<HTMLDivElement>('#app')
-if (!app) throw new Error('Dispatch app root is missing')
+const appElement = document.querySelector<HTMLDivElement>('#app')
+if (!appElement) throw new Error('Dispatch app root is missing')
+const app: HTMLDivElement = appElement
 
 app.innerHTML = `
   <div class="dispatch-window">
     <header class="dispatch-titlebar">
       <div class="dispatch-traffic"><span></span><span></span><span></span></div>
-      <strong>Dispatch</strong>
+      <div class="dispatch-title-center"><strong>Dispatch</strong><div class="dispatch-panel-controls" aria-label="Visible panels"><button type="button" data-panel="messages" aria-pressed="true">Messages</button><button type="button" data-panel="reader" aria-pressed="true">Email</button><button type="button" data-panel="agent" aria-pressed="true">Codex</button></div></div>
       <div class="dispatch-title-actions"><button type="button" data-refresh aria-label="Refresh">↻</button><button type="button" data-compose>Compose</button></div>
     </header>
     <div class="dispatch-workspace">
@@ -22,6 +23,7 @@ app.innerHTML = `
         <div class="dispatch-message-list" data-message-list></div>
         <div class="dispatch-pane-error" data-mail-error hidden></div>
       </aside>
+      <div class="dispatch-divider" data-divider="messages" role="separator" aria-label="Resize messages panel" aria-orientation="vertical"></div>
       <main class="dispatch-reader" aria-label="Selected email">
         <div class="dispatch-reader-empty" data-reader-empty>Select a message</div>
         <div data-reader hidden>
@@ -39,6 +41,7 @@ app.innerHTML = `
           <footer class="dispatch-reader-actions"><button type="button" data-reply>Reply</button><button type="button" data-ask>Ask Codex</button></footer>
         </div>
       </main>
+      <div class="dispatch-divider" data-divider="agent" role="separator" aria-label="Resize Codex panel" aria-orientation="vertical"></div>
       <aside class="dispatch-agent" aria-label="Codex">
         <header><div><span class="dispatch-codex-mark">✦</span><strong>Codex</strong><span class="dispatch-status" data-agent-status>Connecting</span></div><div class="dispatch-context" data-context>No email selected</div></header>
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
@@ -51,6 +54,12 @@ app.innerHTML = `
   </div>`
 
 const elements = {
+  workspace: app.querySelector<HTMLElement>('.dispatch-workspace')!,
+  messagesPanel: app.querySelector<HTMLElement>('.dispatch-messages')!,
+  readerPanel: app.querySelector<HTMLElement>('.dispatch-reader')!,
+  agentPanel: app.querySelector<HTMLElement>('.dispatch-agent')!,
+  messagesDivider: app.querySelector<HTMLElement>('[data-divider="messages"]')!,
+  agentDivider: app.querySelector<HTMLElement>('[data-divider="agent"]')!,
   list: app.querySelector<HTMLElement>('[data-message-list]')!,
   mailSource: app.querySelector<HTMLElement>('[data-mail-source]')!,
   accountWrap: app.querySelector<HTMLElement>('.dispatch-account')!,
@@ -84,6 +93,73 @@ let threadId: string | undefined
 let apps: AppSummary[] = []
 let activeAgentMessage: HTMLElement | undefined
 
+type PanelName = 'messages' | 'reader' | 'agent'
+interface PanelState {
+  messages: boolean
+  reader: boolean
+  agent: boolean
+  messagesWidth: number
+  agentWidth: number
+}
+
+function loadPanelState(): PanelState {
+  const defaults: PanelState = { messages: true, reader: true, agent: true, messagesWidth: 290, agentWidth: 370 }
+  try {
+    const saved = JSON.parse(localStorage.getItem('dispatch.panels.v1') ?? '{}') as Partial<PanelState>
+    return {
+      messages: saved.messages ?? defaults.messages,
+      reader: saved.reader ?? defaults.reader,
+      agent: saved.agent ?? defaults.agent,
+      messagesWidth: Math.max(220, Math.min(440, saved.messagesWidth ?? defaults.messagesWidth)),
+      agentWidth: Math.max(280, Math.min(560, saved.agentWidth ?? defaults.agentWidth)),
+    }
+  } catch {
+    return defaults
+  }
+}
+
+const panels = loadPanelState()
+
+function renderPanels(): void {
+  const visible = (['messages', 'reader', 'agent'] as const).filter((name) => panels[name])
+  if (visible.length === 0) panels.reader = true
+  elements.messagesPanel.hidden = !panels.messages
+  elements.readerPanel.hidden = !panels.reader
+  elements.agentPanel.hidden = !panels.agent
+  elements.messagesDivider.hidden = !(panels.messages && panels.reader)
+  elements.agentDivider.hidden = !(panels.agent && (panels.reader || panels.messages))
+
+  const columns: string[] = []
+  if (panels.messages) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${panels.messagesWidth}px`)
+  if (!elements.messagesDivider.hidden) columns.push('5px')
+  if (panels.reader) columns.push('minmax(360px, 1fr)')
+  if (!elements.agentDivider.hidden) columns.push('5px')
+  if (panels.agent) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${panels.agentWidth}px`)
+  elements.workspace.style.gridTemplateColumns = columns.join(' ')
+  app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => {
+    const name = button.dataset.panel as PanelName
+    button.setAttribute('aria-pressed', String(panels[name]))
+  })
+  localStorage.setItem('dispatch.panels.v1', JSON.stringify(panels))
+}
+
+function resizePanel(name: 'messagesWidth' | 'agentWidth', event: PointerEvent): void {
+  const startX = event.clientX
+  const startWidth = panels[name]
+  const direction = name === 'messagesWidth' ? 1 : -1
+  const move = (next: PointerEvent) => {
+    const limit = name === 'messagesWidth' ? [220, 440] : [280, 560]
+    panels[name] = Math.max(limit[0]!, Math.min(limit[1]!, startWidth + ((next.clientX - startX) * direction)))
+    renderPanels()
+  }
+  const stop = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop)
+}
+
 function renderList(): void {
   elements.list.innerHTML = ''
   for (const message of messages) {
@@ -107,7 +183,11 @@ function renderList(): void {
     subject.textContent = message.subject
     const preview = document.createElement('small')
     preview.textContent = message.preview
+    const account = document.createElement('span')
+    account.className = 'dispatch-message-account'
+    account.textContent = message.accountLabel ?? ''
     content.append(top, subject, preview)
+    if (message.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
     button.addEventListener('click', () => { void selectMessage(message.id) })
     elements.list.append(button)
@@ -115,7 +195,8 @@ function renderList(): void {
 }
 
 async function selectMessage(id: string): Promise<void> {
-  selected = await api.readMessage(id, selectedAccountId)
+  const summary = messages.find((message) => message.id === id)
+  selected = await api.readMessage(id, summary?.accountId ?? selectedAccountId)
   renderList()
   elements.readerEmpty.hidden = true
   elements.reader.hidden = false
@@ -126,7 +207,7 @@ async function selectMessage(id: string): Promise<void> {
   elements.avatar.textContent = selected.sender.initials
   elements.sender.textContent = selected.sender.name
   elements.address.textContent = selected.sender.address
-  elements.time.textContent = selected.receivedLabel
+  elements.time.textContent = selected.receivedFullLabel
   elements.time.dateTime = selected.receivedAt
   elements.context.textContent = `Working with · ${contextLabel(selected)}`
   elements.body.innerHTML = selected.body.kind === 'sanitized-html'
@@ -164,6 +245,7 @@ async function openDraft(): Promise<void> {
 function addAgentMessage(kind: 'user' | 'agent' | 'tool' | 'error', text: string): HTMLElement {
   const item = document.createElement('div')
   item.className = `dispatch-agent-message dispatch-agent-${kind}`
+  item.dataset.timestamp = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
   item.textContent = text
   elements.stream.append(item)
   elements.stream.scrollTop = elements.stream.scrollHeight
@@ -231,8 +313,11 @@ async function start(): Promise<void> {
   try {
     accounts = await api.listAccounts()
     if (accounts.length > 0) {
-      selectedAccountId ??= accounts[0]?.id
-      elements.account.replaceChildren(...accounts.map((account) => {
+      const all = document.createElement('option')
+      all.value = ''
+      all.textContent = accounts.length > 1 ? `All accounts (${accounts.length})` : 'All mail'
+      all.selected = !selectedAccountId
+      elements.account.replaceChildren(all, ...accounts.map((account) => {
         const option = document.createElement('option')
         option.value = account.id
         option.textContent = account.email || account.name
@@ -243,7 +328,9 @@ async function start(): Promise<void> {
     }
     const result = await api.listMessages(selectedAccountId)
     messages = result.messages
-    elements.mailSource.textContent = result.source === 'demo' ? 'Demo mail' : 'Gmail connected'
+    elements.mailSource.textContent = result.source === 'demo'
+      ? 'Demo mail'
+      : (!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected')
     renderList()
     if (messages[0]) await selectMessage(messages[0].id)
   } catch (error) {
@@ -256,10 +343,19 @@ async function start(): Promise<void> {
 
 app.querySelector('[data-refresh]')?.addEventListener('click', () => location.reload())
 elements.account.addEventListener('change', () => {
-  selectedAccountId = elements.account.value
+  selectedAccountId = elements.account.value || undefined
   selected = undefined
   void start()
 })
+app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => {
+  const name = button.dataset.panel as PanelName
+  const visibleCount = Number(panels.messages) + Number(panels.reader) + Number(panels.agent)
+  if (panels[name] && visibleCount === 1) return
+  panels[name] = !panels[name]
+  renderPanels()
+}))
+elements.messagesDivider.addEventListener('pointerdown', (event) => resizePanel('messagesWidth', event))
+elements.agentDivider.addEventListener('pointerdown', (event) => resizePanel('agentWidth', event))
 app.querySelectorAll('[data-compose], [data-reply]').forEach((button) => button.addEventListener('click', () => { void openDraft() }))
 app.querySelector('[data-ask]')?.addEventListener('click', () => elements.prompt.focus())
 app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })
@@ -274,4 +370,5 @@ elements.prompt.addEventListener('keydown', (event) => {
   }
 })
 
+renderPanels()
 void start()

@@ -16,11 +16,16 @@ Dispatch has three persistent panels:
 
 The middle reading surface is visually primary. Selection changes the explicit Codex context but does not silently replace the active Codex conversation.
 
+All connected Gmail accounts enter one date-ordered queue by default. The user can filter that queue to one account. Message rows show a compact date and time. The rendered message header shows the full date and time.
+
+The user can keep one, two, or three panels open. Each panel has an explicit visibility control. At least one panel remains visible. The messages and Codex panel widths are adjustable and persist locally.
+
 ## Version-one acceptance
 
 The first useful version lets a user:
 
 1. See real Gmail messages.
+   Messages from all connected accounts share one queue.
 2. Select and safely render one conversation.
 3. Ask the installed Codex harness about it.
 4. See Gmail connector activity.

@@ -11,8 +11,11 @@ export interface MessageSummary {
   readonly subject: string
   readonly receivedAt: string
   readonly receivedLabel: string
+  readonly receivedFullLabel: string
   readonly preview: string
   readonly unread: boolean
+  readonly accountId?: string
+  readonly accountLabel?: string
 }
 
 export interface MessageProjection extends MessageSummary {

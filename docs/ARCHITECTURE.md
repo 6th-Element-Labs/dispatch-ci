@@ -28,7 +28,7 @@ Browser or Tauri WebKit
 
 ### Mail
 
-`dispatch-mail` owns browser-facing message and draft view models. It calls the agent service's typed, read-only Gmail adapter and converts Gmail headers and MIME parts into bounded projections. An explicit in-memory demo provider remains available when no connector account is present. Gmail writes are not enabled.
+`dispatch-mail` owns browser-facing message and draft view models. It calls the agent service's typed, read-only Gmail adapter, retrieves each connector account, merges their bounded projections by source time, and converts Gmail headers and MIME parts into safe view models. An explicit in-memory demo provider remains available when no connector account is present. Gmail writes are not enabled.
 
 ### Agent
 

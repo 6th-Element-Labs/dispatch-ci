@@ -25,6 +25,33 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+function accountsFromDescription(tool: Record<string, unknown>): readonly GmailAccount[] {
+  const inputSchema = record(tool.inputSchema)
+  const properties = record(inputSchema?.properties)
+  const linkProperty = record(properties?.link_id)
+  const description = text(linkProperty?.description)
+  const start = description.indexOf('[')
+  const end = description.lastIndexOf(']')
+  if (start < 0 || end <= start) return []
+  try {
+    const values = JSON.parse(description.slice(start, end + 1)) as unknown
+    if (!Array.isArray(values)) return []
+    return values.flatMap((value) => {
+      const account = record(value)
+      const linkId = text(account?.link_id)
+      if (!linkId) return []
+      return [{
+        connectorId: '',
+        linkId,
+        name: text(account?.link_name) || text(account?.profile_name) || 'Gmail',
+        email: text(account?.profile_email),
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
 export function readGmailInventory(value: unknown): GmailInventory {
   const root = record(value)
   const data = Array.isArray(root?.data) ? root.data : []
@@ -38,19 +65,25 @@ export function readGmailInventory(value: unknown): GmailInventory {
     if (!server || !tools) continue
     for (const [wireName, toolValue] of Object.entries(tools)) {
       const tool = record(toolValue)
+      if (!tool) continue
       const meta = record(tool?._meta)
       if (text(meta?.connector_name) !== 'Gmail') continue
       serverName ??= text(server.name) || null
       toolNames.add(wireName)
       const profile = record(meta?.link_owner_profile)
       const linkId = text(meta?.link_id)
-      if (!linkId) continue
-      accounts.set(linkId, {
-        connectorId: text(meta?.connector_id),
-        linkId,
-        name: text(profile?.nickname) || text(meta?.link_name) || 'Gmail',
-        email: text(profile?.email),
-      })
+      const connectorId = text(meta?.connector_id)
+      if (linkId) {
+        accounts.set(linkId, {
+          connectorId,
+          linkId,
+          name: text(profile?.nickname) || text(meta?.link_name) || 'Gmail',
+          email: text(profile?.email),
+        })
+      }
+      for (const account of accountsFromDescription(tool)) {
+        accounts.set(account.linkId, { ...account, connectorId })
+      }
     }
   }
 
@@ -67,4 +100,3 @@ export function readGmailInventory(value: unknown): GmailInventory {
     },
   }
 }
-
