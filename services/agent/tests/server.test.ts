@@ -1,0 +1,64 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { AddressInfo } from 'node:net'
+import { createAgentServer } from '../src/server.js'
+
+const servers: ReturnType<typeof createAgentServer>[] = []
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+})
+
+function runtime() {
+  const request = vi.fn(async (method: string): Promise<unknown> => method === 'thread/start' ? { thread: { id: 'thread-1' } } : { ok: true })
+  return {
+    ready: vi.fn(async () => undefined),
+    lastError: vi.fn(() => null),
+    request,
+    subscribe: vi.fn(() => () => undefined),
+    close: vi.fn(),
+  }
+}
+
+async function start() {
+  const fake = runtime()
+  const server = createAgentServer(fake)
+  servers.push(server)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, fake }
+}
+
+describe('dispatch-agent', () => {
+  it('reports the real harness boundary', async () => {
+    const { base } = await start()
+    const response = await fetch(`${base}/ready`)
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ harness: 'codex-app-server' })
+  })
+
+  it('starts a restricted Codex thread', async () => {
+    const { base, fake } = await start()
+    const response = await fetch(`${base}/v1/threads`, { method: 'POST' })
+    expect(response.status).toBe(201)
+    expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
+      approvalPolicy: 'on-request',
+      sandboxPolicy: expect.objectContaining({ type: 'readOnly' }),
+    }))
+  })
+
+  it('normalizes installed connector state for the thin client', async () => {
+    const { base, fake } = await start()
+    fake.request.mockResolvedValueOnce({ apps: [{ id: 'gmail', runtimeName: 'Gmail', enabled: true, callable: true }] })
+    const response = await fetch(`${base}/v1/apps`)
+    await expect(response.json()).resolves.toEqual({ data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true, callable: true }] })
+  })
+
+  it('falls back to app/list for installed Codex versions without app/installed', async () => {
+    const { base, fake } = await start()
+    fake.request
+      .mockRejectedValueOnce(new Error('Invalid request: unknown variant `app/installed`'))
+      .mockResolvedValueOnce({ data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true }] })
+    const response = await fetch(`${base}/v1/apps`)
+    await expect(response.json()).resolves.toEqual({ data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true, callable: true }] })
+    expect(fake.request).toHaveBeenNthCalledWith(2, 'app/list', { cursor: null, limit: 20, forceRefetch: false })
+  })
+})

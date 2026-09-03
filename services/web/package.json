@@ -1,0 +1,27 @@
+{
+  "name": "@dispatch/web-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "dev": "vite --host 127.0.0.1",
+    "start": "node server-dist/static-server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run src",
+    "test:ui": "playwright test"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/dompurify": "^3.0.5",
+    "@types/node": "^22.18.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,33 @@
+name: verify
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install Chromium
+        run: npx --yes playwright@1.55.0 install --with-deps chromium
+
+      - name: Run the canonical gate
+        run: bash scripts/dispatch_ci.sh
+
