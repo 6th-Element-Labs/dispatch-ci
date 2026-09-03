@@ -43,6 +43,7 @@ describe('dispatch-agent', () => {
     expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
       approvalPolicy: 'on-request',
       sandboxPolicy: expect.objectContaining({ type: 'readOnly' }),
+      developerInstructions: expect.stringContaining('first show the complete proposed recipient, subject, and body as a preview'),
     }))
   })
 
