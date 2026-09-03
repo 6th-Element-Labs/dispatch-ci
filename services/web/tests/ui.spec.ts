@@ -118,3 +118,41 @@ test('filters conversations by all, unread, and read state', async ({ page }) =>
   await page.getByRole('button', { name: 'All', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
 })
+
+test('answers Codex approval requests without changing the request id type', async ({ page }) => {
+  let approval: unknown
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-test' } } }))
+  await page.route('http://127.0.0.1:8412/v1/server-requests/respond', async (route) => {
+    approval = await route.request().postDataJSON()
+    await route.fulfill({ json: { status: 'resolved' } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({
+    contentType: 'text/event-stream',
+    body: [
+      'data: {"method":"turn/started","params":{"threadId":"thread-test","turn":{"status":"inProgress"}}}\n\n',
+      'data: {"id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-test","reason":"Read a local note"}}\n\n',
+    ].join(''),
+  }))
+  await page.goto('/')
+  await expect(page.getByText('Approve command?')).toBeVisible()
+  await page.getByRole('button', { name: 'Allow once' }).first().click()
+  await expect.poll(() => approval).toEqual({ id: 42, result: { decision: 'accept' } })
+  await expect(page.getByText('Allow once', { exact: true })).toBeDisabled()
+})
+
+test('marks a conversation selected before its full thread finishes loading', async ({ page }) => {
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    const summary = conversations[1]!
+    return route.fulfill({ json: { conversation: { ...summary, source: 'demo', messages: [{ ...messages[1]!, source: 'demo', body: { kind: 'plain-text', content: 'Loaded.' }, attachments: [] }] } } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.locator('[data-conversation-id="demo:t2"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
+  await expect(page.getByText('Loading conversation…')).toBeVisible()
+  await expect(page.getByText('Loaded.')).toBeVisible()
+})

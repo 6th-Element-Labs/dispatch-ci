@@ -27,6 +27,10 @@ export class JsonLineRpc {
     this.#write({ method, params })
   }
 
+  respond(id: number | string, result: unknown): void {
+    this.#write({ id, result })
+  }
+
   request(method: string, params: unknown = {}): Promise<unknown> {
     const id = this.#nextId++
     return new Promise((resolve, reject) => {
@@ -69,4 +73,3 @@ export class JsonLineRpc {
     this.#output.write(`${JSON.stringify(message)}\n`)
   }
 }
-

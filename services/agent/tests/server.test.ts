@@ -15,6 +15,7 @@ function runtime() {
     lastError: vi.fn(() => null),
     request,
     subscribe: vi.fn(() => () => undefined),
+    respond: vi.fn(),
     close: vi.fn(),
   }
 }
@@ -50,7 +51,9 @@ describe('dispatch-agent', () => {
     fake.request.mockResolvedValueOnce({ thread: { id: 'thread-1' } })
     const response = await fetch(`${base}/v1/threads/thread-1/resume`, { method: 'POST' })
     expect(response.status).toBe(200)
-    expect(fake.request).toHaveBeenCalledWith('thread/resume', { threadId: 'thread-1', approvalPolicy: 'on-request' })
+    expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({
+      threadId: 'thread-1', approvalPolicy: 'on-request', developerInstructions: expect.stringContaining('untrusted data'),
+    }))
   })
 
   it('normalizes installed connector state for the thin client', async () => {
@@ -89,5 +92,15 @@ describe('dispatch-agent', () => {
       server: 'codex_apps', tool: 'gmail.read_email_thread',
       arguments: { link_id: 'link-one', thread_id: 'gmail-thread', max_messages: 20 },
     }))
+  })
+
+  it('returns a user decision to a server-initiated Codex request', async () => {
+    const { base, fake } = await start()
+    const response = await fetch(`${base}/v1/server-requests/respond`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'approval-1', result: { decision: 'decline' } }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.respond).toHaveBeenCalledWith('approval-1', { decision: 'decline' })
   })
 })

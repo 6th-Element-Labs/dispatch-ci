@@ -91,6 +91,9 @@ let accounts: GmailAccount[] = []
 let selectedAccountId: string | undefined
 let mailState: MailStateFilter = 'all'
 let selected: ConversationProjection | undefined
+let selectedConversationId: string | undefined
+let selectionSequence = 0
+const conversationCache = new Map<string, Promise<ConversationProjection>>()
 let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
 let apps: AppSummary[] = []
 let activeAgentMessage: HTMLElement | undefined
@@ -172,7 +175,7 @@ function renderList(): void {
     button.type = 'button'
     button.className = 'dispatch-message'
     button.dataset.conversationId = conversation.id
-    button.setAttribute('aria-selected', String(selected?.id === conversation.id))
+    button.setAttribute('aria-selected', String(selectedConversationId === conversation.id))
     button.classList.toggle('dispatch-message-unread', conversation.unread)
     const avatar = document.createElement('span')
     avatar.className = 'dispatch-avatar'
@@ -235,22 +238,66 @@ function renderThreadMessage(message: MessageProjection): HTMLElement {
 async function selectConversation(id: string): Promise<void> {
   const summary = conversations.find((conversation) => conversation.id === id)
   if (!summary) return
-  selected = await api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId)
+  const sequence = ++selectionSequence
+  selectedConversationId = id
+  selected = undefined
   renderList()
   elements.readerEmpty.hidden = true
   elements.reader.hidden = false
   elements.draft.hidden = true
   elements.body.hidden = false
   elements.attachments.hidden = false
-  elements.subject.textContent = selected.subject
-  elements.avatar.textContent = selected.sender.initials
-  elements.sender.textContent = selected.sender.name
-  elements.address.textContent = selected.sender.address
-  elements.time.textContent = selected.receivedFullLabel
-  elements.time.dateTime = selected.receivedAt
-  elements.context.textContent = `Working with · ${contextLabel(selected)}`
-  elements.body.replaceChildren(...selected.messages.map(renderThreadMessage))
+  elements.subject.textContent = summary.subject
+  elements.avatar.textContent = summary.sender.initials
+  elements.sender.textContent = summary.sender.name
+  elements.address.textContent = summary.sender.address
+  elements.time.textContent = summary.receivedLabel
+  elements.time.dateTime = summary.receivedAt
+  elements.context.textContent = `Loading · ${summary.subject} · ${summary.sender.name}`
+  const loading = document.createElement('div')
+  loading.className = 'dispatch-reader-loading'
+  loading.textContent = 'Loading conversation…'
+  elements.body.replaceChildren(loading)
   elements.attachments.replaceChildren()
+
+  const key = `${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
+  let request = conversationCache.get(key)
+  if (!request) {
+    request = api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId)
+    conversationCache.set(key, request)
+    request.catch(() => conversationCache.delete(key))
+  }
+
+  try {
+    const conversation = await request
+    if (sequence !== selectionSequence || selectedConversationId !== id) return
+    selected = conversation
+    elements.subject.textContent = conversation.subject
+    elements.avatar.textContent = conversation.sender.initials
+    elements.sender.textContent = conversation.sender.name
+    elements.address.textContent = conversation.sender.address
+    elements.time.textContent = conversation.receivedFullLabel
+    elements.time.dateTime = conversation.receivedAt
+    elements.context.textContent = `Working with · ${contextLabel(conversation)}`
+    elements.body.replaceChildren(...conversation.messages.map(renderThreadMessage))
+    prefetchConversations(id)
+  } catch (error) {
+    if (sequence !== selectionSequence) return
+    loading.className = 'dispatch-reader-load-error'
+    loading.textContent = error instanceof Error ? error.message : String(error)
+    elements.context.textContent = `Unavailable · ${summary.subject}`
+  }
+}
+
+function prefetchConversations(exceptId: string): void {
+  for (const summary of conversations.filter((item) => item.id !== exceptId).slice(0, 3)) {
+    const key = `${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
+    if (!conversationCache.has(key)) {
+      const request = api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId)
+      conversationCache.set(key, request)
+      request.catch(() => conversationCache.delete(key))
+    }
+  }
 }
 
 async function openDraft(): Promise<void> {
@@ -278,8 +325,205 @@ function addAgentMessage(kind: 'user' | 'agent' | 'tool' | 'error', text: string
   return item
 }
 
-function handleAgentEvent(message: { method?: string; params?: unknown }): void {
+type AgentEvent = { id?: number | string; method?: string; params?: unknown }
+const requestIds = new Map<string, number | string>()
+
+function originalRequestId(card: HTMLElement): number | string | undefined {
+  const key = card.dataset.requestId
+  return key === undefined ? undefined : requestIds.get(key)
+}
+
+function requestText(params: Record<string, unknown> | undefined, fallback: string): string {
+  return String(params?.reason ?? params?.message ?? fallback)
+}
+
+function addRequestButton(card: HTMLElement, label: string, result: unknown, primary = false): void {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.textContent = label
+  if (primary) button.className = 'dispatch-request-primary'
+  button.addEventListener('click', () => {
+    const id = originalRequestId(card)
+    if (id === undefined) return
+    card.querySelectorAll('button, input, select, textarea').forEach((control) => {
+      ;(control as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled = true
+    })
+    void api.respondToServerRequest(id, result).then(() => {
+      card.classList.add('dispatch-request-resolved')
+      elements.agentStatus.textContent = 'Working'
+      const state = card.querySelector<HTMLElement>('[data-request-state]')
+      if (state) state.textContent = label
+    }).catch((error) => {
+      card.querySelectorAll('button, input, select, textarea').forEach((control) => {
+        ;(control as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled = false
+      })
+      addAgentMessage('error', error instanceof Error ? error.message : String(error))
+    })
+  })
+  card.querySelector('[data-request-actions]')?.append(button)
+}
+
+function renderUserInputRequest(card: HTMLElement, params: Record<string, unknown>): void {
+  const questions = Array.isArray(params.questions) ? params.questions as Array<Record<string, unknown>> : []
+  const fields = document.createElement('div')
+  fields.className = 'dispatch-request-fields'
+  for (const question of questions) {
+    const label = document.createElement('label')
+    label.textContent = String(question.question ?? question.header ?? 'Response')
+    const options = Array.isArray(question.options) ? question.options as Array<Record<string, unknown>> : []
+    if (options.length > 0) {
+      const select = document.createElement('select')
+      select.dataset.questionId = String(question.id ?? '')
+      for (const option of options) {
+        const item = document.createElement('option')
+        item.value = String(option.label ?? '')
+        item.textContent = String(option.label ?? '')
+        select.append(item)
+      }
+      label.append(select)
+    } else {
+      const input = document.createElement('input')
+      input.dataset.questionId = String(question.id ?? '')
+      input.placeholder = 'Type your response'
+      label.append(input)
+    }
+    fields.append(label)
+  }
+  card.querySelector('[data-request-actions]')?.before(fields)
+  const submit = document.createElement('button')
+  submit.type = 'button'
+  submit.className = 'dispatch-request-primary'
+  submit.textContent = 'Submit'
+  submit.addEventListener('click', () => {
+    const answers: Record<string, { answers: string[] }> = {}
+    fields.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-question-id]').forEach((field) => {
+      answers[field.dataset.questionId ?? ''] = { answers: [field.value] }
+    })
+    const id = originalRequestId(card)
+    if (id === undefined) return
+    void api.respondToServerRequest(id, { answers }).then(() => {
+      card.classList.add('dispatch-request-resolved')
+      elements.agentStatus.textContent = 'Working'
+      card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((control) => { control.disabled = true })
+      const state = card.querySelector<HTMLElement>('[data-request-state]')
+      if (state) state.textContent = 'Submitted'
+    }).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error)))
+  })
+  card.querySelector('[data-request-actions]')?.append(submit)
+}
+
+function renderElicitationRequest(card: HTMLElement): void {
+  const input = document.createElement('textarea')
+  input.className = 'dispatch-request-json'
+  input.value = '{}'
+  input.setAttribute('aria-label', 'Requested information')
+  card.querySelector('[data-request-actions]')?.before(input)
+  const accept = document.createElement('button')
+  accept.type = 'button'
+  accept.className = 'dispatch-request-primary'
+  accept.textContent = 'Submit'
+  accept.addEventListener('click', () => {
+    try {
+      const content = JSON.parse(input.value) as unknown
+      const id = originalRequestId(card)
+      if (id === undefined) return
+      void api.respondToServerRequest(id, { action: 'accept', content }).then(() => {
+        card.classList.add('dispatch-request-resolved')
+        elements.agentStatus.textContent = 'Working'
+        card.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>('button, textarea').forEach((control) => { control.disabled = true })
+        const state = card.querySelector<HTMLElement>('[data-request-state]')
+        if (state) state.textContent = 'Submitted'
+      })
+    } catch {
+      addAgentMessage('error', 'The requested information must be valid JSON.')
+    }
+  })
+  card.querySelector('[data-request-actions]')?.append(accept)
+  addRequestButton(card, 'Decline', { action: 'decline', content: null })
+}
+
+function renderServerRequest(message: AgentEvent): void {
+  if (message.id === undefined || !message.method) return
   const params = message.params as Record<string, unknown> | undefined
+  const card = document.createElement('section')
+  card.className = 'dispatch-agent-request'
+  card.dataset.requestId = String(message.id)
+  requestIds.set(card.dataset.requestId, message.id)
+  card.dataset.timestamp = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
+  const title = document.createElement('strong')
+  const description = document.createElement('p')
+  const state = document.createElement('small')
+  state.dataset.requestState = ''
+  state.textContent = 'Waiting for you'
+  const actions = document.createElement('div')
+  actions.dataset.requestActions = ''
+  card.append(title, description, state, actions)
+  elements.stream.append(card)
+
+  if (message.method === 'item/commandExecution/requestApproval' || message.method === 'item/fileChange/requestApproval') {
+    title.textContent = message.method.includes('fileChange') ? 'Approve file changes?' : 'Approve command?'
+    description.textContent = requestText(params, 'Codex needs approval to continue this task.')
+    addRequestButton(card, 'Allow once', { decision: 'accept' }, true)
+    addRequestButton(card, 'Decline', { decision: 'decline' })
+  } else if (message.method === 'item/permissions/requestApproval') {
+    title.textContent = 'Approve permissions?'
+    description.textContent = requestText(params, 'Codex needs additional permissions to continue this task.')
+    addRequestButton(card, 'Allow for this turn', { permissions: params?.permissions ?? {}, scope: 'turn' }, true)
+    addRequestButton(card, 'Decline', { permissions: {}, scope: 'turn' })
+  } else if (message.method === 'tool/requestUserInput' || message.method === 'item/tool/requestUserInput') {
+    title.textContent = 'Codex needs your input'
+    description.textContent = 'Answer this question to continue the task.'
+    renderUserInputRequest(card, params ?? {})
+  } else if (message.method === 'mcpServer/elicitation/request') {
+    title.textContent = 'Connector needs information'
+    description.textContent = requestText(params, 'Provide the requested information to continue.')
+    renderElicitationRequest(card)
+  } else {
+    title.textContent = 'Codex needs attention'
+    description.textContent = `Unsupported request: ${message.method}`
+    addRequestButton(card, 'Cancel request', { decision: 'cancel' })
+  }
+  elements.agentStatus.textContent = 'Needs attention'
+  elements.stream.scrollTop = elements.stream.scrollHeight
+}
+
+function handleAgentEvent(message: AgentEvent): void {
+  if (message.id !== undefined && message.method) {
+    renderServerRequest(message)
+    return
+  }
+  const params = message.params as Record<string, unknown> | undefined
+  if (message.method === 'dispatch/appServerDisconnected') {
+    agentEvents?.close()
+    elements.agentStatus.textContent = 'Reconnecting'
+    elements.connector.textContent = 'Restarting Codex App Server'
+    scheduleAgentReconnect()
+    return
+  }
+  if (message.method === 'serverRequest/resolved') {
+    const requestId = String(params?.requestId ?? '')
+    const card = elements.stream.querySelector<HTMLElement>(`[data-request-id="${CSS.escape(requestId)}"]`)
+    if (card) {
+      card.classList.add('dispatch-request-resolved')
+      card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('button, input, select, textarea').forEach((control) => { control.disabled = true })
+      const state = card.querySelector<HTMLElement>('[data-request-state]')
+      if (state && state.textContent === 'Waiting for you') state.textContent = 'Resolved'
+    }
+    requestIds.delete(requestId)
+  }
+  if (message.method === 'turn/started') elements.agentStatus.textContent = 'Working'
+  if (message.method === 'turn/completed') {
+    const turn = params?.turn as Record<string, unknown> | undefined
+    const status = String(turn?.status ?? 'completed')
+    if (status === 'failed') {
+      const error = turn?.error as Record<string, unknown> | undefined
+      elements.agentStatus.textContent = 'Failed'
+      addAgentMessage('error', String(error?.message ?? 'The Codex turn failed.'))
+    } else {
+      elements.agentStatus.textContent = status === 'interrupted' ? 'Interrupted' : 'Connected'
+    }
+    activeAgentMessage = undefined
+  }
   if (message.method === 'item/agentMessage/delta') {
     if (!activeAgentMessage) activeAgentMessage = addAgentMessage('agent', '')
     activeAgentMessage.textContent += String(params?.delta ?? '')
@@ -292,7 +536,11 @@ function handleAgentEvent(message: { method?: string; params?: unknown }): void 
     const item = params?.item as Record<string, unknown> | undefined
     if (item?.type === 'agentMessage') activeAgentMessage = undefined
   }
-  if (message.method === 'error') addAgentMessage('error', 'Codex reported an error. Review the agent service logs.')
+  if (message.method === 'error') {
+    const error = params?.error as Record<string, unknown> | undefined
+    elements.agentStatus.textContent = 'Failed'
+    addAgentMessage('error', String(error?.message ?? params?.message ?? 'Codex reported an error.'))
+  }
 }
 
 function scheduleAgentReconnect(): void {
@@ -329,7 +577,7 @@ async function connectAgent(): Promise<void> {
     agentEvents?.close()
     agentEvents = api.events(threadId)
     agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
-    agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as { method?: string; params?: unknown })
+    agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as AgentEvent)
     agentEvents.onerror = () => {
       agentEvents?.close()
       elements.agentStatus.textContent = 'Reconnecting'
@@ -348,6 +596,7 @@ async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
   if (!text || !threadId) return
   addAgentMessage('user', text)
+  elements.agentStatus.textContent = 'Working'
   elements.prompt.value = ''
   try {
     await api.startTurn(threadId, {
@@ -364,6 +613,8 @@ async function loadConversations(): Promise<void> {
   elements.mailSource.textContent = 'Loading'
   elements.mailError.hidden = true
   selected = undefined
+  selectedConversationId = undefined
+  selectionSequence += 1
   elements.reader.hidden = true
   elements.readerEmpty.hidden = false
   app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => {
