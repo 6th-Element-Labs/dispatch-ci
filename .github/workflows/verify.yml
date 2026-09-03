@@ -26,8 +26,9 @@ jobs:
           node-version: "22"
 
       - name: Install Chromium
-        run: npx --yes playwright@1.55.0 install --with-deps chromium
+        run: |
+          npm --prefix services/web ci
+          npm --prefix services/web exec -- playwright install --with-deps chromium
 
       - name: Run the canonical gate
         run: bash scripts/dispatch_ci.sh
-
