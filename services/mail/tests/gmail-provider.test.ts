@@ -40,12 +40,18 @@ describe('GmailConnectorProvider', () => {
   })
 
   it('uses the agent service instead of reading connector state directly', async () => {
+    const searchQueries: string[] = []
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
       if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
-      if (request.url === '/v1/connectors/gmail/search-messages') return response.end(JSON.stringify({ structuredContent: { emails: [{
-        id: 'gmail-message-1', thread_id: 'gmail-thread-1', from_: 'Ana Morales <ana@example.com>', subject: 'Berth confirmation', snippet: 'A short preview', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-03T21:42:00Z',
-      }] } }))
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        searchQueries.push(String((JSON.parse(Buffer.concat(chunks).toString('utf8')) as { query?: unknown }).query ?? ''))
+        return response.end(JSON.stringify({ structuredContent: { emails: [{
+          id: 'gmail-message-1', thread_id: 'gmail-thread-1', from_: 'Ana Morales <ana@example.com>', subject: 'Berth confirmation', snippet: 'A short preview', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-03T21:42:00Z',
+        }] } }))
+      }
       if (request.url === '/v1/connectors/gmail/read-thread') return response.end(JSON.stringify({ structuredContent: { messages: [gmailMessage.structuredContent] } }))
       if (request.url === '/v1/connectors/gmail/read') return response.end(JSON.stringify(gmailMessage))
       response.statusCode = 404
@@ -56,6 +62,13 @@ describe('GmailConnectorProvider', () => {
     const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
     expect(await provider.accounts()).toEqual([{ id: 'link-one', connectorId: '', name: 'Work', email: 'work@example.com' }])
     expect(await provider.listMessages('link-one', 1)).toHaveLength(1)
+    await provider.listConversations('link-one', 'unread', 1)
+    await provider.listConversations('link-one', 'read', 1)
+    expect(searchQueries).toEqual([
+      'in:inbox -in:spam -in:trash',
+      'in:inbox -in:spam -in:trash is:unread',
+      'in:inbox -in:spam -in:trash is:read',
+    ])
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })
     expect(await provider.readConversation('link-one', 'gmail-thread-1')).toMatchObject({ threadId: 'gmail-thread-1', messageCount: 1, source: 'gmail' })
   })

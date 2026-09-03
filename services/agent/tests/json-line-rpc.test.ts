@@ -25,5 +25,13 @@ describe('JsonLineRpc', () => {
     rpc.acceptLine('not json')
     expect(listener).toHaveBeenCalledWith({ method: 'dispatch/protocolError', params: { line: 'not json' } })
   })
-})
 
+  it('responds to a server-initiated request with the original id', () => {
+    const output = new PassThrough()
+    let written = ''
+    output.on('data', (chunk) => { written += String(chunk) })
+    const rpc = new JsonLineRpc(output)
+    rpc.respond('request-1', { decision: 'accept' })
+    expect(JSON.parse(written)).toEqual({ id: 'request-1', result: { decision: 'accept' } })
+  })
+})

@@ -157,28 +157,32 @@ export class GmailConnectorProvider {
 
   async listMessages(accountId: string, maxResults = 10): Promise<readonly MessageSummary[]> {
     const account = await this.#account(accountId)
-    return this.#listAccountMessages(account, maxResults)
+    return this.#listAccountMessages(account, maxResults, 'all')
   }
 
   async listUnifiedMessages(maxResultsPerAccount = 10): Promise<readonly MessageSummary[]> {
     const accounts = await this.accounts()
-    const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount)))
+    const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount, 'all')))
     return lists
       .flat()
       .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
   }
 
   async listConversations(accountId: string, state: MailStateFilter, maxResults = 20): Promise<readonly ConversationSummary[]> {
-    return groupConversations(await this.listMessages(accountId, maxResults), state)
+    const account = await this.#account(accountId)
+    return groupConversations(await this.#listAccountMessages(account, maxResults, state), state)
   }
 
   async listUnifiedConversations(state: MailStateFilter, maxResultsPerAccount = 20): Promise<readonly ConversationSummary[]> {
-    return groupConversations(await this.listUnifiedMessages(maxResultsPerAccount), state)
+    const accounts = await this.accounts()
+    const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount, state)))
+    return groupConversations(lists.flat(), state)
   }
 
-  async #listAccountMessages(account: GmailAccountProjection, maxResults: number): Promise<readonly MessageSummary[]> {
+  async #listAccountMessages(account: GmailAccountProjection, maxResults: number, state: MailStateFilter): Promise<readonly MessageSummary[]> {
+    const stateQuery = state === 'unread' ? ' is:unread' : state === 'read' ? ' is:read' : ''
     const search = await this.#post('/v1/connectors/gmail/search-messages', {
-      linkId: account.id, query: 'in:inbox -in:spam -in:trash', maxResults,
+      linkId: account.id, query: `in:inbox -in:spam -in:trash${stateQuery}`, maxResults,
     })
     return array(structured(search).emails).map((email) => projectGmailSearchEmail(email, account))
   }

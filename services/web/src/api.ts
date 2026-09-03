@@ -63,4 +63,9 @@ export const api = {
   events(threadId: string): EventSource {
     return new EventSource(`${AGENT}/v1/events?threadId=${encodeURIComponent(threadId)}`)
   },
+  async respondToServerRequest(id: number | string, result: unknown): Promise<void> {
+    await request(`${AGENT}/v1/server-requests/respond`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, result }),
+    })
+  },
 }
