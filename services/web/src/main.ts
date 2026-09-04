@@ -106,6 +106,7 @@ let reconnectTimer: number | undefined
 let agentConnecting = false
 let syncStatusTimer: number | undefined
 let syncErrorVisible = false
+let mailReconnectTimer: number | undefined
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -712,6 +713,8 @@ async function loadConversations(): Promise<void> {
     const result = await api.listConversations(mailState, selectedAccountId)
     if (loadSequence !== conversationLoadSequence) return
     conversations = result.conversations
+    if (mailReconnectTimer !== undefined) window.clearTimeout(mailReconnectTimer)
+    mailReconnectTimer = undefined
     nextConversationCursor = result.nextCursor ?? null
     conversationTotal = result.total ?? conversations.length
     localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), conversations, nextCursor: nextConversationCursor, total: conversationTotal }))
@@ -737,11 +740,13 @@ async function loadConversations(): Promise<void> {
       elements.mailError.hidden = false
       const detail = error instanceof Error ? error.message : String(error)
       elements.mailError.textContent = `Gmail refresh failed: ${detail}. Showing data last confirmed ${cacheLabel}.`
+      scheduleMailReconnect()
       return
     }
     elements.mailSource.textContent = 'Unavailable'
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    scheduleMailReconnect()
   }
 }
 
@@ -769,6 +774,7 @@ async function refreshSyncStatus(): Promise<void> {
       elements.mailSource.textContent = `Gmail synced · ${syncTime(sync.completedAt)}`
       if (syncErrorVisible) elements.mailError.hidden = true
       syncErrorVisible = false
+      if (mailState === 'all' && conversations.length === 0) void loadConversations()
     }
   } catch (error) {
     elements.mailSource.textContent = 'SYNC STATUS FAILED'
@@ -784,7 +790,15 @@ function startSyncStatusWatch(): void {
   syncStatusTimer = window.setInterval(() => { void refreshSyncStatus() }, 5_000)
 }
 
-async function start(): Promise<void> {
+function scheduleMailReconnect(): void {
+  if (mailReconnectTimer !== undefined) return
+  mailReconnectTimer = window.setTimeout(() => {
+    mailReconnectTimer = undefined
+    void connectMail()
+  }, 1_500)
+}
+
+async function connectMail(): Promise<void> {
   try {
     accounts = await api.listAccounts()
     if (accounts.length > 0) {
@@ -801,14 +815,18 @@ async function start(): Promise<void> {
       }))
       elements.accountWrap.hidden = false
     }
+    await loadConversations()
+    if (accounts.length > 0) startSyncStatusWatch()
   } catch (error) {
     elements.mailSource.textContent = 'Unavailable'
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
-    return
+    scheduleMailReconnect()
   }
-  await Promise.all([loadConversations(), connectAgent()])
-  if (accounts.length > 0) startSyncStatusWatch()
+}
+
+async function start(): Promise<void> {
+  await Promise.all([connectMail(), connectAgent()])
 }
 
 app.querySelector('[data-refresh]')?.addEventListener('click', () => location.reload())
