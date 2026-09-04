@@ -142,6 +142,49 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   expect(after!.width).toBeGreaterThan(before!.width + 30)
 })
 
+test('offers reversible live workspace experiments without removing Classic', async ({ page }) => {
+  await page.goto('/')
+  const mode = page.getByRole('combobox', { name: 'Workspace mode' })
+  await expect(mode).toHaveValue('classic')
+  await mode.selectOption('threads')
+  await expect(page.getByText('Thread so far', { exact: true })).toBeVisible()
+  await mode.selectOption('triage')
+  await expect(page.getByRole('complementary', { name: 'Messages' })).toBeHidden()
+  await expect(page.getByRole('complementary', { name: 'Codex' })).toBeHidden()
+  await expect(page.getByText('Codex pre-read', { exact: true })).toBeVisible()
+  await mode.selectOption('command')
+  await expect(page.getByRole('main', { name: 'Selected email' })).toBeHidden()
+  await expect(page.getByRole('complementary', { name: 'Codex' })).toBeVisible()
+  await mode.selectOption('reply')
+  await expect(page.locator('[data-mode-insight-title]')).toHaveText('Reply studio')
+  await expect(page.locator('[data-draft]')).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Reply', exact: true })).toBeFocused()
+  await mode.selectOption('brief')
+  await expect(page.getByText('Today’s brief', { exact: true })).toBeVisible()
+  await mode.selectOption('classic')
+  await expect(page.locator('[data-mode-insight]')).toBeHidden()
+  await expect(page.getByRole('main', { name: 'Selected email' })).toBeVisible()
+})
+
+test('restores structured Codex history as readable text', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-history/resume', (route) => route.fulfill({ json: { thread: { id: 'thread-history' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-history', (route) => route.fulfill({ json: {
+    thread: { turns: [{ items: [
+      { type: 'userMessage', content: [{ type: 'input_text', text: 'Summarize this thread.' }] },
+      { type: 'agentMessage', content: { type: 'output_text', text: 'Here is the summary.' } },
+    ] }] },
+  } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.addInitScript(() => localStorage.setItem('dispatch.codex.threadId', 'thread-history'))
+  await page.goto('/')
+  await expect(page.getByText('Summarize this thread.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Here is the summary.', { exact: true })).toBeVisible()
+  await expect(page.getByText('[object Object]', { exact: true })).toHaveCount(0)
+})
+
 test('filters conversations by all, unread, and read state', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
