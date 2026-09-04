@@ -178,6 +178,22 @@ test('labels cached mail stale and exposes the refresh failure', async ({ page }
   await expect(page.locator('[data-mail-error]')).toContainText('Showing data last confirmed')
 })
 
+test('recovers the mail list automatically after a transient service failure', async ({ page }) => {
+  let attempts = 0
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => {
+    attempts += 1
+    return attempts === 1
+      ? route.fulfill({ status: 502, json: { error: 'gmail_unavailable', detail: 'temporary outage' } })
+      : route.fulfill({ json: { source: 'demo', conversations, nextCursor: null, total: conversations.length } })
+  })
+  await page.goto('/')
+  await expect(page.locator('[data-mail-source]')).toHaveText('Unavailable')
+  await expect(page.locator('[data-mail-error]')).toContainText('temporary outage')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2, { timeout: 5_000 })
+  expect(attempts).toBeGreaterThanOrEqual(2)
+})
+
 test('answers Codex approval requests without changing the request id type', async ({ page }) => {
   let approval: unknown
   await page.unroute('http://127.0.0.1:8412/ready')
