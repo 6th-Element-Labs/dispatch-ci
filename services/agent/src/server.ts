@@ -255,13 +255,35 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 502, { error: 'gmail_modify_failed', detail: errorMessage(error) })
       }
     }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/archive') {
+      try {
+        const payload = await body(request)
+        const linkId = String(payload.linkId ?? '')
+        const threadIds = Array.isArray(payload.threadIds) ? payload.threadIds.filter((id): id is string => typeof id === 'string' && id.length > 0) : []
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.archive) return json(response, 503, { error: 'gmail_archive_unavailable' })
+        if (!gmail.accounts.some((account) => account.linkId === linkId) || threadIds.length === 0) return json(response, 400, { error: 'link_and_thread_ids_required' })
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.archive, arguments: { link_id: linkId, thread_ids: threadIds } }))
+      } catch (error) { return json(response, 502, { error: 'gmail_archive_failed', detail: errorMessage(error) }) }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/delete') {
+      try {
+        const payload = await body(request)
+        const linkId = String(payload.linkId ?? '')
+        const messageIds = Array.isArray(payload.messageIds) ? payload.messageIds.filter((id): id is string => typeof id === 'string' && id.length > 0) : []
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.delete) return json(response, 503, { error: 'gmail_delete_unavailable' })
+        if (!gmail.accounts.some((account) => account.linkId === linkId) || messageIds.length === 0) return json(response, 400, { error: 'link_and_message_ids_required' })
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.delete, arguments: { link_id: linkId, message_ids: messageIds } }))
+      } catch (error) { return json(response, 502, { error: 'gmail_delete_failed', detail: errorMessage(error) }) }
+    }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/create') {
       try {
         const payload = await body(request)
         const gmail = await inventory()
         if (!gmail.server || !gmail.tools.createDraft) return json(response, 503, { error: 'gmail_draft_unavailable' })
         const args = {
-          link_id: String(payload.linkId ?? ''), to: String(payload.to ?? ''), subject: String(payload.subject ?? ''),
+          link_id: String(payload.linkId ?? ''), to: String(payload.to ?? ''), cc: String(payload.cc ?? ''), bcc: String(payload.bcc ?? ''), subject: String(payload.subject ?? ''),
           reply_message_id: typeof payload.replyMessageId === 'string' ? payload.replyMessageId : null,
           payload: { mime_type: 'text/plain', charset: 'UTF-8', body: { content: String(payload.bodyText ?? '') } },
         }
@@ -273,7 +295,7 @@ export function createAgentServer(runtime: AgentRuntime) {
         const payload = await body(request)
         const gmail = await inventory()
         if (!gmail.server || !gmail.tools.updateDraft) return json(response, 503, { error: 'gmail_draft_update_unavailable' })
-        const args = { link_id: String(payload.linkId ?? ''), draft_id: String(payload.draftId ?? ''), to: String(payload.to ?? ''), subject: String(payload.subject ?? ''), payload: { mime_type: 'text/plain', charset: 'UTF-8', body: { content: String(payload.bodyText ?? '') } } }
+        const args = { link_id: String(payload.linkId ?? ''), draft_id: String(payload.draftId ?? ''), to: String(payload.to ?? ''), cc: String(payload.cc ?? ''), bcc: String(payload.bcc ?? ''), subject: String(payload.subject ?? ''), payload: { mime_type: 'text/plain', charset: 'UTF-8', body: { content: String(payload.bodyText ?? '') } } }
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.updateDraft, arguments: args }))
       } catch (error) { return json(response, 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error) }) }
     }

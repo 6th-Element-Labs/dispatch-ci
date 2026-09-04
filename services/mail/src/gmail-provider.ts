@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { GmailIndex, type GmailSyncStatus, type IndexedGmailMessage } from './gmail-index.js'
-import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftProjection, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
+import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -56,11 +56,16 @@ function headers(payload: UnknownRecord): Map<string, string> {
 }
 
 function sender(value: string): MailAddress {
-  const match = /^\s*([^<]*)<([^>]+)>\s*$/.exec(value)
-  const name = (match?.[1]?.trim() || match?.[2] || value).trim()
-  const address = (match?.[2] || value).trim()
+  const bracketed = /^\s*([^<]*)<([^>]+)>\s*$/.exec(value)
+  const flattened = bracketed ? undefined : /^\s*(.+?)\s+([^\s<>]+@[^\s<>]+)\s*$/.exec(value)
+  const name = (bracketed?.[1]?.trim() || bracketed?.[2] || flattened?.[1] || value).trim().replace(/^"|"$/g, '')
+  const address = (bracketed?.[2] || flattened?.[2] || value).trim()
   const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || '@'
   return { name, address, initials }
+}
+
+function addressList(value: string): readonly MailAddress[] {
+  return value.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((item) => item.trim()).filter(Boolean).map(sender)
 }
 
 function parts(payload: UnknownRecord): readonly UnknownRecord[] {
@@ -126,6 +131,8 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
     unread: array(message.label_ids).includes('UNREAD'),
     body: includeBody ? body(payload) : { kind: 'plain-text', content: '' },
     attachments: includeBody ? attachments(payload) : [],
+    to: addressList(messageHeaders.get('to') ?? ''),
+    cc: addressList(messageHeaders.get('cc') ?? ''),
     source: 'gmail',
     accountId: account?.id,
     accountLabel: account?.email || account?.name,
@@ -166,6 +173,7 @@ export class GmailConnectorProvider {
   #syncTimer: ReturnType<typeof setInterval> | undefined
   #retryTimer: ReturnType<typeof setTimeout> | undefined
   #stopped = false
+  readonly #mailboxCache = new Map<string, { expiresAt: number; conversations: readonly ConversationSummary[] }>()
   #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
 
   constructor(
@@ -272,6 +280,32 @@ export class GmailConnectorProvider {
     return this.#index.searchConversations(query, state, accountId)
   }
 
+  async listMailboxConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): Promise<readonly ConversationSummary[]> {
+    if (mailbox === 'inbox' && this.#index) {
+      await this.#ensureIndex()
+      return query ? this.#index.searchConversations(query, state, accountId) : this.#index.conversations(state, accountId)
+    }
+    const cacheKey = `${mailbox}:${state}:${accountId ?? 'all'}:${query}`
+    const cached = this.#mailboxCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) return cached.conversations
+    const accounts = accountId ? [await this.#account(accountId)] : await this.accounts()
+    const folder: Record<GmailMailbox, { query: string; labels: string[] }> = {
+      inbox: { query: '-in:spam -in:trash', labels: ['INBOX'] },
+      sent: { query: '-in:trash', labels: ['SENT'] },
+      drafts: { query: '-in:trash', labels: ['DRAFT'] },
+      archive: { query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labels: [] },
+      spam: { query: 'in:spam', labels: ['SPAM'] },
+      trash: { query: 'in:trash', labels: ['TRASH'] },
+    }
+    const stateQuery = state === 'unread' ? 'is:unread' : state === 'read' ? 'is:read' : ''
+    const gmailQuery = [folder[mailbox].query, stateQuery, query].filter(Boolean).join(' ')
+    const labels = state === 'unread' ? [...folder[mailbox].labels, 'UNREAD'] : folder[mailbox].labels
+    const pages = await Promise.all(accounts.map((account) => this.#searchPages(account, gmailQuery, labels, 1)))
+    const conversations = groupConversations(pages.flat(), state)
+    this.#mailboxCache.set(cacheKey, { expiresAt: Date.now() + 60_000, conversations })
+    return conversations
+  }
+
   async #listAccountMessages(account: GmailAccountProjection, maxResults: number, state: MailStateFilter): Promise<readonly MessageSummary[]> {
     return this.#searchAccountMessages(
       account,
@@ -304,6 +338,19 @@ export class GmailConnectorProvider {
       }),
       nextPageToken: text(content.next_page_token),
     }
+  }
+
+  async #searchPages(account: GmailAccountProjection, query: string, labelIds: readonly string[], maxPages: number): Promise<readonly IndexedGmailMessage[]> {
+    const messages = new Map<string, IndexedGmailMessage>()
+    let token = ''
+    for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
+      const page = await this.#searchPage(account, 50, query, labelIds, token)
+      for (const message of page.messages) messages.set(message.id, message)
+      if (!page.nextPageToken) break
+      if (page.nextPageToken === token) throw new Error(`Gmail pagination repeated a page token for account ${account.name}`)
+      token = page.nextPageToken
+    }
+    return [...messages.values()]
   }
 
   async #ensureIndex(): Promise<void> {
@@ -397,29 +444,45 @@ export class GmailConnectorProvider {
     return projectConversation(messages, 'gmail')
   }
 
-  async setConversationUnread(accountId: string, threadId: string, unread: boolean): Promise<{ messageIds: readonly string[]; unread: boolean }> {
+  async setConversationUnread(accountId: string, threadId: string, unread: boolean, suppliedMessageIds?: readonly string[]): Promise<{ messageIds: readonly string[]; unread: boolean }> {
     if (!this.#index) throw new Error('Durable Gmail index is required for read-state mutations')
-    const messageIds = this.#index.threadMessageIds(accountId, threadId)
+    const messageIds = suppliedMessageIds?.length ? suppliedMessageIds : this.#index.threadMessageIds(accountId, threadId)
     if (messageIds.length === 0) throw new Error('Conversation is not present in the Gmail index')
     await this.#post('/v1/connectors/gmail/modify', {
       linkId: accountId, messageIds,
       addLabels: unread ? ['UNREAD'] : [], removeLabels: unread ? [] : ['UNREAD'],
     })
-    this.#index.setUnread(accountId, messageIds, unread)
+    const indexedIds = this.#index.threadMessageIds(accountId, threadId)
+    if (indexedIds.length > 0) this.#index.setUnread(accountId, indexedIds, unread)
     this.#scheduleSync(1_000)
     return { messageIds, unread }
   }
 
-  async createGmailDraft(accountId: string, messageId: string, to: string, subject: string, bodyText: string): Promise<DraftProjection> {
-    const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', { linkId: accountId, replyMessageId: messageId, to, subject, bodyText }))
+  async mutateConversation(accountId: string, threadId: string, messageIds: readonly string[], action: GmailConversationAction): Promise<void> {
+    if (!accountId || !threadId || messageIds.length === 0) throw new Error('Gmail conversation action requires account, thread, and message identities')
+    if (action === 'archive') await this.#post('/v1/connectors/gmail/archive', { linkId: accountId, threadIds: [threadId] })
+    else if (action === 'trash') await this.#post('/v1/connectors/gmail/delete', { linkId: accountId, messageIds })
+    else await this.#post('/v1/connectors/gmail/modify', {
+      linkId: accountId,
+      messageIds,
+      addLabels: action === 'spam' ? ['SPAM'] : ['INBOX'],
+      removeLabels: action === 'spam' ? ['INBOX'] : ['SPAM', 'TRASH'],
+    })
+    if (action !== 'inbox') this.#index?.removeMessages(accountId, messageIds)
+    this.#mailboxCache.clear()
+    this.#scheduleSync(1_000)
+  }
+
+  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyText: string): Promise<DraftProjection> {
+    const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', { linkId: accountId, replyMessageId: messageId || null, to, cc, bcc, subject, bodyText }))
     const id = text(value.draft_id) || text(value.id)
     if (!id) throw new Error('Gmail did not return a draft ID')
-    return { id, inReplyToMessageId: messageId, to: [sender(to)], subject, bodyText, state: 'draft', accountId }
+    return { id, inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyText, state: 'draft', accountId }
   }
 
   async updateGmailDraft(draft: DraftProjection): Promise<DraftProjection> {
     if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
-    await this.#post('/v1/connectors/gmail/drafts/update', { linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '), subject: draft.subject, bodyText: draft.bodyText })
+    await this.#post('/v1/connectors/gmail/drafts/update', { linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '), cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject, bodyText: draft.bodyText })
     return draft
   }
 

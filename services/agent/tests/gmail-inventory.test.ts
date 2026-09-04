@@ -18,7 +18,7 @@ describe('Gmail inventory', () => {
       accounts: [{ connectorId: 'connector-gmail', linkId: 'link-one', name: 'Work', email: 'work@example.com' }],
       tools: {
         search: 'gmail.search_email_ids', searchMessages: null, read: 'gmail.read_email', readThread: null,
-        createDraft: null, updateDraft: null, sendDraft: null, sendEmail: null, batchModify: null, readAttachment: null,
+        createDraft: null, updateDraft: null, sendDraft: null, sendEmail: null, batchModify: null, archive: null, delete: null, readAttachment: null,
       },
     })
   })

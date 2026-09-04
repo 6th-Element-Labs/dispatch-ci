@@ -19,6 +19,8 @@ export interface GmailInventory {
     readonly sendDraft: string | null
     readonly sendEmail: string | null
     readonly batchModify: string | null
+    readonly archive: string | null
+    readonly delete: string | null
     readonly readAttachment: string | null
   }
 }
@@ -108,6 +110,8 @@ export function readGmailInventory(value: unknown): GmailInventory {
       sendDraft: find('send_draft'),
       sendEmail: find('send_email'),
       batchModify: find('batch_modify_email'),
+      archive: find('archive_emails'),
+      delete: find('delete_emails'),
       readAttachment: find('read_attachment'),
     },
   }

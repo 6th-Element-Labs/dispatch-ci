@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { fileURLToPath } from 'node:url'
 import { DemoMailProvider } from './demo-provider.js'
 import { GmailConnectorProvider } from './gmail-provider.js'
-import type { MailStateFilter } from './model.js'
+import type { GmailConversationAction, GmailMailbox, MailStateFilter } from './model.js'
 
 const provider = new DemoMailProvider()
 
@@ -11,7 +11,7 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': 'http://127.0.0.1:8410',
     'access-control-allow-headers': 'content-type',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
   })
   response.end(JSON.stringify(value))
 }
@@ -23,11 +23,17 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'setConversationUnread' | 'searchConversations' | 'createGmailDraft' | 'updateGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
 
 function stateFilter(value: string | null): MailStateFilter | undefined {
   if (value === null || value === 'all') return 'all'
   if (value === 'read' || value === 'unread') return value
+  return undefined
+}
+
+function mailboxFilter(value: string | null): GmailMailbox | undefined {
+  if (value === null || value === 'inbox') return 'inbox'
+  if (value === 'sent' || value === 'drafts' || value === 'archive' || value === 'spam' || value === 'trash') return value
   return undefined
 }
 
@@ -80,6 +86,8 @@ export function createMailServer(
     if (request.method === 'GET' && url.pathname === '/v1/conversations') {
       const state = stateFilter(url.searchParams.get('state'))
       if (!state) return writeJson(response, 400, { error: 'invalid_state_filter' })
+      const mailbox = mailboxFilter(url.searchParams.get('mailbox'))
+      if (!mailbox) return writeJson(response, 400, { error: 'invalid_mailbox' })
       const limitValue = Number(url.searchParams.get('limit') ?? 100)
       const cursorValue = Number(url.searchParams.get('cursor') ?? 0)
       if (!Number.isInteger(limitValue) || limitValue < 1 || limitValue > 200 || !Number.isInteger(cursorValue) || cursorValue < 0) {
@@ -90,12 +98,13 @@ export function createMailServer(
       try {
         const accounts = await gmail.accounts()
         if (accounts.length > 0) {
-          const conversations = query && gmail.searchConversations
-            ? await gmail.searchConversations(query, state, accountId ?? undefined)
-            : accountId ? await gmail.listConversations(accountId, state) : await gmail.listUnifiedConversations(state)
+          const conversations = gmail.listMailboxConversations
+            ? await gmail.listMailboxConversations(mailbox, state, accountId ?? undefined, query)
+            : query && gmail.searchConversations ? await gmail.searchConversations(query, state, accountId ?? undefined)
+              : accountId ? await gmail.listConversations(accountId, state) : await gmail.listUnifiedConversations(state)
           const page = conversations.slice(cursorValue, cursorValue + limitValue)
           const nextCursor = cursorValue + page.length < conversations.length ? String(cursorValue + page.length) : null
-          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations: page, nextCursor, total: conversations.length, sync: gmail.syncStatus?.() })
+          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, mailbox, coverage: mailbox === 'inbox' ? 'indexed' : 'recent', conversations: page, nextCursor, total: conversations.length, sync: gmail.syncStatus?.() })
         }
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_conversation_list_failed', detail: error instanceof Error ? error.message : String(error) })
@@ -128,13 +137,24 @@ export function createMailServer(
     if (request.method === 'POST' && readStateMatch?.[1]) {
       if (!gmail.setConversationUnread) return writeJson(response, 501, { error: 'gmail_read_state_not_configured' })
       try {
-        const payload = await readJson(request) as { accountId?: unknown; unread?: unknown }
+        const payload = await readJson(request) as { accountId?: unknown; unread?: unknown; messageIds?: unknown }
         if (typeof payload.accountId !== 'string' || typeof payload.unread !== 'boolean') return writeJson(response, 400, { error: 'accountId_and_unread_required' })
-        const result = await gmail.setConversationUnread(payload.accountId, decodeURIComponent(readStateMatch[1]), payload.unread)
+        const result = await gmail.setConversationUnread(payload.accountId, decodeURIComponent(readStateMatch[1]), payload.unread, Array.isArray(payload.messageIds) ? payload.messageIds.filter((id): id is string => typeof id === 'string') : undefined)
         return writeJson(response, 200, { accepted: true, result })
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_read_state_failed', detail: error instanceof Error ? error.message : String(error) })
       }
+    }
+    const actionMatch = /^\/v1\/conversations\/([^/]+)\/actions$/.exec(url.pathname)
+    if (request.method === 'POST' && actionMatch?.[1]) {
+      if (!gmail.mutateConversation) return writeJson(response, 501, { error: 'gmail_actions_not_configured' })
+      try {
+        const payload = await readJson(request) as { accountId?: unknown; messageIds?: unknown; action?: unknown }
+        const action = payload.action as GmailConversationAction
+        if (typeof payload.accountId !== 'string' || !Array.isArray(payload.messageIds) || !payload.messageIds.every((id) => typeof id === 'string') || !['archive', 'spam', 'trash', 'inbox'].includes(action)) return writeJson(response, 400, { error: 'invalid_gmail_action' })
+        await gmail.mutateConversation(payload.accountId, decodeURIComponent(actionMatch[1]), payload.messageIds as string[], action)
+        return writeJson(response, 202, { accepted: true, action })
+      } catch (error) { return writeJson(response, 502, { error: 'gmail_action_failed', detail: error instanceof Error ? error.message : String(error) }) }
     }
     if (request.method === 'GET' && url.pathname === '/v1/messages') {
       const accountId = url.searchParams.get('account')
@@ -195,7 +215,7 @@ export function createMailServer(
         const body = await readJson(request) as Record<string, unknown>
         const messageId = typeof body === 'object' && body !== null && 'messageId' in body ? String(body.messageId) : ''
         if (typeof body.accountId === 'string' && gmail.createGmailDraft) {
-          const draft = await gmail.createGmailDraft(body.accountId, messageId, String(body.to ?? ''), String(body.subject ?? ''), String(body.bodyText ?? ''))
+          const draft = await gmail.createGmailDraft(body.accountId, messageId, String(body.to ?? ''), String(body.cc ?? ''), String(body.bcc ?? ''), String(body.subject ?? ''), String(body.bodyText ?? ''))
           return writeJson(response, 201, { draft })
         }
         if (!demoEnabled) return writeJson(response, 400, { error: 'gmail_draft_fields_required' })
@@ -209,7 +229,7 @@ export function createMailServer(
     if (request.method === 'PUT' && draftMatch?.[1] && gmail.updateGmailDraft) {
       try {
         const body = await readJson(request) as Record<string, unknown>
-        const draft = await gmail.updateGmailDraft({ id: decodeURIComponent(draftMatch[1]), inReplyToMessageId: String(body.messageId ?? ''), to: [{ name: String(body.to ?? ''), address: String(body.to ?? ''), initials: '@' }], subject: String(body.subject ?? ''), bodyText: String(body.bodyText ?? ''), state: 'draft', accountId: String(body.accountId ?? '') })
+        const draft = await gmail.updateGmailDraft({ id: decodeURIComponent(draftMatch[1]), inReplyToMessageId: String(body.messageId ?? ''), to: [{ name: String(body.to ?? ''), address: String(body.to ?? ''), initials: '@' }], cc: String(body.cc ?? ''), bcc: String(body.bcc ?? ''), subject: String(body.subject ?? ''), bodyText: String(body.bodyText ?? ''), state: 'draft', accountId: String(body.accountId ?? '') })
         return writeJson(response, 200, { draft })
       } catch (error) { return writeJson(response, 502, { error: 'gmail_draft_update_failed', detail: error instanceof Error ? error.message : String(error) }) }
     }

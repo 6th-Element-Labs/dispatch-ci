@@ -41,7 +41,7 @@ test.beforeEach(async ({ page }) => {
 
 test('renders the three-panel mail surface and sanitizes provider HTML', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Codex' })).toBeVisible()
   await expect(page.locator('[data-context]')).toContainText('Opua berth confirmation · Ana Morales')
@@ -82,6 +82,71 @@ test('renders a connector-selected Gmail account without trusting list markup', 
   expect(await page.evaluate(() => (window as Window & { attacked?: boolean }).attacked)).not.toBe(true)
 })
 
+test('navigates native Gmail folders and routes accepted message actions', async ({ page }) => {
+  let requestedMailbox = ''
+  let action: unknown
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
+    requestedMailbox = new URL(route.request().url()).searchParams.get('mailbox') ?? ''
+    return route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/actions', async (route) => {
+    action = await route.request().postDataJSON()
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Sent', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Sent' })).toBeVisible()
+  await expect.poll(() => requestedMailbox).toBe('sent')
+  await page.getByRole('button', { name: 'Inbox', exact: true }).click()
+  await page.locator('[data-archive]').click()
+  await expect.poll(() => action).toEqual({ accountId: 'link-one', messageIds: ['m1'], action: 'archive' })
+})
+
+test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {
+  let draftRequest: unknown
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    draftRequest = await route.request().postDataJSON()
+    await route.fulfill({ status: 201, json: { draft: { id: 'compose-1', inReplyToMessageId: '', to: [{ name: 'client@example.com', address: 'client@example.com', initials: '@' }], cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyText: 'Draft preview', state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await expect(page.getByRole('heading', { name: 'New message' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Draft account' })).toHaveValue('link-one')
+  await page.getByRole('textbox', { name: 'Draft recipient' }).fill('client@example.com')
+  await page.getByRole('textbox', { name: 'Draft Cc' }).fill('cc@example.com')
+  await page.getByRole('textbox', { name: 'Draft Bcc' }).fill('audit@example.com')
+  await page.getByRole('textbox', { name: 'Draft subject' }).fill('Project update')
+  await page.getByRole('textbox', { name: 'Draft body' }).fill('Draft preview')
+  await page.getByRole('button', { name: 'Save draft' }).click()
+  await expect.poll(() => draftRequest).toEqual({ messageId: '', accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyText: 'Draft preview' })
+})
+
+test('creates a threaded reply-all draft without addressing the active account', async ({ page }) => {
+  let draftRequest: Record<string, unknown> | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all.*/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', to: [{ name: 'Work', address: 'work@example.com', initials: 'W' }, { name: 'Colleague', address: 'colleague@example.com', initials: 'C' }], cc: [{ name: 'Manager', address: 'manager@example.com', initials: 'M' }], body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    draftRequest = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 201, json: { draft: { id: 'reply-all-1', inReplyToMessageId: 'm1', to: [], cc: draftRequest.cc, bcc: '', subject: 'Re: Opua berth confirmation', bodyText: '', state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply all' }).click()
+  await expect.poll(() => draftRequest).toMatchObject({ messageId: 'm1', accountId: 'link-one', to: 'ana@example.com, colleague@example.com', cc: 'manager@example.com', bcc: '' })
+})
+
 test('updates read state only after the Gmail command is accepted', async ({ page }) => {
   let command: unknown
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
@@ -95,7 +160,7 @@ test('updates read state only after the Gmail command is accepted', async ({ pag
   })
   await page.goto('/')
   await page.getByRole('button', { name: 'Mark read' }).click()
-  await expect.poll(() => command).toEqual({ accountId: 'link-one', unread: false })
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
 })
 
 test('edits, saves, and sends a Gmail draft from the middle panel', async ({ page }) => {
@@ -151,7 +216,7 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   await page.route('http://127.0.0.1:8412/v1/threads/thread-history', (route) => route.fulfill({ json: {
     thread: { turns: [{ items: [
       { type: 'userMessage', content: [{ type: 'input_text', text: 'Summarize this thread.' }] },
-      { type: 'agentMessage', content: { type: 'output_text', text: 'Here is the summary.' } },
+      { type: 'agentMessage', content: { type: 'output_text', text: '## Here is the summary.\n\n- First fact\n- Second fact\n\n| Source | Date |\n| --- | --- |\n| Gmail | Sep 3 |\n\n`thread/read`\n\n[Open evidence](https://example.com)' } },
     ] }] },
   } }))
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
@@ -159,6 +224,10 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText('Summarize this thread.', { exact: true })).toBeVisible()
   await expect(page.getByText('Here is the summary.', { exact: true })).toBeVisible()
+  await expect(page.locator('.ai-response h2')).toHaveText('Here is the summary.')
+  await expect(page.locator('.ai-response table')).toContainText('Gmail')
+  await expect(page.locator('.ai-response code')).toHaveText('thread/read')
+  await expect(page.getByRole('link', { name: 'Open evidence' })).toHaveAttribute('target', '_blank')
   await expect(page.getByText('[object Object]', { exact: true })).toHaveCount(0)
 })
 
@@ -169,7 +238,7 @@ test('filters conversations by all, unread, and read state', async ({ page }) =>
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await page.getByRole('button', { name: 'Read', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(0)
-  await expect(page.locator('.dispatch-message-list-empty')).toHaveText('No read messages in the connected inboxes.')
+  await expect(page.locator('.dispatch-message-list-empty')).toHaveText('No read messages in inbox.')
   await page.getByRole('button', { name: 'All', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
 })

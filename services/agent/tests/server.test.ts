@@ -137,6 +137,22 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('routes archive and Trash through their explicit Gmail tools', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.archive_emails': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.delete_emails': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    expect((await fetch(`${base}/v1/connectors/gmail/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', threadIds: ['t1'] }) })).status).toBe(200)
+    expect((await fetch(`${base}/v1/connectors/gmail/delete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', messageIds: ['m1'] }) })).status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ tool: 'gmail.archive_emails', arguments: { link_id: 'link-one', thread_ids: ['t1'] } }))
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ tool: 'gmail.delete_emails', arguments: { link_id: 'link-one', message_ids: ['m1'] } }))
+  })
+
   it('reads history, steers, and interrupts the active Codex turn', async () => {
     const { base, fake } = await start()
     await fetch(`${base}/v1/threads/thread-1`)

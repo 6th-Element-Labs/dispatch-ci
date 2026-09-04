@@ -194,6 +194,19 @@ export class GmailIndex {
     }
   }
 
+  removeMessages(accountId: string, messageIds: readonly string[]): void {
+    if (messageIds.length === 0) return
+    const remove = this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND id = ?')
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const id of messageIds) remove.run(accountId, id)
+      this.#db.exec('COMMIT')
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   conversations(state: MailStateFilter, accountId?: string): readonly ConversationSummary[] {
     const eligible = this.messages(accountId).filter((message) => message.inInbox)
     return groupConversations(eligible, state)

@@ -1,4 +1,4 @@
-import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailSyncStatus, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -36,8 +36,8 @@ export const api = {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     return request(`${MAIL}/v1/messages${query}`)
   },
-  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string): Promise<{ source: 'demo' | 'gmail'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
-    const params = new URLSearchParams({ state, limit: '100' })
+  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string, mailbox: GmailMailbox = 'inbox'): Promise<{ source: 'demo' | 'gmail'; coverage?: 'indexed' | 'recent'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
+    const params = new URLSearchParams({ state, mailbox, limit: '100' })
     if (accountId) params.set('account', accountId)
     if (cursor) params.set('cursor', cursor)
     if (search) params.set('q', search)
@@ -48,9 +48,14 @@ export const api = {
     const result = await request<{ conversation: ConversationProjection }>(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}${query}`)
     return result.conversation
   },
-  async setConversationUnread(threadId: string, accountId: string, unread: boolean): Promise<void> {
+  async setConversationUnread(threadId: string, accountId: string, unread: boolean, messageIds: readonly string[] = []): Promise<void> {
     await request(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}/read-state`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, unread }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, unread, messageIds }),
+    })
+  },
+  async mutateConversation(threadId: string, accountId: string, messageIds: readonly string[], action: GmailConversationAction): Promise<void> {
+    await request(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}/actions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, messageIds, action }),
     })
   },
   async readMessage(id: string, accountId?: string): Promise<MessageProjection> {

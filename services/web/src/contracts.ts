@@ -22,6 +22,8 @@ export interface MessageSummary {
 export interface MessageProjection extends MessageSummary {
   readonly body: { readonly kind: 'sanitized-html' | 'plain-text'; readonly content: string }
   readonly attachments: readonly { readonly id: string; readonly name: string; readonly mediaType: string; readonly sizeLabel: string }[]
+  readonly to?: readonly MailAddress[]
+  readonly cc?: readonly MailAddress[]
   readonly source: 'demo' | 'gmail'
 }
 
@@ -29,6 +31,8 @@ export interface DraftProjection {
   readonly id: string
   readonly inReplyToMessageId: string
   readonly to: readonly MailAddress[]
+  readonly cc?: string
+  readonly bcc?: string
   readonly subject: string
   readonly bodyText: string
   readonly state: 'draft'
@@ -50,6 +54,8 @@ export interface GmailAccount {
 }
 
 export type MailStateFilter = 'all' | 'unread' | 'read'
+export type GmailMailbox = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash'
+export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface GmailSyncStatus {
   readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'

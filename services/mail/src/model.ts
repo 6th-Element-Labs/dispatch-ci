@@ -32,6 +32,8 @@ export interface MessageProjection extends MessageSummary {
     readonly content: string
   }
   readonly attachments: readonly AttachmentProjection[]
+  readonly to?: readonly MailAddress[]
+  readonly cc?: readonly MailAddress[]
   readonly source: 'demo' | 'gmail'
 }
 
@@ -39,6 +41,8 @@ export interface DraftProjection {
   readonly id: string
   readonly inReplyToMessageId: string
   readonly to: readonly MailAddress[]
+  readonly cc?: string
+  readonly bcc?: string
   readonly subject: string
   readonly bodyText: string
   readonly state: 'draft'
@@ -46,6 +50,8 @@ export interface DraftProjection {
 }
 
 export type MailStateFilter = 'all' | 'unread' | 'read'
+export type GmailMailbox = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash'
+export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface ConversationSummary {
   readonly id: string

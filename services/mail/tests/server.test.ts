@@ -90,6 +90,28 @@ describe('dispatch-mail', () => {
     expect(value).toMatchObject({ source: 'gmail', scope: 'unified', messages: [{ accountId: 'one' }] })
   })
 
+  it('routes mailbox reads and accepted Gmail actions through the mail owner', async () => {
+    const calls: unknown[] = []
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      listMailboxConversations: async (mailbox, state, accountId, query) => { calls.push({ mailbox, state, accountId, query }); return [] },
+      mutateConversation: async (accountId, threadId, messageIds, action) => { calls.push({ accountId, threadId, messageIds, action }) },
+      readConversation: async () => { throw new Error('not configured') },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    expect((await fetch(`${base}/v1/conversations?state=all&mailbox=sent&account=one&q=invoice`)).status).toBe(200)
+    expect((await fetch(`${base}/v1/conversations/t1/actions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId: 'one', messageIds: ['m1'], action: 'archive' }) })).status).toBe(202)
+    expect(calls).toEqual([
+      { mailbox: 'sent', state: 'all', accountId: 'one', query: 'invoice' },
+      { accountId: 'one', threadId: 't1', messageIds: ['m1'], action: 'archive' },
+    ])
+  })
+
   it('fails visibly instead of substituting demo mail when Gmail is disconnected', async () => {
     const server = createMailServer({
       accounts: async () => [],
