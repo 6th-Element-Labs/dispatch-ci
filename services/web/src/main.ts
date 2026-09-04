@@ -17,13 +17,13 @@ app.innerHTML = `
       <div class="container-fluid">
         <div class="navbar-brand navbar-brand-autodark m-0"><span class="avatar avatar-sm bg-blue text-white">D</span><strong>Dispatch</strong><span class="badge bg-blue-lt text-blue">All Gmail inboxes</span></div>
         <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control" placeholder="Search Gmail" aria-label="Search mail"></label>
-        <div class="navbar-nav flex-row align-items-center gap-2 ms-auto"><button class="btn btn-icon btn-outline-secondary" type="button" data-refresh aria-label="Refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button><button class="btn btn-primary" type="button" data-compose><i class="ti ti-square-rounded-plus me-1" aria-hidden="true"></i>Compose</button></div>
+        <div class="navbar-nav flex-row align-items-center gap-2 ms-auto"><button class="btn btn-icon btn-outline-secondary" type="button" data-refresh aria-label="Refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button><button class="btn btn-primary" type="button" data-compose><i class="ti ti-square-rounded-plus me-1" aria-hidden="true"></i><span data-compose-label>Compose</span></button></div>
       </div>
     </header>
     <div class="dispatch-workspace">
       <nav class="dispatch-rail nav nav-pills flex-column bg-white" aria-label="Mail folders"><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
-        <div class="card-header dispatch-pane-heading"><div><h1 class="card-title mb-1" data-mailbox-title>Inbox</h1><span class="text-secondary" data-mail-source>Loading</span></div><button class="btn btn-icon btn-ghost-secondary" type="button" aria-label="Message filters"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button></div>
+        <div class="card-header dispatch-pane-heading"><div><h1 class="card-title mb-1" data-mailbox-title>Inbox</h1><span class="text-secondary" data-mail-source>Loading</span></div><div class="btn-list flex-nowrap"><button class="btn btn-icon btn-ghost-secondary dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" aria-label="Message filters"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button></div></div>
         <label class="dispatch-folder-select px-3 pt-3"><span class="form-label mb-1">Folder</span><select class="form-select form-select-sm" data-mailbox-select aria-label="Gmail folder"><option value="inbox">Inbox</option><option value="sent">Sent</option><option value="drafts">Drafts</option><option value="archive">Archive</option><option value="spam">Spam</option><option value="trash">Trash</option></select></label>
         <label class="dispatch-account px-3 pt-3" hidden><span class="form-label mb-1">Gmail account</span><select class="form-select form-select-sm" data-account aria-label="Gmail account"></select></label>
         <div class="btn-group mx-3 my-3 dispatch-mail-filters" role="group" aria-label="Message state"><button class="btn btn-sm active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="btn btn-sm" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="btn btn-sm" type="button" data-mail-state="read" aria-pressed="false">Read</button></div>
@@ -35,7 +35,7 @@ app.innerHTML = `
         <div class="empty dispatch-reader-empty" data-reader-empty><div class="empty-icon"><i class="ti ti-mail-opened"></i></div><p class="empty-title">Select a message</p></div>
         <div data-reader hidden>
           <header class="card-header dispatch-reader-header">
-            <div class="w-100"><div class="d-flex align-items-start gap-2"><div class="flex-grow-1"><span class="subheader">Selected thread</span><h2 class="card-title mt-1 mb-3" data-subject></h2></div><div class="btn-list flex-nowrap dispatch-message-actions"><button class="btn btn-icon btn-ghost-secondary" type="button" data-move-inbox aria-label="Move to Inbox" hidden><i class="ti ti-inbox" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-archive aria-label="Archive"><i class="ti ti-archive" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-spam aria-label="Mark as spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-danger" type="button" data-trash aria-label="Move to Trash"><i class="ti ti-trash" aria-hidden="true"></i></button></div></div>
+            <div class="w-100"><div class="d-flex align-items-start gap-2"><button class="btn btn-icon btn-ghost-secondary dispatch-mobile-back" type="button" data-mobile-back aria-label="Back to Inbox"><i class="ti ti-arrow-left" aria-hidden="true"></i></button><div class="flex-grow-1"><span class="subheader">Selected thread</span><h2 class="card-title mt-1 mb-3" data-subject></h2></div><div class="btn-list flex-nowrap dispatch-message-actions"><button class="btn btn-icon btn-ghost-secondary dispatch-pane-collapse" type="button" data-collapse-reader aria-label="Collapse email panel"><i class="ti ti-layout-sidebar-right-collapse" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-move-inbox aria-label="Move to Inbox" hidden><i class="ti ti-inbox" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-archive aria-label="Archive"><i class="ti ti-archive" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-spam aria-label="Mark as spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-danger" type="button" data-trash aria-label="Move to Trash"><i class="ti ti-trash" aria-hidden="true"></i></button></div></div>
             <div class="dispatch-sender"><span class="avatar avatar-sm bg-blue-lt text-blue" data-avatar></span><span><strong data-sender></strong><small class="text-secondary" data-address></small></span><time class="text-secondary ms-auto" data-time></time></div></div>
           </header>
           <article class="dispatch-email-body" data-body></article>
@@ -153,6 +153,7 @@ let searchQuery = ''
 let searchTimer: number | undefined
 let activeTurnId: string | undefined
 let selectedAttachmentContext: { messageId: string; attachmentId: string; filename: string } | undefined
+let mobilePanel: PanelName = 'messages'
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -181,7 +182,25 @@ function loadPanelState(): PanelState {
 
 const panels = loadPanelState()
 
+function usesMobilePanels(): boolean {
+  return window.matchMedia('(max-width: 820px)').matches
+}
+
 function renderPanels(): void {
+  if (usesMobilePanels()) {
+    elements.messagesPanel.hidden = mobilePanel !== 'messages'
+    elements.readerPanel.hidden = mobilePanel !== 'reader'
+    elements.agentPanel.hidden = mobilePanel !== 'agent'
+    elements.messagesDivider.hidden = true
+    elements.agentDivider.hidden = true
+    elements.workspace.style.gridTemplateColumns = 'minmax(0, 1fr)'
+    app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => {
+      const active = button.dataset.panel === mobilePanel
+      button.setAttribute('aria-pressed', String(active))
+      button.classList.toggle('active', active)
+    })
+    return
+  }
   const visible = (['messages', 'reader', 'agent'] as const).filter((name) => panels[name])
   if (visible.length === 0) panels.reader = true
   elements.messagesPanel.hidden = !panels.messages
@@ -192,8 +211,10 @@ function renderPanels(): void {
 
   let messagesWidth = panels.messagesWidth
   let agentWidth = panels.agentWidth
+  const railWidth = window.innerWidth <= 1100 ? 0 : 72
+  const minimumReaderWidth = window.innerWidth <= 1100 ? 320 : 360
   if (panels.messages && panels.reader && panels.agent) {
-    const sideWidth = Math.max(500, window.innerWidth - 72 - 18 - 360)
+    const sideWidth = Math.max(500, window.innerWidth - railWidth - 18 - minimumReaderWidth)
     if (messagesWidth + agentWidth > sideWidth) {
       const scale = sideWidth / (messagesWidth + agentWidth)
       messagesWidth = Math.max(220, Math.round(messagesWidth * scale))
@@ -201,10 +222,10 @@ function renderPanels(): void {
       if (messagesWidth + agentWidth > sideWidth) messagesWidth = Math.max(220, sideWidth - agentWidth)
     }
   }
-  const columns: string[] = ['72px']
+  const columns: string[] = railWidth ? ['72px'] : []
   if (panels.messages) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${messagesWidth}px`)
   if (!elements.messagesDivider.hidden) columns.push('9px')
-  if (panels.reader) columns.push('minmax(280px, 1fr)')
+  if (panels.reader) columns.push(`minmax(${minimumReaderWidth}px, 1fr)`)
   if (!elements.agentDivider.hidden) columns.push('9px')
   if (panels.agent) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${agentWidth}px`)
   elements.workspace.style.gridTemplateColumns = columns.join(' ')
@@ -324,7 +345,7 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     content.append(top, subject, preview)
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
-    button.addEventListener('click', () => { void selectConversation(conversation.id) })
+    button.addEventListener('click', () => { void selectConversation(conversation.id, true) })
     elements.list.append(button)
   }
   if (nextConversationCursor) {
@@ -408,10 +429,14 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
   } catch (error) { addAgentMessage('error', error instanceof Error ? error.message : String(error)) }
 }
 
-async function selectConversation(id: string): Promise<void> {
+async function selectConversation(id: string, revealOnMobile = false): Promise<void> {
   const summary = conversations.find((conversation) => conversation.id === id)
   if (!summary) return
   const sequence = ++selectionSequence
+  if (revealOnMobile && usesMobilePanels()) {
+    mobilePanel = 'reader'
+    renderPanels()
+  }
   selectedConversationId = id
   selected = undefined
   renderList()
@@ -565,6 +590,10 @@ function openCompose(): void {
   }
   selected = undefined
   selectedConversationId = undefined
+  if (usesMobilePanels()) {
+    mobilePanel = 'reader'
+    renderPanels()
+  }
   elements.subject.textContent = 'New message'
   elements.sender.textContent = 'Compose'
   elements.address.textContent = 'Draft preview'
@@ -950,24 +979,32 @@ async function connectAgent(): Promise<void> {
     if (apps.length === 0) apps = await api.listApps()
     const gmail = gmailAppId(apps)
     elements.connector.textContent = gmail ? 'Gmail available' : 'No Gmail connector'
+    let restoreHistory = false
     if (threadId) {
-      try { threadId = await api.resumeThread(threadId) } catch { threadId = await api.startThread() }
+      try {
+        threadId = await api.resumeThread(threadId)
+        restoreHistory = true
+      } catch {
+        threadId = await api.startThread()
+      }
     } else {
       threadId = await api.startThread()
     }
     localStorage.setItem('dispatch.codex.threadId', threadId)
-    try {
-      const history = await api.readThread(threadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
-      const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
-      if (restored.length > 0 && elements.stream.querySelectorAll('.dispatch-agent-message').length === 0) {
-        for (const item of restored) {
-          const text = agentHistoryText(item)
-          if (text && item.type === 'userMessage') addAgentMessage('user', text)
-          if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
+    if (restoreHistory) {
+      try {
+        const history = await api.readThread(threadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
+        const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
+        if (restored.length > 0 && elements.stream.querySelectorAll('.dispatch-agent-message').length === 0) {
+          for (const item of restored) {
+            const text = agentHistoryText(item)
+            if (text && item.type === 'userMessage') addAgentMessage('user', text)
+            if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
+          }
         }
+      } catch (error) {
+        addAgentMessage('error', `Could not restore Codex history: ${error instanceof Error ? error.message : String(error)}`)
       }
-    } catch (error) {
-      addAgentMessage('error', `Could not restore Codex history: ${error instanceof Error ? error.message : String(error)}`)
     }
     agentEvents?.close()
     agentEvents = api.events(threadId)
@@ -1211,6 +1248,11 @@ app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) =>
 }))
 app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => {
   const name = button.dataset.panel as PanelName
+  if (usesMobilePanels()) {
+    mobilePanel = name
+    renderPanels()
+    return
+  }
   const visibleCount = Number(panels.messages) + Number(panels.reader) + Number(panels.agent)
   if (panels[name] && visibleCount === 1) return
   panels[name] = !panels[name]
@@ -1220,6 +1262,11 @@ elements.messagesDivider.addEventListener('pointerdown', (event) => resizePanel(
 elements.agentDivider.addEventListener('pointerdown', (event) => resizePanel('agentWidth', event))
 elements.messagesDivider.addEventListener('keydown', (event) => resizePanelWithKeyboard('messagesWidth', event))
 elements.agentDivider.addEventListener('keydown', (event) => resizePanelWithKeyboard('agentWidth', event))
+elements.messagesDivider.addEventListener('dblclick', () => { panels.messages = false; renderPanels() })
+elements.agentDivider.addEventListener('dblclick', () => { panels.agent = false; renderPanels() })
+app.querySelector('[data-collapse-messages]')?.addEventListener('click', () => { panels.messages = false; renderPanels() })
+app.querySelector('[data-collapse-reader]')?.addEventListener('click', () => { panels.reader = false; renderPanels() })
+app.querySelector('[data-mobile-back]')?.addEventListener('click', () => { mobilePanel = 'messages'; renderPanels() })
 app.querySelector('[data-compose]')?.addEventListener('click', openCompose)
 app.querySelector('[data-reply]')?.addEventListener('click', () => { void openDraft(false).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-reply-all]')?.addEventListener('click', () => { void openDraft(true).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
@@ -1228,7 +1275,10 @@ elements.archive.addEventListener('click', () => { void mutateSelected('archive'
 elements.spam.addEventListener('click', () => { void mutateSelected('spam') })
 elements.trash.addEventListener('click', () => { void mutateSelected('trash') })
 elements.moveInbox.addEventListener('click', () => { void mutateSelected('inbox') })
-app.querySelector('[data-ask]')?.addEventListener('click', () => elements.prompt.focus())
+app.querySelector('[data-ask]')?.addEventListener('click', () => {
+  if (usesMobilePanels()) { mobilePanel = 'agent'; renderPanels() }
+  elements.prompt.focus()
+})
 app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-send-draft]')?.addEventListener('click', () => { void sendDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { elements.prompt.value = `Revise this draft:\n\n${elements.draftBody.value}`; elements.prompt.focus() })

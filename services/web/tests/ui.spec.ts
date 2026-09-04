@@ -222,9 +222,39 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   const persistedAgent = await agentPanel.boundingBox()
   expect(persistedMessages!.width).toBeGreaterThan(before!.width + 30)
   expect(persistedAgent!.width).toBeGreaterThan(agentBefore!.width + 30)
+  await page.getByRole('button', { name: 'Collapse thread list' }).click()
+  await expect(messagesPanel).toBeHidden()
+  await messagesToggle.click()
+  await expect(messagesPanel).toBeVisible()
+  await page.locator('[data-divider="agent"]').dblclick()
+  await expect(agentPanel).toBeHidden()
+  await codexToggle.click()
+  await expect(agentPanel).toBeVisible()
+})
+
+test('uses one native Tabler pane at a time on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  const messagesPanel = page.getByRole('complementary', { name: 'Messages' })
+  const readerPanel = page.getByRole('main', { name: 'Selected email' })
+  const agentPanel = page.getByRole('complementary', { name: 'Codex' })
+  await expect(messagesPanel).toBeVisible()
+  await expect(readerPanel).toBeHidden()
+  await expect(agentPanel).toBeHidden()
+  await expect(page.getByRole('combobox', { name: 'Gmail folder' })).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await expect(messagesPanel).toBeHidden()
+  await expect(readerPanel).toBeVisible()
+  await page.getByRole('button', { name: 'Back to Inbox' }).click()
+  await expect(messagesPanel).toBeVisible()
+  await page.getByRole('button', { name: 'Codex', exact: true }).click()
+  await expect(agentPanel).toBeVisible()
+  await expect(messagesPanel).toBeHidden()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 })
 
 test('restores structured Codex history as readable text', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 800 })
   await page.unroute('http://127.0.0.1:8412/ready')
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
@@ -251,6 +281,20 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   for (const message of await page.locator('.dispatch-agent-message').all()) {
     expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
   }
+})
+
+test('does not read history for a brand-new Codex task', async ({ page }) => {
+  let historyReads = 0
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-new' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-new', (route) => { historyReads += 1; return route.fulfill({ status: 502, json: { error: 'thread_unavailable' } }) })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.goto('/')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dispatch.codex.threadId'))).toBe('thread-new')
+  expect(historyReads).toBe(0)
+  await expect(page.getByText(/Could not restore Codex history/)).toHaveCount(0)
 })
 
 test('filters conversations by all, unread, and read state', async ({ page }) => {
