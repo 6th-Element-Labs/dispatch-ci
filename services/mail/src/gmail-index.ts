@@ -38,6 +38,7 @@ type MessageRow = {
   preview: string
   unread: number
   in_inbox: number
+  has_attachment: number
 }
 
 export class GmailIndex {
@@ -64,6 +65,7 @@ export class GmailIndex {
         preview TEXT NOT NULL,
         unread INTEGER NOT NULL CHECK (unread IN (0, 1)),
         in_inbox INTEGER NOT NULL CHECK (in_inbox IN (0, 1)),
+        has_attachment INTEGER NOT NULL DEFAULT 0 CHECK (has_attachment IN (0, 1)),
         sync_run_id TEXT NOT NULL,
         PRIMARY KEY (account_id, id)
       );
@@ -85,6 +87,8 @@ export class GmailIndex {
       );
       INSERT OR IGNORE INTO gmail_sync_state(singleton, state) VALUES (1, 'idle');
     `)
+    const columns = this.#db.prepare('PRAGMA table_info(gmail_messages)').all() as unknown as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'has_attachment')) this.#db.exec('ALTER TABLE gmail_messages ADD COLUMN has_attachment INTEGER NOT NULL DEFAULT 0')
   }
 
   replaceAccount(accountId: string, messages: readonly IndexedGmailMessage[], runId: string, complete: boolean): void {
@@ -93,22 +97,22 @@ export class GmailIndex {
       const upsert = this.#db.prepare(`
         INSERT INTO gmail_messages (
           account_id, id, thread_id, account_label, sender_name, sender_address, sender_initials,
-          subject, received_at, received_label, received_full_label, preview, unread, in_inbox, sync_run_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          subject, received_at, received_label, received_full_label, preview, unread, in_inbox, has_attachment, sync_run_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(account_id, id) DO UPDATE SET
           thread_id=excluded.thread_id, account_label=excluded.account_label,
           sender_name=excluded.sender_name, sender_address=excluded.sender_address,
           sender_initials=excluded.sender_initials, subject=excluded.subject,
           received_at=excluded.received_at, received_label=excluded.received_label,
           received_full_label=excluded.received_full_label, preview=excluded.preview,
-          unread=excluded.unread, in_inbox=excluded.in_inbox, sync_run_id=excluded.sync_run_id
+          unread=excluded.unread, in_inbox=excluded.in_inbox, has_attachment=excluded.has_attachment, sync_run_id=excluded.sync_run_id
       `)
       for (const message of messages) {
         upsert.run(
           accountId, message.id, message.threadId, message.accountLabel ?? '',
           message.sender.name, message.sender.address, message.sender.initials,
           message.subject, message.receivedAt, message.receivedLabel, message.receivedFullLabel,
-          message.preview, Number(message.unread), Number(message.inInbox), runId,
+          message.preview, Number(message.unread), Number(message.inInbox), Number(message.hasAttachment === true), runId,
         )
       }
       if (complete) this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND sync_run_id <> ?').run(accountId, runId)
@@ -168,7 +172,26 @@ export class GmailIndex {
       preview: row.preview,
       unread: row.unread === 1,
       inInbox: row.in_inbox === 1,
+      hasAttachment: row.has_attachment === 1,
     }))
+  }
+
+  threadMessageIds(accountId: string, threadId: string): readonly string[] {
+    const rows = this.#db.prepare('SELECT id FROM gmail_messages WHERE account_id = ? AND thread_id = ?').all(accountId, threadId) as unknown as Array<{ id: string }>
+    return rows.map((row) => row.id)
+  }
+
+  setUnread(accountId: string, messageIds: readonly string[], unread: boolean): void {
+    if (messageIds.length === 0) throw new Error('Cannot update read state without indexed Gmail message IDs')
+    const update = this.#db.prepare('UPDATE gmail_messages SET unread = ? WHERE account_id = ? AND id = ?')
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const id of messageIds) update.run(Number(unread), accountId, id)
+      this.#db.exec('COMMIT')
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   conversations(state: MailStateFilter, accountId?: string): readonly ConversationSummary[] {
@@ -178,6 +201,29 @@ export class GmailIndex {
       return message.inInbox || message.unread
     })
     return groupConversations(eligible, state)
+  }
+
+  searchConversations(query: string, state: MailStateFilter, accountId?: string): readonly ConversationSummary[] {
+    const terms = query.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((term) => term.replace(/^"|"$/g, '')) ?? []
+    let messages = [...this.messages(accountId)]
+    for (const term of terms) {
+      const separator = term.indexOf(':')
+      const field = separator > 0 ? term.slice(0, separator).toLowerCase() : ''
+      const value = separator > 0 ? term.slice(separator + 1).toLowerCase() : term.toLowerCase()
+      if (field === 'from') messages = messages.filter((message) => `${message.sender.name} ${message.sender.address}`.toLowerCase().includes(value))
+      else if (field === 'subject') messages = messages.filter((message) => message.subject.toLowerCase().includes(value))
+      else if (field === 'is' && value === 'unread') messages = messages.filter((message) => message.unread)
+      else if (field === 'is' && value === 'read') messages = messages.filter((message) => !message.unread)
+      else if (field === 'has' && value === 'attachment') messages = messages.filter((message) => message.hasAttachment)
+      else if (field === 'after' || field === 'before') {
+        const boundary = Date.parse(value)
+        if (Number.isNaN(boundary)) throw new Error(`Invalid Gmail date search: ${term}`)
+        messages = messages.filter((message) => field === 'after' ? Date.parse(message.receivedAt) > boundary : Date.parse(message.receivedAt) < boundary)
+      } else if (!field) {
+        messages = messages.filter((message) => `${message.sender.name} ${message.sender.address} ${message.subject} ${message.preview}`.toLowerCase().includes(value))
+      } else throw new Error(`Unsupported Gmail search operator: ${field}:`)
+    }
+    return groupConversations(messages.filter((message) => message.inInbox || message.unread), state)
   }
 
   count(): number {

@@ -54,4 +54,14 @@ describe('GmailIndex', () => {
     expect(index.messages()).toMatchObject([{ accountId: 'account-1' }])
     index.close()
   })
+
+  it('searches indexed Gmail fields and operators', () => {
+    const index = new GmailIndex(':memory:')
+    index.replaceAccount('account-1', [{ ...message('m1', true, true), hasAttachment: true }, message('m2', false, true)], 'run-1', true)
+    expect(index.searchConversations('from:ana', 'all')).toHaveLength(2)
+    expect(index.searchConversations('subject:m1 has:attachment is:unread', 'all')).toHaveLength(1)
+    expect(index.searchConversations('after:2026-09-04T08:30:00Z', 'all')).toHaveLength(1)
+    expect(() => index.searchConversations('label:custom', 'all')).toThrow('Unsupported Gmail search operator')
+    index.close()
+  })
 })

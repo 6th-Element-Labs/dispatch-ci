@@ -81,6 +81,22 @@ test('renders a connector-selected Gmail account without trusting list markup', 
   expect(await page.evaluate(() => (window as Window & { attacked?: boolean }).attacked)).not.toBe(true)
 })
 
+test('updates read state only after the Gmail command is accepted', async ({ page }) => {
+  let command: unknown
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    command = await route.request().postDataJSON()
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Mark read' }).click()
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', unread: false })
+})
+
 test('allows one, two, or three adjustable panels while keeping one visible', async ({ page }) => {
   await page.goto('/')
   const messagesToggle = page.getByRole('button', { name: 'Messages', exact: true })
@@ -134,6 +150,18 @@ test('loads indexed conversation pages without rendering the full mailbox at onc
   await page.getByRole('button', { name: 'Load more · 1 remaining' }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await expect(page.locator('.dispatch-load-more')).toHaveCount(0)
+})
+
+test('searches the unified Gmail index from the message pane', async ({ page }) => {
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q')
+    return route.fulfill({ json: { source: 'demo', conversations: query ? [conversations[1]] : conversations, nextCursor: null, total: query ? 1 : 2 } })
+  })
+  await page.goto('/')
+  await page.getByRole('textbox', { name: 'Search mail' }).fill('from:james@example.com')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(1)
+  await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
 })
 
 test('shows cached conversations immediately while Gmail refreshes', async ({ page }) => {

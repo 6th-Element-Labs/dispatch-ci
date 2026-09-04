@@ -23,7 +23,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'setConversationUnread' | 'searchConversations'>>
 
 function stateFilter(value: string | null): MailStateFilter | undefined {
   if (value === null || value === 'all') return 'all'
@@ -86,12 +86,13 @@ export function createMailServer(
         return writeJson(response, 400, { error: 'invalid_pagination' })
       }
       const accountId = url.searchParams.get('account')
+      const query = url.searchParams.get('q')?.trim() ?? ''
       try {
         const accounts = await gmail.accounts()
         if (accounts.length > 0) {
-          const conversations = accountId
-            ? await gmail.listConversations(accountId, state)
-            : await gmail.listUnifiedConversations(state)
+          const conversations = query && gmail.searchConversations
+            ? await gmail.searchConversations(query, state, accountId ?? undefined)
+            : accountId ? await gmail.listConversations(accountId, state) : await gmail.listUnifiedConversations(state)
           const page = conversations.slice(cursorValue, cursorValue + limitValue)
           const nextCursor = cursorValue + page.length < conversations.length ? String(cursorValue + page.length) : null
           return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations: page, nextCursor, total: conversations.length, sync: gmail.syncStatus?.() })
@@ -122,6 +123,18 @@ export function createMailServer(
       if (!demoEnabled) return writeJson(response, 400, { error: 'gmail_account_required' })
       const conversation = provider.readConversation(threadId)
       return conversation ? writeJson(response, 200, { conversation }) : writeJson(response, 404, { error: 'conversation_not_found' })
+    }
+    const readStateMatch = /^\/v1\/conversations\/([^/]+)\/read-state$/.exec(url.pathname)
+    if (request.method === 'POST' && readStateMatch?.[1]) {
+      if (!gmail.setConversationUnread) return writeJson(response, 501, { error: 'gmail_read_state_not_configured' })
+      try {
+        const payload = await readJson(request) as { accountId?: unknown; unread?: unknown }
+        if (typeof payload.accountId !== 'string' || typeof payload.unread !== 'boolean') return writeJson(response, 400, { error: 'accountId_and_unread_required' })
+        const result = await gmail.setConversationUnread(payload.accountId, decodeURIComponent(readStateMatch[1]), payload.unread)
+        return writeJson(response, 200, { accepted: true, result })
+      } catch (error) {
+        return writeJson(response, 502, { error: 'gmail_read_state_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
     }
     if (request.method === 'GET' && url.pathname === '/v1/messages') {
       const accountId = url.searchParams.get('account')

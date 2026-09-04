@@ -236,6 +236,25 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 502, { error: 'gmail_thread_read_failed', detail: errorMessage(error) })
       }
     }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/modify') {
+      try {
+        const payload = await body(request)
+        const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
+        const messageIds = Array.isArray(payload.messageIds) ? payload.messageIds.filter((id): id is string => typeof id === 'string' && id.length > 0) : []
+        const addLabels = Array.isArray(payload.addLabels) ? payload.addLabels.filter((label): label is string => typeof label === 'string') : []
+        const removeLabels = Array.isArray(payload.removeLabels) ? payload.removeLabels.filter((label): label is string => typeof label === 'string') : []
+        if (!linkId || messageIds.length === 0) return json(response, 400, { error: 'link_and_message_ids_required' })
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.batchModify) return json(response, 503, { error: 'gmail_modify_unavailable' })
+        const result = await runtime.request('mcpServer/tool/call', {
+          server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.batchModify,
+          arguments: { link_id: linkId, message_ids: messageIds, add_labels: addLabels, remove_labels: removeLabels },
+        })
+        return json(response, 200, result)
+      } catch (error) {
+        return json(response, 502, { error: 'gmail_modify_failed', detail: errorMessage(error) })
+      }
+    }
     if (request.method === 'POST' && url.pathname === '/v1/threads') {
       try {
         return json(response, 201, await runtime.request('thread/start', {

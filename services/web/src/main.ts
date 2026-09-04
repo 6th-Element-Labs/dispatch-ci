@@ -39,7 +39,7 @@ app.innerHTML = `
             <div><span>Subject</span><strong data-draft-subject></strong></div>
             <textarea data-draft-body aria-label="Draft body"></textarea>
           </section>
-          <footer class="dispatch-reader-actions"><button type="button" data-reply>Reply</button><button type="button" data-ask>Ask Codex</button></footer>
+          <footer class="dispatch-reader-actions"><button type="button" data-reply>Reply</button><button type="button" data-read-state>Mark unread</button><button type="button" data-ask>Ask Codex</button></footer>
         </div>
       </main>
       <div class="dispatch-divider" data-divider="agent" role="separator" aria-label="Resize Codex panel" aria-orientation="vertical"></div>
@@ -84,6 +84,8 @@ const elements = {
   connector: app.querySelector<HTMLElement>('[data-connector]')!,
   stream: app.querySelector<HTMLElement>('[data-agent-stream]')!,
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
+  search: app.querySelector<HTMLInputElement>('[aria-label="Search mail"]')!,
+  readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
 }
 
 let conversations: ConversationSummary[] = []
@@ -107,6 +109,8 @@ let agentConnecting = false
 let syncStatusTimer: number | undefined
 let syncErrorVisible = false
 let mailReconnectTimer: number | undefined
+let searchQuery = ''
+let searchTimer: number | undefined
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -238,7 +242,7 @@ async function loadMoreConversations(): Promise<void> {
   loadingMoreConversations = true
   renderList()
   try {
-    const result = await api.listConversations(mailState, selectedAccountId, nextConversationCursor)
+    const result = await api.listConversations(mailState, selectedAccountId, nextConversationCursor, searchQuery)
     conversations = [...new Map([...conversations, ...result.conversations].map((conversation) => [conversation.id, conversation])).values()]
     nextConversationCursor = result.nextCursor ?? null
     conversationTotal = result.total ?? conversations.length
@@ -320,6 +324,8 @@ async function selectConversation(id: string): Promise<void> {
     const conversation = await request
     if (sequence !== selectionSequence || selectedConversationId !== id) return
     selected = conversation
+    elements.readState.hidden = !conversation.accountId
+    elements.readState.textContent = conversation.unread ? 'Mark read' : 'Mark unread'
     elements.subject.textContent = conversation.subject
     elements.avatar.textContent = conversation.sender.initials
     elements.sender.textContent = conversation.sender.name
@@ -334,6 +340,27 @@ async function selectConversation(id: string): Promise<void> {
     loading.className = 'dispatch-reader-load-error'
     loading.textContent = error instanceof Error ? error.message : String(error)
     elements.context.textContent = `Unavailable · ${summary.subject}`
+  }
+}
+
+async function toggleReadState(): Promise<void> {
+  if (!selected?.accountId) return
+  const nextUnread = !selected.unread
+  elements.readState.disabled = true
+  elements.readState.textContent = nextUnread ? 'Marking unread…' : 'Marking read…'
+  try {
+    await api.setConversationUnread(selected.threadId, selected.accountId, nextUnread)
+    selected = { ...selected, unread: nextUnread }
+    conversations = conversations.map((conversation) => conversation.id === selected?.id ? { ...conversation, unread: nextUnread } : conversation)
+    elements.readState.textContent = nextUnread ? 'Mark read' : 'Mark unread'
+    renderList()
+    void loadConversations()
+  } catch (error) {
+    elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+  } finally {
+    elements.readState.disabled = false
   }
 }
 
@@ -659,7 +686,7 @@ async function sendPrompt(): Promise<void> {
 
 async function loadConversations(): Promise<void> {
   const loadSequence = ++conversationLoadSequence
-  const cacheKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailState}`
+  const cacheKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailState}:${searchQuery}`
   let usedCache = false
   let cacheConfirmedAt: number | undefined
   try {
@@ -678,9 +705,9 @@ async function loadConversations(): Promise<void> {
   } catch {
     conversations = []
   }
-  if (!usedCache && mailState !== 'all') {
+  if (!usedCache && mailState !== 'all' && !searchQuery) {
     try {
-      const allKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:all`
+      const allKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:all:`
       const cachedAll = JSON.parse(localStorage.getItem(allKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[]; total?: number } | null
       if (cachedAll?.savedAt && Date.now() - cachedAll.savedAt < 86_400_000 && Array.isArray(cachedAll.conversations)) {
         conversations = cachedAll.conversations.filter((conversation) => mailState === 'unread' ? conversation.unread : !conversation.unread)
@@ -710,7 +737,7 @@ async function loadConversations(): Promise<void> {
   renderList(usedCache ? defaultEmptyListMessage() : 'Loading messages…')
   if (usedCache && conversations[0]) void selectConversation(conversations[0].id)
   try {
-    const result = await api.listConversations(mailState, selectedAccountId)
+    const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery)
     if (loadSequence !== conversationLoadSequence) return
     conversations = result.conversations
     if (mailReconnectTimer !== undefined) window.clearTimeout(mailReconnectTimer)
@@ -834,6 +861,11 @@ elements.account.addEventListener('change', () => {
   selectedAccountId = elements.account.value || undefined
   void loadConversations()
 })
+elements.search.addEventListener('input', () => {
+  searchQuery = elements.search.value.trim()
+  if (searchTimer !== undefined) window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(() => { void loadConversations() }, 250)
+})
 app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => button.addEventListener('click', () => {
   mailState = button.dataset.mailState as MailStateFilter
   void loadConversations()
@@ -849,6 +881,7 @@ elements.messagesDivider.addEventListener('pointerdown', (event) => resizePanel(
 elements.agentDivider.addEventListener('pointerdown', (event) => resizePanel('agentWidth', event))
 app.querySelectorAll('[data-compose], [data-reply]').forEach((button) => button.addEventListener('click', () => { void openDraft() }))
 app.querySelector('[data-ask]')?.addEventListener('click', () => elements.prompt.focus())
+elements.readState.addEventListener('click', () => { void toggleReadState() })
 app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })
 app.querySelectorAll<HTMLElement>('[data-suggestion]').forEach((button) => button.addEventListener('click', () => {
   elements.prompt.value = button.dataset.suggestion ?? ''

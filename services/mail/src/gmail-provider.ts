@@ -152,6 +152,7 @@ export function projectGmailSearchEmail(value: unknown, account: GmailAccountPro
     receivedFullLabel: receivedAt.fullLabel,
     preview: text(email.snippet),
     unread: array(email.labels).includes('UNREAD'),
+    hasAttachment: email.has_attachment === true,
     accountId: account.id,
     accountLabel: account.email || account.name,
   }
@@ -263,6 +264,12 @@ export class GmailConnectorProvider {
     const accounts = await this.accounts()
     const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount, state)))
     return groupConversations(lists.flat(), state)
+  }
+
+  async searchConversations(query: string, state: MailStateFilter, accountId?: string): Promise<readonly ConversationSummary[]> {
+    if (!this.#index) throw new Error('Durable Gmail index is required for search')
+    await this.#ensureIndex()
+    return this.#index.searchConversations(query, state, accountId)
   }
 
   async #listAccountMessages(account: GmailAccountProjection, maxResults: number, state: MailStateFilter): Promise<readonly MessageSummary[]> {
@@ -395,6 +402,19 @@ export class GmailConnectorProvider {
     const messages = array(thread.messages).map((message) => projectGmailMessage({ structuredContent: message }, true, account))
     if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
     return projectConversation(messages, 'gmail')
+  }
+
+  async setConversationUnread(accountId: string, threadId: string, unread: boolean): Promise<{ messageIds: readonly string[]; unread: boolean }> {
+    if (!this.#index) throw new Error('Durable Gmail index is required for read-state mutations')
+    const messageIds = this.#index.threadMessageIds(accountId, threadId)
+    if (messageIds.length === 0) throw new Error('Conversation is not present in the Gmail index')
+    await this.#post('/v1/connectors/gmail/modify', {
+      linkId: accountId, messageIds,
+      addLabels: unread ? ['UNREAD'] : [], removeLabels: unread ? [] : ['UNREAD'],
+    })
+    this.#index.setUnread(accountId, messageIds, unread)
+    this.#scheduleSync(1_000)
+    return { messageIds, unread }
   }
 
   async #account(accountId: string): Promise<GmailAccountProjection> {

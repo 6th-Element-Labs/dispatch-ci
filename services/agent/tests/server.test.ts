@@ -118,6 +118,25 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('applies accepted Gmail read-state label changes', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.batch_modify_email': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/modify`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', messageIds: ['m1'], removeLabels: ['UNREAD'] }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.batch_modify_email', arguments: { link_id: 'link-one', message_ids: ['m1'], add_labels: [], remove_labels: ['UNREAD'] },
+    }))
+  })
+
   it('returns a user decision to a server-initiated Codex request', async () => {
     const { base, fake } = await start()
     const response = await fetch(`${base}/v1/server-requests/respond`, {

@@ -69,6 +69,7 @@ describe('GmailConnectorProvider', () => {
           id: 'gmail-message-1', thread_id: 'gmail-thread-1', from_: 'Ana Morales <ana@example.com>', subject: 'Berth confirmation', snippet: 'A short preview', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-03T21:42:00Z',
         }] } }))
       }
+      if (request.url === '/v1/connectors/gmail/modify') return response.end(JSON.stringify({ ok: true }))
       if (request.url === '/v1/connectors/gmail/read-thread') return response.end(JSON.stringify({ structuredContent: { messages: [gmailMessage.structuredContent] } }))
       if (request.url === '/v1/connectors/gmail/read') return response.end(JSON.stringify(gmailMessage))
       response.statusCode = 404
@@ -120,6 +121,7 @@ describe('GmailConnectorProvider', () => {
           : [{ id: second ? 'm2' : 'm1', thread_id: second ? 't2' : 't1', from_: 'Ana <ana@example.com>', subject: second ? 'Unread' : 'Inbox', snippet: 'One', labels: second ? ['INBOX', 'UNREAD'] : ['INBOX'], email_ts: second ? '2026-09-04T08:00:00Z' : '2026-09-04T09:00:00Z' }]
         return response.end(JSON.stringify({ structuredContent: { emails, next_page_token: !unread && !second ? 'page-2' : '' } }))
       }
+      if (request.url === '/v1/connectors/gmail/modify') return response.end(JSON.stringify({ ok: true }))
       response.statusCode = 404
       response.end('{}')
     })
@@ -132,6 +134,8 @@ describe('GmailConnectorProvider', () => {
     expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 2 })
     expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
     expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
+    await provider.setConversationUnread('link-one', 't2', false)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(0)
     expect(requests.filter((request) => request.labelIds?.includes('INBOX'))).toHaveLength(2)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
     failSearch = true
