@@ -12,7 +12,7 @@ app.innerHTML = `
   <div class="dispatch-window">
     <header class="dispatch-titlebar">
       <div class="dispatch-traffic"><span></span><span></span><span></span></div>
-      <div class="dispatch-title-center"><strong>Dispatch</strong><select data-workspace-mode aria-label="Workspace mode"><option value="classic" selected>Classic</option><option value="threads">Threads</option><option value="triage">Focus triage</option><option value="command">Command</option><option value="reply">Reply studio</option><option value="brief">Daily brief</option></select><div class="dispatch-panel-controls" aria-label="Visible panels"><button type="button" data-panel="messages" aria-pressed="true">Messages</button><button type="button" data-panel="reader" aria-pressed="true">Email</button><button type="button" data-panel="agent" aria-pressed="true">Codex</button></div></div>
+      <div class="dispatch-title-center"><strong>Dispatch</strong><div class="dispatch-panel-controls" aria-label="Visible panels"><button type="button" data-panel="messages" aria-pressed="true">Messages</button><button type="button" data-panel="reader" aria-pressed="true">Email</button><button type="button" data-panel="agent" aria-pressed="true">Codex</button></div></div>
       <div class="dispatch-title-actions"><button type="button" data-refresh aria-label="Refresh">↻</button><button type="button" data-compose>Compose</button></div>
     </header>
     <div class="dispatch-workspace">
@@ -32,7 +32,6 @@ app.innerHTML = `
             <h2 data-subject></h2>
             <div class="dispatch-sender"><span class="dispatch-avatar" data-avatar></span><span><strong data-sender></strong><small data-address></small></span><time data-time></time></div>
           </header>
-          <section class="dispatch-mode-insight" data-mode-insight hidden><strong data-mode-insight-title></strong><p data-mode-insight-copy></p><div data-mode-chips></div></section>
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="dispatch-draft" data-draft hidden>
@@ -89,11 +88,6 @@ const elements = {
   search: app.querySelector<HTMLInputElement>('[aria-label="Search mail"]')!,
   stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
-  mode: app.querySelector<HTMLSelectElement>('[data-workspace-mode]')!,
-  modeInsight: app.querySelector<HTMLElement>('[data-mode-insight]')!,
-  modeInsightTitle: app.querySelector<HTMLElement>('[data-mode-insight-title]')!,
-  modeInsightCopy: app.querySelector<HTMLElement>('[data-mode-insight-copy]')!,
-  modeChips: app.querySelector<HTMLElement>('[data-mode-chips]')!,
 }
 let activeDraft: DraftProjection | undefined
 
@@ -122,11 +116,6 @@ let searchQuery = ''
 let searchTimer: number | undefined
 let activeTurnId: string | undefined
 let selectedAttachmentContext: { messageId: string; attachmentId: string; filename: string } | undefined
-type WorkspaceMode = 'classic' | 'threads' | 'triage' | 'command' | 'reply' | 'brief'
-const storedWorkspaceMode = localStorage.getItem('dispatch.workspaceMode')
-let workspaceMode: WorkspaceMode = ['classic', 'threads', 'triage', 'command', 'reply', 'brief'].includes(storedWorkspaceMode ?? '')
-  ? storedWorkspaceMode as WorkspaceMode
-  : 'classic'
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -153,8 +142,7 @@ function loadPanelState(): PanelState {
   }
 }
 
-const classicPanels = loadPanelState()
-const panels = { ...classicPanels }
+const panels = loadPanelState()
 
 function renderPanels(): void {
   const visible = (['messages', 'reader', 'agent'] as const).filter((name) => panels[name])
@@ -170,49 +158,13 @@ function renderPanels(): void {
   if (!elements.messagesDivider.hidden) columns.push('5px')
   if (panels.reader) columns.push('minmax(360px, 1fr)')
   if (!elements.agentDivider.hidden) columns.push('5px')
-  if (panels.agent) columns.push(visible.length === 1 || !panels.reader ? 'minmax(0, 1fr)' : `${panels.agentWidth}px`)
+  if (panels.agent) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${panels.agentWidth}px`)
   elements.workspace.style.gridTemplateColumns = columns.join(' ')
   app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => {
     const name = button.dataset.panel as PanelName
     button.setAttribute('aria-pressed', String(panels[name]))
   })
-  if (workspaceMode === 'classic') localStorage.setItem('dispatch.panels.v1', JSON.stringify(panels))
-}
-
-function renderWorkspaceMode(): void {
-  elements.mode.value = workspaceMode
-  app.dataset.workspaceMode = workspaceMode
-  if (workspaceMode === 'triage') Object.assign(panels, { messages: false, reader: true, agent: false })
-  else if (workspaceMode === 'command') Object.assign(panels, { messages: true, reader: false, agent: true })
-  else if (workspaceMode === 'reply') Object.assign(panels, { messages: true, reader: true, agent: true })
-  else if (workspaceMode === 'brief') Object.assign(panels, { messages: true, reader: true, agent: true })
-  else if (workspaceMode === 'threads') Object.assign(panels, { messages: true, reader: true, agent: true })
-  else Object.assign(panels, classicPanels)
-  localStorage.setItem('dispatch.workspaceMode', workspaceMode)
-  renderPanels()
-  renderModeInsight()
-}
-
-function renderModeInsight(): void {
-  if (!selected || workspaceMode === 'classic') {
-    elements.modeInsight.hidden = true
-    return
-  }
-  const attachments = selected.messages.reduce((count, message) => count + message.attachments.length, 0)
-  const configs: Record<Exclude<WorkspaceMode, 'classic'>, [string, string]> = {
-    threads: ['Thread so far', `${selected.messageCount} messages. Latest message from ${selected.sender.name}: ${selected.preview}`],
-    triage: ['Codex pre-read', `${selected.sender.name} sent “${selected.subject}”. Review the request, dates, and attachments before deciding.`],
-    command: ['Command context', `Search and act across Gmail with this thread available as cited context.`],
-    reply: ['Reply studio', 'Keep the original thread visible while reviewing and editing the Gmail draft.'],
-    brief: ["Today’s brief", `${conversationTotal} conversations indexed across ${accounts.length} Gmail accounts. This selected thread is ready for review.`],
-  }
-  const [title, copy] = configs[workspaceMode as Exclude<WorkspaceMode, 'classic'>]
-  elements.modeInsightTitle.textContent = title
-  elements.modeInsightCopy.textContent = copy
-  elements.modeChips.replaceChildren(...[
-    `${selected.messageCount} messages`, `${attachments} attachments`, selected.accountLabel ?? 'Gmail', selected.unread ? 'unread' : 'read',
-  ].map((text) => { const chip = document.createElement('span'); chip.textContent = text; return chip }))
-  elements.modeInsight.hidden = false
+  localStorage.setItem('dispatch.panels.v1', JSON.stringify(panels))
 }
 
 function resizePanel(name: 'messagesWidth' | 'agentWidth', event: PointerEvent): void {
@@ -222,7 +174,6 @@ function resizePanel(name: 'messagesWidth' | 'agentWidth', event: PointerEvent):
   const move = (next: PointerEvent) => {
     const limit = name === 'messagesWidth' ? [220, 440] : [280, 560]
     panels[name] = Math.max(limit[0]!, Math.min(limit[1]!, startWidth + ((next.clientX - startX) * direction)))
-    if (workspaceMode === 'classic') classicPanels[name] = panels[name]
     renderPanels()
   }
   const stop = () => {
@@ -405,7 +356,6 @@ async function selectConversation(id: string): Promise<void> {
     elements.time.dateTime = conversation.receivedAt
     elements.context.textContent = `Working with · ${contextLabel(conversation)}`
     elements.body.replaceChildren(...conversation.messages.map(renderThreadMessage))
-    renderModeInsight()
     prefetchConversations(id)
   } catch (error) {
     if (sequence !== selectionSequence) return
@@ -988,15 +938,6 @@ elements.account.addEventListener('change', () => {
   selectedAccountId = elements.account.value || undefined
   void loadConversations()
 })
-elements.mode.addEventListener('change', () => {
-  workspaceMode = elements.mode.value as WorkspaceMode
-  renderWorkspaceMode()
-  if (workspaceMode === 'reply' && selected) {
-    if (activeDraft) elements.draftBody.focus()
-    else app.querySelector<HTMLButtonElement>('[data-reply]')?.focus()
-  }
-  if (workspaceMode === 'command') elements.prompt.focus()
-})
 elements.search.addEventListener('input', () => {
   searchQuery = elements.search.value.trim()
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
@@ -1011,7 +952,6 @@ app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => butt
   const visibleCount = Number(panels.messages) + Number(panels.reader) + Number(panels.agent)
   if (panels[name] && visibleCount === 1) return
   panels[name] = !panels[name]
-  if (workspaceMode === 'classic') classicPanels[name] = panels[name]
   renderPanels()
 }))
 elements.messagesDivider.addEventListener('pointerdown', (event) => resizePanel('messagesWidth', event))
@@ -1037,5 +977,5 @@ elements.prompt.addEventListener('keydown', (event) => {
   }
 })
 
-renderWorkspaceMode()
+renderPanels()
 void start()
