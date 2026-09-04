@@ -87,6 +87,9 @@ const elements = {
 }
 
 let conversations: ConversationSummary[] = []
+let conversationTotal = 0
+let nextConversationCursor: string | null = null
+let loadingMoreConversations = false
 let accounts: GmailAccount[] = []
 let selectedAccountId: string | undefined
 let mailState: MailStateFilter = 'all'
@@ -101,6 +104,8 @@ let activeAgentMessage: HTMLElement | undefined
 let agentEvents: EventSource | undefined
 let reconnectTimer: number | undefined
 let agentConnecting = false
+let syncStatusTimer: number | undefined
+let syncErrorVisible = false
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -215,6 +220,33 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     button.append(avatar, content)
     button.addEventListener('click', () => { void selectConversation(conversation.id) })
     elements.list.append(button)
+  }
+  if (nextConversationCursor) {
+    const more = document.createElement('button')
+    more.type = 'button'
+    more.className = 'dispatch-load-more'
+    more.textContent = loadingMoreConversations ? 'Loading more…' : `Load more · ${Math.max(0, conversationTotal - conversations.length)} remaining`
+    more.disabled = loadingMoreConversations
+    more.addEventListener('click', () => { void loadMoreConversations() })
+    elements.list.append(more)
+  }
+}
+
+async function loadMoreConversations(): Promise<void> {
+  if (!nextConversationCursor || loadingMoreConversations) return
+  loadingMoreConversations = true
+  renderList()
+  try {
+    const result = await api.listConversations(mailState, selectedAccountId, nextConversationCursor)
+    conversations = [...new Map([...conversations, ...result.conversations].map((conversation) => [conversation.id, conversation])).values()]
+    nextConversationCursor = result.nextCursor ?? null
+    conversationTotal = result.total ?? conversations.length
+  } catch (error) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+  } finally {
+    loadingMoreConversations = false
+    renderList()
   }
 }
 
@@ -630,13 +662,17 @@ async function loadConversations(): Promise<void> {
   let usedCache = false
   let cacheConfirmedAt: number | undefined
   try {
-    const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[] } | null
+    const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[]; nextCursor?: string | null; total?: number } | null
     if (cached?.savedAt && Date.now() - cached.savedAt < 86_400_000 && Array.isArray(cached.conversations)) {
       conversations = cached.conversations
       usedCache = true
       cacheConfirmedAt = cached.savedAt
+      nextConversationCursor = cached.nextCursor ?? null
+      conversationTotal = cached.total ?? cached.conversations.length
     } else {
       conversations = []
+      nextConversationCursor = null
+      conversationTotal = 0
     }
   } catch {
     conversations = []
@@ -644,11 +680,13 @@ async function loadConversations(): Promise<void> {
   if (!usedCache && mailState !== 'all') {
     try {
       const allKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:all`
-      const cachedAll = JSON.parse(localStorage.getItem(allKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[] } | null
+      const cachedAll = JSON.parse(localStorage.getItem(allKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[]; total?: number } | null
       if (cachedAll?.savedAt && Date.now() - cachedAll.savedAt < 86_400_000 && Array.isArray(cachedAll.conversations)) {
         conversations = cachedAll.conversations.filter((conversation) => mailState === 'unread' ? conversation.unread : !conversation.unread)
         usedCache = true
         cacheConfirmedAt = cachedAll.savedAt
+        nextConversationCursor = null
+        conversationTotal = conversations.length
       }
     } catch {
       // A malformed optional cache must not block a live Gmail refresh.
@@ -674,7 +712,9 @@ async function loadConversations(): Promise<void> {
     const result = await api.listConversations(mailState, selectedAccountId)
     if (loadSequence !== conversationLoadSequence) return
     conversations = result.conversations
-    localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), conversations }))
+    nextConversationCursor = result.nextCursor ?? null
+    conversationTotal = result.total ?? conversations.length
+    localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), conversations, nextCursor: nextConversationCursor, total: conversationTotal }))
     const refreshedLabel = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date())
     elements.mailSource.textContent = result.source === 'demo'
       ? 'Demo mail'
@@ -705,6 +745,45 @@ async function loadConversations(): Promise<void> {
   }
 }
 
+function syncTime(value: string | null): string {
+  if (!value) return 'never'
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+}
+
+async function refreshSyncStatus(): Promise<void> {
+  try {
+    const sync = await api.syncStatus()
+    if (sync.state === 'failed') {
+      elements.mailSource.textContent = `SYNC FAILED · ${syncTime(sync.startedAt)}`
+      elements.mailError.hidden = false
+      elements.mailError.textContent = sync.error ?? 'Gmail synchronization failed without an error detail.'
+      syncErrorVisible = true
+    } else if (sync.state === 'syncing') {
+      const accountProgress = sync.accountCount
+        ? ` · account ${Math.min((sync.accountsCompleted ?? 0) + 1, sync.accountCount)}/${sync.accountCount}`
+        : ''
+      elements.mailSource.textContent = `Syncing Gmail${accountProgress} · ${sync.fetchedMessages ?? sync.messageCount} fetched`
+    } else if (sync.state === 'partial') {
+      elements.mailSource.textContent = `Partial Gmail index · ${sync.messageCount} messages`
+    } else if (sync.state === 'ready') {
+      elements.mailSource.textContent = `Gmail synced · ${syncTime(sync.completedAt)}`
+      if (syncErrorVisible) elements.mailError.hidden = true
+      syncErrorVisible = false
+    }
+  } catch (error) {
+    elements.mailSource.textContent = 'SYNC STATUS FAILED'
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    syncErrorVisible = true
+  }
+}
+
+function startSyncStatusWatch(): void {
+  if (syncStatusTimer !== undefined) return
+  void refreshSyncStatus()
+  syncStatusTimer = window.setInterval(() => { void refreshSyncStatus() }, 5_000)
+}
+
 async function start(): Promise<void> {
   try {
     accounts = await api.listAccounts()
@@ -729,6 +808,7 @@ async function start(): Promise<void> {
     return
   }
   await Promise.all([loadConversations(), connectAgent()])
+  if (accounts.length > 0) startSyncStatusWatch()
 }
 
 app.querySelector('[data-refresh]')?.addEventListener('click', () => location.reload())

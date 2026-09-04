@@ -20,6 +20,7 @@ const conversations = messages.map((message) => ({
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
+  await page.route('http://127.0.0.1:8411/v1/sync/status', (route) => route.fulfill({ json: { sync: { state: 'ready', startedAt: '2026-09-04T09:00:00+12:00', completedAt: '2026-09-04T09:01:00+12:00', error: null, messageCount: 2 } } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/, (route) => {
     const state = new URL(route.request().url()).searchParams.get('state')
     const filtered = conversations.filter((conversation) => state === 'all' || (state === 'unread' ? conversation.unread : !conversation.unread))
@@ -74,7 +75,7 @@ test('renders a connector-selected Gmail account without trusting list markup', 
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', scope: 'unified', conversations: [hostile] } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...hostile, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Safe body</p>' }, attachments: [] }] } } }))
   await page.goto('/')
-  await expect(page.locator('[data-mail-source]')).toHaveText(/^Gmail connected · /)
+  await expect(page.locator('[data-mail-source]')).toHaveText(/^(Gmail connected|Gmail synced) · /)
   await expect(page.getByRole('combobox', { name: 'Gmail account' })).toHaveValue('')
   await expect(page.locator('[data-message-list] img')).toHaveCount(0)
   expect(await page.evaluate(() => (window as Window & { attacked?: boolean }).attacked)).not.toBe(true)
@@ -119,6 +120,20 @@ test('filters conversations by all, unread, and read state', async ({ page }) =>
   await expect(page.locator('.dispatch-message-list-empty')).toHaveText('No read messages in the connected inboxes.')
   await page.getByRole('button', { name: 'All', exact: true }).click()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+})
+
+test('loads indexed conversation pages without rendering the full mailbox at once', async ({ page }) => {
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor')
+    return route.fulfill({ json: { source: 'demo', conversations: [cursor ? conversations[1] : conversations[0]], nextCursor: cursor ? null : '1', total: 2 } })
+  })
+  await page.goto('/')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Load more · 1 remaining' })).toBeVisible()
+  await page.getByRole('button', { name: 'Load more · 1 remaining' }).click()
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await expect(page.locator('.dispatch-load-more')).toHaveCount(0)
 })
 
 test('shows cached conversations immediately while Gmail refreshes', async ({ page }) => {

@@ -10,8 +10,8 @@
     {
       "name": "mail",
       "port": 8411,
-      "store": null,
-      "owns": ["message-projections", "draft-state"]
+      "store": "gmail-index-sqlite",
+      "owns": ["gmail-sync-state", "gmail-message-index", "message-projections", "draft-state"]
     },
     {
       "name": "agent",

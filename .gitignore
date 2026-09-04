@@ -4,5 +4,6 @@ server-dist/
 playwright-report/
 test-results/
 .artifacts/
+.dispatch-data/
 .DS_Store
 *.log

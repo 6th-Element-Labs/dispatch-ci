@@ -23,7 +23,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow'>>
 
 function stateFilter(value: string | null): MailStateFilter | undefined {
   if (value === null || value === 'all') return 'all'
@@ -51,7 +51,7 @@ export function createMailServer(
 ) {
   const demoEnabled = options.demoEnabled === true
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 3_000
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return writeJson(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
 
@@ -60,6 +60,10 @@ export function createMailServer(
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
       if (demoEnabled) return writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'demo' })
+      const sync = gmail.syncStatus?.()
+      if (sync?.state === 'failed') {
+        return writeJson(response, 503, { service: 'dispatch-mail', status: 'not_ready', error: 'gmail_sync_failed', detail: sync.error, sync })
+      }
       try {
         const accounts = await within(gmail.accounts(), readinessTimeoutMs, 'Gmail readiness check')
         return accounts.length > 0
@@ -72,6 +76,11 @@ export function createMailServer(
     if (request.method === 'GET' && url.pathname === '/v1/conversations') {
       const state = stateFilter(url.searchParams.get('state'))
       if (!state) return writeJson(response, 400, { error: 'invalid_state_filter' })
+      const limitValue = Number(url.searchParams.get('limit') ?? 100)
+      const cursorValue = Number(url.searchParams.get('cursor') ?? 0)
+      if (!Number.isInteger(limitValue) || limitValue < 1 || limitValue > 200 || !Number.isInteger(cursorValue) || cursorValue < 0) {
+        return writeJson(response, 400, { error: 'invalid_pagination' })
+      }
       const accountId = url.searchParams.get('account')
       try {
         const accounts = await gmail.accounts()
@@ -79,13 +88,20 @@ export function createMailServer(
           const conversations = accountId
             ? await gmail.listConversations(accountId, state)
             : await gmail.listUnifiedConversations(state)
-          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations })
+          const page = conversations.slice(cursorValue, cursorValue + limitValue)
+          const nextCursor = cursorValue + page.length < conversations.length ? String(cursorValue + page.length) : null
+          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations: page, nextCursor, total: conversations.length })
         }
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_conversation_list_failed', detail: error instanceof Error ? error.message : String(error) })
       }
       return demoEnabled
-        ? writeJson(response, 200, { source: 'demo', scope: 'demo', state, conversations: provider.listConversations(state) })
+        ? (() => {
+            const conversations = provider.listConversations(state)
+            const page = conversations.slice(cursorValue, cursorValue + limitValue)
+            const nextCursor = cursorValue + page.length < conversations.length ? String(cursorValue + page.length) : null
+            return writeJson(response, 200, { source: 'demo', scope: 'demo', state, conversations: page, nextCursor, total: conversations.length })
+          })()
         : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
     }
     const conversationMatch = /^\/v1\/conversations\/([^/]+)$/.exec(url.pathname)
@@ -125,6 +141,17 @@ export function createMailServer(
         return writeJson(response, 502, { error: 'gmail_accounts_failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
+    if (request.method === 'GET' && url.pathname === '/v1/sync/status') {
+      const status = gmail.syncStatus?.()
+      return status
+        ? writeJson(response, 200, { sync: status })
+        : writeJson(response, 501, { error: 'gmail_sync_not_configured' })
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/sync') {
+      if (!gmail.syncNow) return writeJson(response, 501, { error: 'gmail_sync_not_configured' })
+      void gmail.syncNow().catch(() => undefined)
+      return writeJson(response, 202, { sync: gmail.syncStatus?.() })
+    }
     const messageMatch = /^\/v1\/messages\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && messageMatch?.[1]) {
       const accountId = url.searchParams.get('account')
@@ -151,6 +178,9 @@ export function createMailServer(
     }
     return writeJson(response, 404, { error: 'not_found' })
   })
+  gmail.startBackgroundSync?.()
+  server.on('close', () => gmail.stopBackgroundSync?.())
+  return server
 }
 
 const isEntrypoint = process.argv[1] === fileURLToPath(import.meta.url)

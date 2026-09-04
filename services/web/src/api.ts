@@ -1,4 +1,4 @@
-import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailSyncStatus, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -28,13 +28,18 @@ export const api = {
     const result = await request<{ accounts: GmailAccount[] }>(`${MAIL}/v1/accounts`)
     return result.accounts
   },
+  async syncStatus(): Promise<GmailSyncStatus> {
+    const result = await request<{ sync: GmailSyncStatus }>(`${MAIL}/v1/sync/status`)
+    return result.sync
+  },
   async listMessages(accountId?: string): Promise<{ source: 'demo' | 'gmail'; messages: MessageSummary[] }> {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     return request(`${MAIL}/v1/messages${query}`)
   },
-  async listConversations(state: MailStateFilter, accountId?: string): Promise<{ source: 'demo' | 'gmail'; conversations: ConversationSummary[] }> {
-    const params = new URLSearchParams({ state })
+  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string): Promise<{ source: 'demo' | 'gmail'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
+    const params = new URLSearchParams({ state, limit: '100' })
     if (accountId) params.set('account', accountId)
+    if (cursor) params.set('cursor', cursor)
     return request(`${MAIL}/v1/conversations?${params}`)
   },
   async readConversation(threadId: string, accountId?: string): Promise<ConversationProjection> {

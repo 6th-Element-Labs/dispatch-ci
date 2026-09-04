@@ -110,11 +110,11 @@ describe('dispatch-agent', () => {
     })
     const response = await fetch(`${base}/v1/connectors/gmail/search-messages`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ linkId: 'link-one', query: '-in:spam', labelIds: ['INBOX', 'UNREAD'], maxResults: 20 }),
+      body: JSON.stringify({ linkId: 'link-one', query: '-in:spam', labelIds: ['INBOX', 'UNREAD'], maxResults: 20, nextPageToken: 'next-1' }),
     })
     expect(response.status).toBe(200)
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
-      arguments: { link_id: 'link-one', query: '-in:spam', label_ids: ['INBOX', 'UNREAD'], max_results: 20, next_page_token: '' },
+      arguments: { link_id: 'link-one', query: '-in:spam', label_ids: ['INBOX', 'UNREAD'], max_results: 20, next_page_token: 'next-1' },
     }))
   })
 

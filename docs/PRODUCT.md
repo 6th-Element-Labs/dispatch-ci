@@ -41,11 +41,10 @@ The first useful version lets a user:
 
 ## Current foundation
 
-The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, read-only inbox search, full MIME retrieval, safe browser rendering, and the browser experience. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail writes run through Codex and its explicit approval flow; reply and respond requests show a complete preview before any send call.
+The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, paginated Gmail synchronization into a durable SQLite index, full MIME retrieval, safe browser rendering, and the browser experience. Sync state, timestamps, progress, and failures remain visible. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail writes run through Codex and its explicit approval flow; reply and respond requests show a complete preview before any send call.
 
 ## Non-goals for the foundation
 
-- Full Gmail synchronization.
 - IMAP or Outlook.
 - Autonomous triage or sending.
 - A second agent runtime.
