@@ -7,6 +7,7 @@ import { readGmailInventory, type GmailInventory } from './gmail-inventory.js'
 interface AgentRuntime {
   ready(): Promise<void>
   lastError(): string | null
+  lastWarning?(): string | null
   request(method: string, params?: unknown): Promise<unknown>
   subscribe(listener: (message: RpcMessage) => void): () => void
   respond(id: number | string, result: unknown): void
@@ -105,7 +106,12 @@ export function createAgentServer(runtime: AgentRuntime) {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
 
     if (request.method === 'GET' && url.pathname === '/health') {
-      return json(response, 200, { service: 'dispatch-agent', status: 'healthy', appServerError: runtime.lastError() })
+      return json(response, 200, {
+        service: 'dispatch-agent',
+        status: 'healthy',
+        appServerError: runtime.lastError(),
+        appServerWarning: runtime.lastWarning?.() ?? null,
+      })
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
       try {
