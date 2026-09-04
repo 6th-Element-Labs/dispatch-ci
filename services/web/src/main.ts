@@ -362,6 +362,9 @@ async function selectConversation(id: string): Promise<void> {
     loading.className = 'dispatch-reader-load-error'
     loading.textContent = error instanceof Error ? error.message : String(error)
     elements.context.textContent = `Unavailable · ${summary.subject}`
+    window.setTimeout(() => {
+      if (selectedConversationId === id) void selectConversation(id)
+    }, 1_500)
   }
 }
 
