@@ -9,6 +9,7 @@ export class CodexProcess {
   #rpc: JsonLineRpc | undefined
   #ready: Promise<void>
   #lastError: string | null = null
+  #lastWarning: string | null = null
   #restartTimer: NodeJS.Timeout | undefined
   #closed = false
   #startedOnce = false
@@ -28,7 +29,9 @@ export class CodexProcess {
     const lines = readline.createInterface({ input: process.stdout })
     lines.on('line', (line) => rpc.acceptLine(line))
     process.stderr.on('data', (chunk) => {
-      this.#lastError = String(chunk).trim().slice(-1000)
+      const diagnostic = String(chunk).trim().slice(-1000)
+      if (/"level":"(?:WARN|WARNING)"|\bWARN(?:ING)?\b/.test(diagnostic)) this.#lastWarning = diagnostic
+      else if (diagnostic) this.#lastError = diagnostic
     })
     const handleFailure = (reason: Error) => {
       if (terminated) return
@@ -69,6 +72,10 @@ export class CodexProcess {
 
   lastError(): string | null {
     return this.#lastError
+  }
+
+  lastWarning(): string | null {
+    return this.#lastWarning
   }
 
   subscribe(listener: (message: RpcMessage) => void): () => void {

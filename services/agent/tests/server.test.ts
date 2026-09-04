@@ -13,6 +13,7 @@ function runtime() {
   return {
     ready: vi.fn(async () => undefined),
     lastError: vi.fn(() => null),
+    lastWarning: vi.fn(() => 'non-fatal diagnostic'),
     request,
     subscribe: vi.fn(() => () => undefined),
     respond: vi.fn(),
@@ -31,6 +32,8 @@ async function start() {
 describe('dispatch-agent', () => {
   it('reports the real harness boundary', async () => {
     const { base } = await start()
+    const health = await (await fetch(`${base}/health`)).json()
+    expect(health).toMatchObject({ appServerError: null, appServerWarning: 'non-fatal diagnostic' })
     const response = await fetch(`${base}/ready`)
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ harness: 'codex-app-server' })
