@@ -4,8 +4,21 @@ const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
-  const value = await response.json() as unknown
+  const endpoint = new URL(url).pathname
+  let response: Response
+  try {
+    response = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(30_000) })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Service request failed at ${endpoint}: ${detail}`)
+  }
+  const responseText = await response.text()
+  let value: unknown
+  try {
+    value = responseText ? JSON.parse(responseText) as unknown : {}
+  } catch {
+    throw new Error(`Service returned invalid JSON at ${endpoint} (${response.status})`)
+  }
   if (!response.ok) throw new Error(`Request failed (${response.status}): ${JSON.stringify(value)}`)
   return value as T
 }
@@ -41,7 +54,7 @@ export const api = {
     return result.draft
   },
   async agentReady(): Promise<boolean> {
-    try { return (await fetch(`${AGENT}/ready`)).ok } catch { return false }
+    try { return (await fetch(`${AGENT}/ready`, { signal: AbortSignal.timeout(3_000) })).ok } catch { return false }
   },
   async listApps(): Promise<AppSummary[]> {
     const result = await request<{ data?: AppSummary[] }>(`${AGENT}/v1/apps`)

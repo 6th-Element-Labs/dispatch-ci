@@ -17,7 +17,7 @@ async function start() {
     listConversations: async () => [],
     listUnifiedConversations: async () => [],
     readConversation: async () => { throw new Error('not configured') },
-  })
+  }, { demoEnabled: true })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -78,5 +78,37 @@ describe('dispatch-mail', () => {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     const value = await (await fetch(`${base}/v1/messages`)).json()
     expect(value).toMatchObject({ source: 'gmail', scope: 'unified', messages: [{ accountId: 'one' }] })
+  })
+
+  it('fails visibly instead of substituting demo mail when Gmail is disconnected', async () => {
+    const server = createMailServer({
+      accounts: async () => [],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+    }, { demoEnabled: false })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    expect((await fetch(`${base}/ready`)).status).toBe(503)
+    const response = await fetch(`${base}/v1/conversations?state=all`)
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ error: 'gmail_not_connected' })
+  })
+
+  it('fails readiness on its deadline when the Gmail dependency stalls', async () => {
+    const server = createMailServer({
+      accounts: async () => new Promise(() => undefined),
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+    }, { demoEnabled: false, readinessTimeoutMs: 5 })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/ready`)
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ error: 'gmail_connection_failed', detail: expect.stringContaining('timed out after 5 ms') })
   })
 })

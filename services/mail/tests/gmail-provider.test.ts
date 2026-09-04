@@ -39,15 +39,25 @@ describe('GmailConnectorProvider', () => {
     })
   })
 
+  it('rejects missing state labels and invalid timestamps during normalization', () => {
+    const account = { id: 'one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }
+    expect(() => projectGmailSearchEmail({
+      id: 'm1', thread_id: 't1', from_: 'Ana <ana@example.com>', email_ts: '2026-09-03T21:42:00Z',
+    }, account)).toThrow('missing labels')
+    expect(() => projectGmailSearchEmail({
+      id: 'm1', thread_id: 't1', from_: 'Ana <ana@example.com>', labels: ['INBOX'], email_ts: 'not-a-date',
+    }, account)).toThrow('invalid or missing received timestamp')
+  })
+
   it('uses the agent service instead of reading connector state directly', async () => {
-    const searchQueries: string[] = []
+    const searches: Array<{ query?: string; labelIds?: string[] }> = []
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
       if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
       if (request.url === '/v1/connectors/gmail/search-messages') {
         const chunks: Buffer[] = []
         for await (const chunk of request) chunks.push(Buffer.from(chunk))
-        searchQueries.push(String((JSON.parse(Buffer.concat(chunks).toString('utf8')) as { query?: unknown }).query ?? ''))
+        searches.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as { query?: string; labelIds?: string[] })
         return response.end(JSON.stringify({ structuredContent: { emails: [{
           id: 'gmail-message-1', thread_id: 'gmail-thread-1', from_: 'Ana Morales <ana@example.com>', subject: 'Berth confirmation', snippet: 'A short preview', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-03T21:42:00Z',
         }] } }))
@@ -64,10 +74,11 @@ describe('GmailConnectorProvider', () => {
     expect(await provider.listMessages('link-one', 1)).toHaveLength(1)
     await provider.listConversations('link-one', 'unread', 1)
     await provider.listConversations('link-one', 'read', 1)
-    expect(searchQueries).toEqual([
-      'in:inbox -in:spam -in:trash',
-      'in:inbox -in:spam -in:trash is:unread',
-      'in:inbox -in:spam -in:trash is:read',
+    expect(searches).toEqual([
+      expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['INBOX'] }),
+      expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['UNREAD'] }),
+      expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['UNREAD'] }),
+      expect.objectContaining({ query: '-in:spam -in:trash is:read', labelIds: ['INBOX'] }),
     ])
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })
     expect(await provider.readConversation('link-one', 'gmail-thread-1')).toMatchObject({ threadId: 'gmail-thread-1', messageCount: 1, source: 'gmail' })

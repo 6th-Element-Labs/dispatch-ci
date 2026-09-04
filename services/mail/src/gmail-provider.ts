@@ -81,7 +81,7 @@ function attachments(payload: UnknownRecord): readonly AttachmentProjection[] {
 function received(value: string): { iso: string; label: string; fullLabel: string } {
   const numeric = Number(value)
   const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(value)
-  if (Number.isNaN(date.getTime())) return { iso: value, label: '', fullLabel: '' }
+  if (Number.isNaN(date.getTime())) throw new Error('Gmail message has an invalid or missing received timestamp')
   return {
     iso: date.toISOString(),
     label: new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date),
@@ -93,11 +93,13 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
   const message = structured(value)
   const payload = record(message.payload) ?? {}
   const messageHeaders = headers(payload)
+  if (!Array.isArray(message.label_ids)) throw new Error('Gmail message is missing label_ids')
+  if (!messageHeaders.get('from')) throw new Error('Gmail message is missing its From header')
   const receivedAt = received(text(message.internal_date) || messageHeaders.get('date') || '')
   const projection: MessageProjection = {
     id: text(message.id),
     threadId: text(message.thread_id),
-    sender: sender(messageHeaders.get('from') || 'Unknown sender'),
+    sender: sender(messageHeaders.get('from')!),
     subject: messageHeaders.get('subject') || '(No subject)',
     receivedAt: receivedAt.iso,
     receivedLabel: receivedAt.label,
@@ -116,6 +118,8 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
 
 export function projectGmailSearchEmail(value: unknown, account: GmailAccountProjection): MessageSummary {
   const email = record(value) ?? {}
+  if (!Array.isArray(email.labels)) throw new Error('Gmail search result is missing labels')
+  if (!text(email.from_)) throw new Error('Gmail search result is missing from_')
   const receivedAt = received(text(email.email_ts))
   const id = text(email.id)
   const threadId = text(email.thread_id)
@@ -123,7 +127,7 @@ export function projectGmailSearchEmail(value: unknown, account: GmailAccountPro
   return {
     id,
     threadId,
-    sender: sender(text(email.from_) || 'Unknown sender'),
+    sender: sender(text(email.from_)),
     subject: text(email.subject) || '(No subject)',
     receivedAt: receivedAt.iso,
     receivedLabel: receivedAt.label,
@@ -143,15 +147,15 @@ export class GmailConnectorProvider {
   }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
-    const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`)
+    const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`, { signal: AbortSignal.timeout(30_000) })
     const value = await response.json() as unknown
     if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
     const inventory = record(value)
-    return array(inventory?.accounts).flatMap((account) => {
+    return array(inventory?.accounts).map((account) => {
       const item = record(account)
       const id = text(item?.linkId)
-      if (!id) return []
-      return [{ id, connectorId: text(item?.connectorId), name: text(item?.name) || 'Gmail', email: text(item?.email) }]
+      if (!id) throw new Error('Gmail inventory contains an account without linkId')
+      return { id, connectorId: text(item?.connectorId), name: text(item?.name) || 'Gmail', email: text(item?.email) }
     })
   }
 
@@ -180,9 +184,24 @@ export class GmailConnectorProvider {
   }
 
   async #listAccountMessages(account: GmailAccountProjection, maxResults: number, state: MailStateFilter): Promise<readonly MessageSummary[]> {
-    const stateQuery = state === 'unread' ? ' is:unread' : state === 'read' ? ' is:read' : ''
+    if (state === 'all') {
+      const [inbox, unread] = await Promise.all([
+        this.#searchAccountMessages(account, maxResults, '-in:spam -in:trash', ['INBOX']),
+        this.#searchAccountMessages(account, maxResults, '-in:spam -in:trash', ['UNREAD']),
+      ])
+      return [...new Map([...inbox, ...unread].map((message) => [message.id, message])).values()]
+    }
+    return this.#searchAccountMessages(
+      account,
+      maxResults,
+      state === 'read' ? '-in:spam -in:trash is:read' : '-in:spam -in:trash',
+      state === 'read' ? ['INBOX'] : ['UNREAD'],
+    )
+  }
+
+  async #searchAccountMessages(account: GmailAccountProjection, maxResults: number, query: string, labelIds: readonly string[]): Promise<readonly MessageSummary[]> {
     const search = await this.#post('/v1/connectors/gmail/search-messages', {
-      linkId: account.id, query: `in:inbox -in:spam -in:trash${stateQuery}`, maxResults,
+      linkId: account.id, query, labelIds, maxResults,
     })
     return array(structured(search).emails).map((email) => projectGmailSearchEmail(email, account))
   }
@@ -210,7 +229,7 @@ export class GmailConnectorProvider {
 
   async #post(path: string, bodyValue: UnknownRecord): Promise<unknown> {
     const response = await fetch(`${this.#agentBase}${path}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue), signal: AbortSignal.timeout(30_000),
     })
     const value = await response.json() as unknown
     if (!response.ok) throw new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`)

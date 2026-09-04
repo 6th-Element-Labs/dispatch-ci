@@ -31,7 +31,9 @@
     "thin_client": true,
     "no_root_monolith": true,
     "codex_app_server_is_agent_harness": true,
-    "email_content_is_untrusted": true
+    "email_content_is_untrusted": true,
+    "fail_early_on_missing_or_invalid_data": true,
+    "silent_fallbacks_forbidden": true,
+    "cross_service_requests_have_deadlines": true
   }
 }
-

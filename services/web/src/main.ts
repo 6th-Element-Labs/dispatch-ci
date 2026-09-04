@@ -628,11 +628,13 @@ async function loadConversations(): Promise<void> {
   const loadSequence = ++conversationLoadSequence
   const cacheKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailState}`
   let usedCache = false
+  let cacheConfirmedAt: number | undefined
   try {
     const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[] } | null
     if (cached?.savedAt && Date.now() - cached.savedAt < 86_400_000 && Array.isArray(cached.conversations)) {
       conversations = cached.conversations
       usedCache = true
+      cacheConfirmedAt = cached.savedAt
     } else {
       conversations = []
     }
@@ -646,12 +648,16 @@ async function loadConversations(): Promise<void> {
       if (cachedAll?.savedAt && Date.now() - cachedAll.savedAt < 86_400_000 && Array.isArray(cachedAll.conversations)) {
         conversations = cachedAll.conversations.filter((conversation) => mailState === 'unread' ? conversation.unread : !conversation.unread)
         usedCache = true
+        cacheConfirmedAt = cachedAll.savedAt
       }
     } catch {
       // A malformed optional cache must not block a live Gmail refresh.
     }
   }
-  elements.mailSource.textContent = usedCache ? 'Refreshing' : 'Loading'
+  const cacheLabel = cacheConfirmedAt
+    ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(cacheConfirmedAt))
+    : ''
+  elements.mailSource.textContent = usedCache ? `Refreshing · cached ${cacheLabel}` : 'Loading'
   elements.mailError.hidden = true
   selected = undefined
   selectedConversationId = undefined
@@ -669,9 +675,10 @@ async function loadConversations(): Promise<void> {
     if (loadSequence !== conversationLoadSequence) return
     conversations = result.conversations
     localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), conversations }))
+    const refreshedLabel = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date())
     elements.mailSource.textContent = result.source === 'demo'
       ? 'Demo mail'
-      : (!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected')
+      : `${!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected'} · ${refreshedLabel}`
     renderList()
     if (conversations[0]) {
       if (!selectedConversationId || !conversations.some((conversation) => conversation.id === selectedConversationId)) await selectConversation(conversations[0].id)
@@ -686,9 +693,10 @@ async function loadConversations(): Promise<void> {
   } catch (error) {
     if (loadSequence !== conversationLoadSequence) return
     if (usedCache) {
-      elements.mailSource.textContent = 'Cached mail'
+      elements.mailSource.textContent = `STALE · ${cacheLabel}`
       elements.mailError.hidden = false
-      elements.mailError.textContent = 'Could not refresh Gmail. Showing the last successful inbox.'
+      const detail = error instanceof Error ? error.message : String(error)
+      elements.mailError.textContent = `Gmail refresh failed: ${detail}. Showing data last confirmed ${cacheLabel}.`
       return
     }
     elements.mailSource.textContent = 'Unavailable'

@@ -74,7 +74,7 @@ test('renders a connector-selected Gmail account without trusting list markup', 
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', scope: 'unified', conversations: [hostile] } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...hostile, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Safe body</p>' }, attachments: [] }] } } }))
   await page.goto('/')
-  await expect(page.locator('[data-mail-source]')).toHaveText('Gmail connected')
+  await expect(page.locator('[data-mail-source]')).toHaveText(/^Gmail connected · /)
   await expect(page.getByRole('combobox', { name: 'Gmail account' })).toHaveValue('')
   await expect(page.locator('[data-message-list] img')).toHaveCount(0)
   expect(await page.evaluate(() => (window as Window & { attacked?: boolean }).attacked)).not.toBe(true)
@@ -130,7 +130,7 @@ test('shows cached conversations immediately while Gmail refreshes', async ({ pa
     await route.fulfill({ json: { source: 'demo', conversations } })
   })
   await page.reload()
-  await expect(page.locator('[data-mail-source]')).toHaveText('Refreshing')
+  await expect(page.locator('[data-mail-source]')).toHaveText(/^Refreshing · cached /)
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await expect(page.locator('[data-mail-source]')).toHaveText('Demo mail')
 })
@@ -144,9 +144,23 @@ test('derives an immediate unread view from the cached All inbox', async ({ page
     await route.fulfill({ json: { source: 'demo', conversations } })
   })
   await page.getByRole('button', { name: 'Unread', exact: true }).click()
-  await expect(page.locator('[data-mail-source]')).toHaveText('Refreshing')
+  await expect(page.locator('[data-mail-source]')).toHaveText(/^Refreshing · cached /)
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await expect(page.locator('[data-mail-source]')).toHaveText('Demo mail')
+})
+
+test('labels cached mail stale and exposes the refresh failure', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({
+    status: 502, json: { error: 'gmail_conversation_list_failed', detail: 'connector timed out' },
+  }))
+  await page.reload()
+  await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
+  await expect(page.locator('[data-mail-source]')).toHaveText(/^STALE · /)
+  await expect(page.locator('[data-mail-error]')).toContainText('connector timed out')
+  await expect(page.locator('[data-mail-error]')).toContainText('Showing data last confirmed')
 })
 
 test('answers Codex approval requests without changing the request id type', async ({ page }) => {
