@@ -28,7 +28,11 @@ Browser or Tauri WebKit
 
 ### Mail
 
-`dispatch-mail` owns browser-facing conversation, message, and draft view models. It calls the agent service's typed, read-only Gmail adapter, retrieves each connector account, groups messages by account plus Gmail thread ID, merges conversation projections by source time, and converts Gmail headers and MIME parts into safe view models. It owns All, Unread, and Read filter semantics. An explicit in-memory demo provider remains available when no connector account is present. Gmail writes are not enabled.
+`dispatch-mail` owns browser-facing conversation, message, and draft view models plus the durable Gmail SQLite index. It calls the agent service's typed Gmail adapter, paginates the Inbox and Unread label streams for every connector account, atomically replaces each completed account snapshot, removes disconnected accounts, groups messages by account plus Gmail thread ID, and converts Gmail headers and MIME parts into safe view models. It owns All, Unread, and Read filter semantics. Demo mail is available only through the explicit development setting. Gmail writes remain guarded by Codex approvals.
+
+The index bootstraps one page per Gmail stream so the first usable result is bounded. A full paginated synchronization then runs in the background and every five minutes. The API exposes sync state, timestamps, indexed-message count, and exact failures. A repeated page token or pagination beyond the safety limit fails the sync instead of truncating it silently.
+
+On macOS, the Gmail index is stored under `Library/Application Support/Dispatch`, outside the source repository and its Dropbox synchronization. `DISPATCH_MAIL_DB` can set an explicit deployment path. Browser responses are paginated so the client does not render the full indexed mailbox at once.
 
 ### Agent
 

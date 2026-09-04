@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { GmailConnectorProvider, projectGmailMessage, projectGmailSearchEmail } from '../src/gmail-provider.js'
 
 const servers: ReturnType<typeof createServer>[] = []
-afterEach(async () => Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve())))))
+const directories: string[] = []
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+  directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }))
+})
 
 const gmailMessage = {
   structuredContent: {
@@ -69,7 +76,7 @@ describe('GmailConnectorProvider', () => {
     })
     servers.push(server)
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
     expect(await provider.accounts()).toEqual([{ id: 'link-one', connectorId: '', name: 'Work', email: 'work@example.com' }])
     expect(await provider.listMessages('link-one', 1)).toHaveLength(1)
     await provider.listConversations('link-one', 'unread', 1)
@@ -82,5 +89,39 @@ describe('GmailConnectorProvider', () => {
     ])
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })
     expect(await provider.readConversation('link-one', 'gmail-thread-1')).toMatchObject({ threadId: 'gmail-thread-1', messageCount: 1, source: 'gmail' })
+  })
+
+  it('paginates Gmail into the durable index and serves the indexed result', async () => {
+    const requests: Array<{ labelIds?: string[]; nextPageToken?: string }> = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { labelIds?: string[]; nextPageToken?: string }
+        requests.push(payload)
+        const unread = payload.labelIds?.includes('UNREAD')
+        const second = payload.nextPageToken === 'page-2'
+        const emails = unread
+          ? [{ id: 'm2', thread_id: 't2', from_: 'Bea <bea@example.com>', subject: 'Unread', snippet: 'Two', labels: ['UNREAD'], email_ts: '2026-09-04T08:00:00Z' }]
+          : [{ id: second ? 'm2' : 'm1', thread_id: second ? 't2' : 't1', from_: 'Ana <ana@example.com>', subject: second ? 'Unread' : 'Inbox', snippet: 'One', labels: second ? ['INBOX', 'UNREAD'] : ['INBOX'], email_ts: second ? '2026-09-04T08:00:00Z' : '2026-09-04T09:00:00Z' }]
+        return response.end(JSON.stringify({ structuredContent: { emails, next_page_token: !unread && !second ? 'page-2' : '' } }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-sync-'))
+    directories.push(directory)
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: join(directory, 'gmail.sqlite') })
+    await provider.syncNow()
+    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 2 })
+    expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
+    expect(requests.filter((request) => request.labelIds?.includes('INBOX'))).toHaveLength(2)
+    expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
+    provider.stopBackgroundSync()
   })
 })

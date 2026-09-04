@@ -69,6 +69,7 @@ button { cursor: pointer; }
 .dispatch-message-account { display: block; margin-top: 5px; color: var(--dispatch-accent); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dispatch-pane-error { padding: 12px; color: #c43d3d; font-size: 11px; }
 .dispatch-message-list-empty { padding: 28px 14px; color: var(--dispatch-muted); font-size: 11px; line-height: 1.5; text-align: center; }
+.dispatch-load-more { width: calc(100% - 12px); margin: 8px 6px 2px; padding: 9px; border: 1px solid var(--dispatch-line); border-radius: 8px; background: var(--dispatch-paper); color: var(--dispatch-muted); font-size: 10px; }
 
 .dispatch-reader { min-width: 0; min-height: 0; position: relative; background: var(--dispatch-paper); }
 .dispatch-reader > [data-reader] { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }

@@ -49,6 +49,19 @@ export interface GmailAccount {
 
 export type MailStateFilter = 'all' | 'unread' | 'read'
 
+export interface GmailSyncStatus {
+  readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'
+  readonly startedAt: string | null
+  readonly completedAt: string | null
+  readonly error: string | null
+  readonly messageCount: number
+  readonly accountCount?: number
+  readonly accountsCompleted?: number
+  readonly pagesFetched?: number
+  readonly fetchedMessages?: number
+  readonly currentAccount?: string | null
+}
+
 export interface ConversationSummary {
   readonly id: string
   readonly threadId: string

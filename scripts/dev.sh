@@ -11,12 +11,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-npm --prefix "${ROOT}/services/mail" run dev &
+bash "${ROOT}/scripts/dev-service.sh" "${ROOT}" mail &
 pids+=("$!")
-npm --prefix "${ROOT}/services/agent" run dev &
+bash "${ROOT}/scripts/dev-service.sh" "${ROOT}" agent &
 pids+=("$!")
-npm --prefix "${ROOT}/services/web" run dev &
+bash "${ROOT}/scripts/dev-service.sh" "${ROOT}" web &
 pids+=("$!")
 
 wait
-

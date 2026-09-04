@@ -1,4 +1,8 @@
 import { groupConversations, projectConversation } from './conversation.js'
+import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { GmailIndex, type GmailSyncStatus, type IndexedGmailMessage } from './gmail-index.js'
 import type { AttachmentProjection, ConversationProjection, ConversationSummary, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
@@ -9,6 +13,20 @@ export interface GmailAccountProjection {
 }
 
 type UnknownRecord = Record<string, unknown>
+
+interface GmailSyncProgress {
+  accountCount: number
+  accountsCompleted: number
+  pagesFetched: number
+  fetchedMessages: number
+  currentAccount: string | null
+}
+
+function defaultIndexPath(): string {
+  return process.platform === 'darwin'
+    ? join(homedir(), 'Library', 'Application Support', 'Dispatch', 'gmail-index.sqlite')
+    : resolve(process.cwd(), '.dispatch-data', 'gmail-index.sqlite')
+}
 
 function record(value: unknown): UnknownRecord | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : undefined
@@ -141,9 +159,44 @@ export function projectGmailSearchEmail(value: unknown, account: GmailAccountPro
 
 export class GmailConnectorProvider {
   readonly #agentBase: string
+  readonly #index: GmailIndex | undefined
+  readonly #syncIntervalMs: number
+  #syncPromise: Promise<void> | undefined
+  #syncTimer: ReturnType<typeof setInterval> | undefined
+  #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
 
-  constructor(agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412') {
+  constructor(
+    agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412',
+    options: { indexPath?: string | false; syncIntervalMs?: number } = {},
+  ) {
     this.#agentBase = agentBase
+    const indexPath = options.indexPath === false
+      ? undefined
+      : options.indexPath ?? process.env.DISPATCH_MAIL_DB ?? defaultIndexPath()
+    this.#index = indexPath ? new GmailIndex(indexPath) : undefined
+    this.#syncIntervalMs = options.syncIntervalMs ?? 300_000
+  }
+
+  startBackgroundSync(): void {
+    if (!this.#index || this.#syncTimer) return
+    if (this.#index.count() > 0) void this.syncNow().catch(() => undefined)
+    this.#syncTimer = setInterval(() => { void this.syncNow().catch(() => undefined) }, this.#syncIntervalMs)
+    this.#syncTimer.unref()
+  }
+
+  stopBackgroundSync(): void {
+    if (this.#syncTimer) clearInterval(this.#syncTimer)
+    this.#syncTimer = undefined
+    this.#index?.close()
+  }
+
+  syncStatus(): (GmailSyncStatus & Partial<GmailSyncProgress>) | undefined {
+    const status = this.#index?.status()
+    return status ? { ...status, ...this.#syncProgress } : undefined
+  }
+
+  async syncNow(): Promise<void> {
+    return this.#synchronize(100, true)
   }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
@@ -160,11 +213,19 @@ export class GmailConnectorProvider {
   }
 
   async listMessages(accountId: string, maxResults = 10): Promise<readonly MessageSummary[]> {
+    if (this.#index) {
+      await this.#ensureIndex()
+      return this.#index.messages(accountId).filter((message) => message.inInbox || message.unread)
+    }
     const account = await this.#account(accountId)
     return this.#listAccountMessages(account, maxResults, 'all')
   }
 
   async listUnifiedMessages(maxResultsPerAccount = 10): Promise<readonly MessageSummary[]> {
+    if (this.#index) {
+      await this.#ensureIndex()
+      return this.#index.messages().filter((message) => message.inInbox || message.unread)
+    }
     const accounts = await this.accounts()
     const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount, 'all')))
     return lists
@@ -173,11 +234,19 @@ export class GmailConnectorProvider {
   }
 
   async listConversations(accountId: string, state: MailStateFilter, maxResults = 20): Promise<readonly ConversationSummary[]> {
+    if (this.#index) {
+      await this.#ensureIndex()
+      return this.#index.conversations(state, accountId)
+    }
     const account = await this.#account(accountId)
     return groupConversations(await this.#listAccountMessages(account, maxResults, state), state)
   }
 
   async listUnifiedConversations(state: MailStateFilter, maxResultsPerAccount = 20): Promise<readonly ConversationSummary[]> {
+    if (this.#index) {
+      await this.#ensureIndex()
+      return this.#index.conversations(state)
+    }
     const accounts = await this.accounts()
     const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount, state)))
     return groupConversations(lists.flat(), state)
@@ -200,10 +269,95 @@ export class GmailConnectorProvider {
   }
 
   async #searchAccountMessages(account: GmailAccountProjection, maxResults: number, query: string, labelIds: readonly string[]): Promise<readonly MessageSummary[]> {
+    return (await this.#searchPage(account, maxResults, query, labelIds, '')).messages
+  }
+
+  async #searchPage(
+    account: GmailAccountProjection,
+    maxResults: number,
+    query: string,
+    labelIds: readonly string[],
+    nextPageToken: string,
+  ): Promise<{ messages: readonly IndexedGmailMessage[]; nextPageToken: string }> {
     const search = await this.#post('/v1/connectors/gmail/search-messages', {
-      linkId: account.id, query, labelIds, maxResults,
+      linkId: account.id, query, labelIds, maxResults, nextPageToken,
     })
-    return array(structured(search).emails).map((email) => projectGmailSearchEmail(email, account))
+    const content = structured(search)
+    return {
+      messages: array(content.emails).map((email) => {
+        const value = record(email)
+        const labels = array(value?.labels)
+        return { ...projectGmailSearchEmail(email, account), inInbox: labels.includes('INBOX') }
+      }),
+      nextPageToken: text(content.next_page_token),
+    }
+  }
+
+  async #ensureIndex(): Promise<void> {
+    if (!this.#index) return
+    const status = this.#index.status()
+    if (this.#index.count() === 0) {
+      await this.#synchronize(1, false)
+      queueMicrotask(() => { void this.syncNow().catch(() => undefined) })
+      return
+    }
+    if (status.state === 'failed') await this.syncNow()
+    else if (status.state === 'partial') queueMicrotask(() => { void this.syncNow().catch(() => undefined) })
+  }
+
+  async #synchronize(maxPagesPerStream: number, requireComplete: boolean): Promise<void> {
+    if (!this.#index) return
+    if (this.#syncPromise) return this.#syncPromise
+    this.#syncPromise = (async () => {
+      const startedAt = new Date().toISOString()
+      const runId = `${startedAt}:${randomUUID()}`
+      this.#index!.beginSync(startedAt)
+      try {
+        const accounts = await this.accounts()
+        if (accounts.length === 0) throw new Error('Cannot synchronize Gmail: no connector accounts are available')
+        this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
+        const completion: boolean[] = []
+        for (const account of accounts) {
+          this.#syncProgress.currentAccount = account.name
+          const messages = new Map<string, IndexedGmailMessage>()
+          let complete = true
+          for (const labelIds of [['INBOX'], ['UNREAD']] as const) {
+            let token = ''
+            for (let pageNumber = 0; pageNumber < maxPagesPerStream; pageNumber += 1) {
+              const page = await this.#searchPage(account, 50, '-in:spam -in:trash', labelIds, token)
+              this.#syncProgress.pagesFetched += 1
+              this.#syncProgress.fetchedMessages += page.messages.length
+              for (const message of page.messages) {
+                const existing = messages.get(message.id)
+                messages.set(message.id, existing
+                  ? { ...message, unread: existing.unread || message.unread, inInbox: existing.inInbox || message.inInbox }
+                  : message)
+              }
+              if (!page.nextPageToken) {
+                token = ''
+                break
+              }
+              if (page.nextPageToken === token) throw new Error(`Gmail pagination repeated a page token for account ${account.name}`)
+              token = page.nextPageToken
+            }
+            if (token) {
+              complete = false
+              if (requireComplete) throw new Error(`Gmail pagination exceeded ${maxPagesPerStream} pages for account ${account.name}`)
+            }
+          }
+          this.#index!.replaceAccount(account.id, [...messages.values()], runId, complete)
+          completion.push(complete)
+          this.#syncProgress.accountsCompleted += 1
+        }
+        this.#syncProgress.currentAccount = null
+        this.#index!.pruneAccounts(accounts.map((account) => account.id))
+        this.#index!.completeSync(new Date().toISOString(), completion.every(Boolean))
+      } catch (error) {
+        this.#index!.failSync(error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    })().finally(() => { this.#syncPromise = undefined })
+    return this.#syncPromise
   }
 
   async readMessage(accountId: string, messageId: string): Promise<MessageProjection> {

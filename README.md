@@ -8,7 +8,7 @@ Dispatch puts every connected Gmail account and Codex in one focused workspace:
 
 The account queue is unified by default. Gmail messages are grouped into conversations with All, Unread, and Read views. The middle panel renders the complete thread and collapses repeated quoted history. Every email location shows both date and time. The messages, email, and Codex panels are independently visible and the outer panels are resizable.
 
-Status: working read-only foundation. The web client and local services run, the installed Codex harness connects, and Gmail message projections load through the existing connector. Gmail writes remain disabled.
+Status: working Gmail-only foundation. The web client and local services run, the installed Codex harness connects, and Gmail messages synchronize through the existing connector into a mail-service-owned SQLite index. Gmail writes remain guarded by the Codex approval flow.
 
 ## Services
 

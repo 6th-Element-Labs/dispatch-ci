@@ -57,6 +57,16 @@ describe('dispatch-mail', () => {
     expect(thread.conversation).toMatchObject({ threadId: 'demo-thread-opua', messageCount: 1 })
   })
 
+  it('paginates indexed conversation responses with an explicit total', async () => {
+    const base = await start()
+    const first = await (await fetch(`${base}/v1/conversations?state=all&limit=1`)).json()
+    expect(first).toMatchObject({ total: 3, nextCursor: '1' })
+    expect(first.conversations).toHaveLength(1)
+    const second = await (await fetch(`${base}/v1/conversations?state=all&limit=1&cursor=1`)).json()
+    expect(second).toMatchObject({ total: 3, nextCursor: '2' })
+    expect(second.conversations).toHaveLength(1)
+  })
+
   it('uses the Gmail provider as one unified inbox when accounts are available', async () => {
     const listUnifiedMessages = async () => [{
       id: 'm1', threadId: 't1', sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' },
@@ -110,5 +120,21 @@ describe('dispatch-mail', () => {
     const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/ready`)
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toMatchObject({ error: 'gmail_connection_failed', detail: expect.stringContaining('timed out after 5 ms') })
+  })
+
+  it('fails readiness when the durable Gmail synchronization failed', async () => {
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      syncStatus: () => ({ state: 'failed', startedAt: '2026-09-04T09:00:00Z', completedAt: null, error: 'page token repeated', messageCount: 100 }),
+    }, { demoEnabled: false })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/ready`)
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ error: 'gmail_sync_failed', detail: 'page token repeated' })
   })
 })
