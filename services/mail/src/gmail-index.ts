@@ -8,6 +8,13 @@ export interface IndexedGmailMessage extends MessageSummary {
   readonly inInbox: boolean
 }
 
+export interface IndexedGmailAccount {
+  readonly id: string
+  readonly connectorId: string
+  readonly name: string
+  readonly email: string
+}
+
 export interface GmailSyncStatus {
   readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'
   readonly startedAt: string | null
@@ -62,6 +69,13 @@ export class GmailIndex {
       );
       CREATE INDEX IF NOT EXISTS gmail_messages_received ON gmail_messages(received_at DESC);
       CREATE INDEX IF NOT EXISTS gmail_messages_thread ON gmail_messages(account_id, thread_id);
+      CREATE TABLE IF NOT EXISTS gmail_accounts (
+        account_id TEXT PRIMARY KEY,
+        connector_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS gmail_sync_state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         state TEXT NOT NULL,
@@ -109,6 +123,32 @@ export class GmailIndex {
     if (accountIds.length === 0) throw new Error('Cannot prune Gmail index without an authoritative account list')
     const placeholders = accountIds.map(() => '?').join(', ')
     this.#db.prepare(`DELETE FROM gmail_messages WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
+  }
+
+  replaceAccounts(accounts: readonly IndexedGmailAccount[], seenAt: string): void {
+    if (accounts.length === 0) throw new Error('Cannot replace Gmail accounts with an empty connector result')
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      const upsert = this.#db.prepare(`
+        INSERT INTO gmail_accounts(account_id, connector_id, name, email, last_seen_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET connector_id=excluded.connector_id, name=excluded.name,
+          email=excluded.email, last_seen_at=excluded.last_seen_at
+      `)
+      for (const account of accounts) upsert.run(account.id, account.connectorId, account.name, account.email, seenAt)
+      const placeholders = accounts.map(() => '?').join(', ')
+      this.#db.prepare(`DELETE FROM gmail_accounts WHERE account_id NOT IN (${placeholders})`).run(...accounts.map((account) => account.id))
+      this.#db.exec('COMMIT')
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  accounts(): readonly IndexedGmailAccount[] {
+    const rows = this.#db.prepare('SELECT account_id, connector_id, name, email FROM gmail_accounts ORDER BY name, email').all() as unknown as Array<{
+      account_id: string; connector_id: string; name: string; email: string
+    }>
+    return rows.map((row) => ({ id: row.account_id, connectorId: row.connector_id, name: row.name, email: row.email }))
   }
 
   messages(accountId?: string): readonly IndexedGmailMessage[] {

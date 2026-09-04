@@ -23,6 +23,7 @@ describe('GmailIndex', () => {
     const path = join(directory, 'gmail.sqlite')
     const index = new GmailIndex(path)
     index.beginSync('2026-09-04T09:00:00Z')
+    index.replaceAccounts([{ id: 'account-1', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }], '2026-09-04T09:00:00Z')
     index.replaceAccount('account-1', [message('m1', true, false), message('m2', false, true)], 'run-1', true)
     index.completeSync('2026-09-04T09:01:00Z')
     expect(index.conversations('all')).toHaveLength(2)
@@ -33,6 +34,7 @@ describe('GmailIndex', () => {
     const reopened = new GmailIndex(path)
     expect(reopened.status()).toMatchObject({ state: 'ready', messageCount: 2, completedAt: '2026-09-04T09:01:00Z' })
     expect(reopened.messages()).toHaveLength(2)
+    expect(reopened.accounts()).toMatchObject([{ id: 'account-1', email: 'work@example.com' }])
     reopened.close()
   })
 

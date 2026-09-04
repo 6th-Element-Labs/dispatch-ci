@@ -163,6 +163,8 @@ export class GmailConnectorProvider {
   readonly #syncIntervalMs: number
   #syncPromise: Promise<void> | undefined
   #syncTimer: ReturnType<typeof setInterval> | undefined
+  #retryTimer: ReturnType<typeof setTimeout> | undefined
+  #stopped = false
   #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
 
   constructor(
@@ -179,14 +181,18 @@ export class GmailConnectorProvider {
 
   startBackgroundSync(): void {
     if (!this.#index || this.#syncTimer) return
-    if (this.#index.count() > 0) void this.syncNow().catch(() => undefined)
-    this.#syncTimer = setInterval(() => { void this.syncNow().catch(() => undefined) }, this.#syncIntervalMs)
+    this.#stopped = false
+    if (this.#index.count() > 0) this.#scheduleSync()
+    this.#syncTimer = setInterval(() => { this.#scheduleSync() }, this.#syncIntervalMs)
     this.#syncTimer.unref()
   }
 
   stopBackgroundSync(): void {
+    this.#stopped = true
     if (this.#syncTimer) clearInterval(this.#syncTimer)
+    if (this.#retryTimer) clearTimeout(this.#retryTimer)
     this.#syncTimer = undefined
+    this.#retryTimer = undefined
     this.#index?.close()
   }
 
@@ -200,16 +206,23 @@ export class GmailConnectorProvider {
   }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
-    const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`, { signal: AbortSignal.timeout(30_000) })
-    const value = await response.json() as unknown
-    if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
-    const inventory = record(value)
-    return array(inventory?.accounts).map((account) => {
-      const item = record(account)
-      const id = text(item?.linkId)
-      if (!id) throw new Error('Gmail inventory contains an account without linkId')
-      return { id, connectorId: text(item?.connectorId), name: text(item?.name) || 'Gmail', email: text(item?.email) }
-    })
+    try {
+      const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`, { signal: AbortSignal.timeout(30_000) })
+      const value = await response.json() as unknown
+      if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
+      const inventory = record(value)
+      return array(inventory?.accounts).map((account) => {
+        const item = record(account)
+        const id = text(item?.linkId)
+        if (!id) throw new Error('Gmail inventory contains an account without linkId')
+        return { id, connectorId: text(item?.connectorId), name: text(item?.name) || 'Gmail', email: text(item?.email) }
+      })
+    } catch (error) {
+      const indexed = this.#index?.accounts() ?? []
+      if (indexed.length === 0) throw error
+      this.#index?.failSync(`Gmail account refresh failed: ${error instanceof Error ? error.message : String(error)}`)
+      return indexed
+    }
   }
 
   async listMessages(accountId: string, maxResults = 10): Promise<readonly MessageSummary[]> {
@@ -298,11 +311,19 @@ export class GmailConnectorProvider {
     const status = this.#index.status()
     if (this.#index.count() === 0) {
       await this.#synchronize(1, false)
-      queueMicrotask(() => { void this.syncNow().catch(() => undefined) })
+      this.#scheduleSync()
       return
     }
-    if (status.state === 'failed') await this.syncNow()
-    else if (status.state === 'partial') queueMicrotask(() => { void this.syncNow().catch(() => undefined) })
+    if (status.state === 'failed' || status.state === 'partial') this.#scheduleSync()
+  }
+
+  #scheduleSync(delayMs = 0): void {
+    if (!this.#index || this.#retryTimer || this.#stopped) return
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = undefined
+      void this.syncNow().catch(() => this.#scheduleSync(5_000))
+    }, delayMs)
+    this.#retryTimer.unref()
   }
 
   async #synchronize(maxPagesPerStream: number, requireComplete: boolean): Promise<void> {
@@ -315,6 +336,7 @@ export class GmailConnectorProvider {
       try {
         const accounts = await this.accounts()
         if (accounts.length === 0) throw new Error('Cannot synchronize Gmail: no connector accounts are available')
+        this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
         const completion: boolean[] = []
         for (const account of accounts) {

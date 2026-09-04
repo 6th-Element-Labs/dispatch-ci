@@ -66,6 +66,10 @@ export function createMailServer(
       }
       try {
         const accounts = await within(gmail.accounts(), readinessTimeoutMs, 'Gmail readiness check')
+        const refreshedSync = gmail.syncStatus?.()
+        if (refreshedSync?.state === 'failed') {
+          return writeJson(response, 503, { service: 'dispatch-mail', status: 'not_ready', error: 'gmail_sync_failed', detail: refreshedSync.error, sync: refreshedSync })
+        }
         return accounts.length > 0
           ? writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'gmail', accountCount: accounts.length })
           : writeJson(response, 503, { service: 'dispatch-mail', status: 'not_ready', error: 'gmail_not_connected' })
@@ -90,7 +94,7 @@ export function createMailServer(
             : await gmail.listUnifiedConversations(state)
           const page = conversations.slice(cursorValue, cursorValue + limitValue)
           const nextCursor = cursorValue + page.length < conversations.length ? String(cursorValue + page.length) : null
-          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations: page, nextCursor, total: conversations.length })
+          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, conversations: page, nextCursor, total: conversations.length, sync: gmail.syncStatus?.() })
         }
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_conversation_list_failed', detail: error instanceof Error ? error.message : String(error) })
