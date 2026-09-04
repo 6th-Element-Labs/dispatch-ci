@@ -14,6 +14,7 @@ export interface MessageSummary {
   readonly receivedFullLabel: string
   readonly preview: string
   readonly unread: boolean
+  readonly hasAttachment?: boolean
   readonly accountId?: string
   readonly accountLabel?: string
 }

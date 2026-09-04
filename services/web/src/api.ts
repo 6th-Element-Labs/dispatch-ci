@@ -36,16 +36,22 @@ export const api = {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     return request(`${MAIL}/v1/messages${query}`)
   },
-  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string): Promise<{ source: 'demo' | 'gmail'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
+  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string): Promise<{ source: 'demo' | 'gmail'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
     const params = new URLSearchParams({ state, limit: '100' })
     if (accountId) params.set('account', accountId)
     if (cursor) params.set('cursor', cursor)
+    if (search) params.set('q', search)
     return request(`${MAIL}/v1/conversations?${params}`)
   },
   async readConversation(threadId: string, accountId?: string): Promise<ConversationProjection> {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     const result = await request<{ conversation: ConversationProjection }>(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}${query}`)
     return result.conversation
+  },
+  async setConversationUnread(threadId: string, accountId: string, unread: boolean): Promise<void> {
+    await request(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}/read-state`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, unread }),
+    })
   },
   async readMessage(id: string, accountId?: string): Promise<MessageProjection> {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''

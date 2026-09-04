@@ -15,6 +15,11 @@ export interface GmailInventory {
     readonly read: string | null
     readonly readThread: string | null
     readonly createDraft: string | null
+    readonly updateDraft: string | null
+    readonly sendDraft: string | null
+    readonly sendEmail: string | null
+    readonly batchModify: string | null
+    readonly readAttachment: string | null
   }
 }
 
@@ -99,6 +104,11 @@ export function readGmailInventory(value: unknown): GmailInventory {
       read: find('read_email'),
       readThread: find('read_email_thread'),
       createDraft: find('create_draft'),
+      updateDraft: find('update_draft'),
+      sendDraft: find('send_draft'),
+      sendEmail: find('send_email'),
+      batchModify: find('batch_modify_email'),
+      readAttachment: find('read_attachment'),
     },
   }
 }
