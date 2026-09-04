@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { GmailIndex, type GmailSyncStatus, type IndexedGmailMessage } from './gmail-index.js'
-import type { AttachmentProjection, ConversationProjection, ConversationSummary, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
+import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftProjection, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -88,7 +88,7 @@ function attachments(payload: UnknownRecord): readonly AttachmentProjection[] {
     const partBody = record(part.body)
     const size = typeof partBody?.size === 'number' ? partBody.size : 0
     return [{
-      id: text(part.part_id) || filename,
+      id: text(partBody?.attachment_id) || text(part.part_id) || filename,
       name: filename,
       mediaType: text(part.mime_type) || 'application/octet-stream',
       sizeLabel: size > 1_000_000 ? `${(size / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1000))} KB`,
@@ -415,6 +415,26 @@ export class GmailConnectorProvider {
     this.#index.setUnread(accountId, messageIds, unread)
     this.#scheduleSync(1_000)
     return { messageIds, unread }
+  }
+
+  async createGmailDraft(accountId: string, messageId: string, to: string, subject: string, bodyText: string): Promise<DraftProjection> {
+    const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', { linkId: accountId, replyMessageId: messageId, to, subject, bodyText }))
+    const id = text(value.draft_id) || text(value.id)
+    if (!id) throw new Error('Gmail did not return a draft ID')
+    return { id, inReplyToMessageId: messageId, to: [sender(to)], subject, bodyText, state: 'draft', accountId }
+  }
+
+  async updateGmailDraft(draft: DraftProjection): Promise<DraftProjection> {
+    if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
+    await this.#post('/v1/connectors/gmail/drafts/update', { linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '), subject: draft.subject, bodyText: draft.bodyText })
+    return draft
+  }
+
+  async sendGmailDraft(accountId: string, draftId: string): Promise<unknown> {
+    return this.#post('/v1/connectors/gmail/drafts/send', { linkId: accountId, draftId })
+  }
+  async readAttachment(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<unknown> {
+    return this.#post('/v1/connectors/gmail/attachment', { linkId: accountId, messageId, attachmentId, filename })
   }
 
   async #account(accountId: string): Promise<GmailAccountProjection> {

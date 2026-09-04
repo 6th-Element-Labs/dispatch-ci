@@ -42,6 +42,7 @@ export interface DraftProjection {
   readonly subject: string
   readonly bodyText: string
   readonly state: 'draft'
+  readonly accountId?: string
 }
 
 export type MailStateFilter = 'all' | 'unread' | 'read'

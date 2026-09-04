@@ -34,7 +34,7 @@ describe('GmailConnectorProvider', () => {
       id: 'gmail-message-1', threadId: 'gmail-thread-1', subject: 'Berth confirmation', unread: true,
       sender: { name: 'Ana Morales', address: 'ana@example.com', initials: 'AM' },
       body: { kind: 'sanitized-html', content: '<p>Hello.</p>' },
-      attachments: [{ id: 'file', name: 'arrival.pdf', sizeLabel: '824 KB' }], source: 'gmail',
+      attachments: [{ id: 'a1', name: 'arrival.pdf', sizeLabel: '824 KB' }], source: 'gmail',
     })
   })
 

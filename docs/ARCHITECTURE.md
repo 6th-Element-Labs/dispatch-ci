@@ -38,6 +38,8 @@ On macOS, the Gmail index is stored under `Library/Application Support/Dispatch`
 
 `dispatch-agent` is the only service that starts and communicates with Codex App Server. It exposes a small HTTP and server-sent-event adapter for account state, installed apps, threads, turns, and streamed items. It does not implement a model loop.
 
+The agent adapter also exposes the installed Gmail draft, label, and attachment tools. `dispatch-mail` owns their application commands and projections; the browser remains presentation-only. Codex thread history, steering, and interruption map directly to App Server `thread/read`, `turn/steer`, and `turn/interrupt`.
+
 The browser persists the current Codex thread ID. After an agent-service restart, it resumes that thread through App Server before reopening the event stream. If App Server is temporarily unavailable, the browser shows `Reconnecting` and retries. It does not report a disconnected stream as connected.
 
 ## SimpleMark reuse

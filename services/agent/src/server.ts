@@ -255,6 +255,46 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 502, { error: 'gmail_modify_failed', detail: errorMessage(error) })
       }
     }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/create') {
+      try {
+        const payload = await body(request)
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.createDraft) return json(response, 503, { error: 'gmail_draft_unavailable' })
+        const args = {
+          link_id: String(payload.linkId ?? ''), to: String(payload.to ?? ''), subject: String(payload.subject ?? ''),
+          reply_message_id: typeof payload.replyMessageId === 'string' ? payload.replyMessageId : null,
+          payload: { mime_type: 'text/plain', charset: 'UTF-8', body: { content: String(payload.bodyText ?? '') } },
+        }
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.createDraft, arguments: args }))
+      } catch (error) { return json(response, 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error) }) }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/update') {
+      try {
+        const payload = await body(request)
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.updateDraft) return json(response, 503, { error: 'gmail_draft_update_unavailable' })
+        const args = { link_id: String(payload.linkId ?? ''), draft_id: String(payload.draftId ?? ''), to: String(payload.to ?? ''), subject: String(payload.subject ?? ''), payload: { mime_type: 'text/plain', charset: 'UTF-8', body: { content: String(payload.bodyText ?? '') } } }
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.updateDraft, arguments: args }))
+      } catch (error) { return json(response, 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error) }) }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/send') {
+      try {
+        const payload = await body(request)
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.sendDraft) return json(response, 503, { error: 'gmail_draft_send_unavailable' })
+        const args = { link_id: String(payload.linkId ?? ''), draft_id: String(payload.draftId ?? '') }
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.sendDraft, arguments: args }))
+      } catch (error) { return json(response, 502, { error: 'gmail_draft_send_failed', detail: errorMessage(error) }) }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/attachment') {
+      try {
+        const payload = await body(request)
+        const gmail = await inventory()
+        if (!gmail.server || !gmail.tools.readAttachment) return json(response, 503, { error: 'gmail_attachment_unavailable' })
+        const args = { link_id: String(payload.linkId ?? ''), message_id: String(payload.messageId ?? ''), attachment_id: String(payload.attachmentId ?? ''), filename: String(payload.filename ?? '') }
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.readAttachment, arguments: args }))
+      } catch (error) { return json(response, 502, { error: 'gmail_attachment_read_failed', detail: errorMessage(error) }) }
+    }
     if (request.method === 'POST' && url.pathname === '/v1/threads') {
       try {
         return json(response, 201, await runtime.request('thread/start', {
@@ -279,6 +319,37 @@ export function createAgentServer(runtime: AgentRuntime) {
         }))
       } catch (error) {
         return json(response, 502, { error: 'thread_resume_failed', detail: errorMessage(error) })
+      }
+    }
+
+    const threadReadMatch = /^\/v1\/threads\/([^/]+)$/.exec(url.pathname)
+    if (request.method === 'GET' && threadReadMatch?.[1]) {
+      try {
+        return json(response, 200, await runtime.request('thread/read', { threadId: decodeURIComponent(threadReadMatch[1]), includeTurns: true }))
+      } catch (error) {
+        return json(response, 502, { error: 'thread_read_failed', detail: errorMessage(error) })
+      }
+    }
+
+    const steerMatch = /^\/v1\/threads\/([^/]+)\/steer$/.exec(url.pathname)
+    if (request.method === 'POST' && steerMatch?.[1]) {
+      try {
+        const payload = await body(request)
+        if (typeof payload.text !== 'string' || typeof payload.expectedTurnId !== 'string') return json(response, 400, { error: 'text_and_expectedTurnId_required' })
+        return json(response, 202, await runtime.request('turn/steer', { threadId: decodeURIComponent(steerMatch[1]), expectedTurnId: payload.expectedTurnId, input: [{ type: 'text', text: payload.text }] }))
+      } catch (error) {
+        return json(response, 502, { error: 'turn_steer_failed', detail: errorMessage(error) })
+      }
+    }
+
+    const interruptMatch = /^\/v1\/threads\/([^/]+)\/interrupt$/.exec(url.pathname)
+    if (request.method === 'POST' && interruptMatch?.[1]) {
+      try {
+        const payload = await body(request)
+        if (typeof payload.turnId !== 'string') return json(response, 400, { error: 'turnId_required' })
+        return json(response, 202, await runtime.request('turn/interrupt', { threadId: decodeURIComponent(interruptMatch[1]), turnId: payload.turnId }))
+      } catch (error) {
+        return json(response, 502, { error: 'turn_interrupt_failed', detail: errorMessage(error) })
       }
     }
 

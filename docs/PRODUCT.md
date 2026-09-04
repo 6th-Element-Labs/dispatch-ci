@@ -39,6 +39,10 @@ The first useful version lets a user:
 7. Review and edit the draft in the middle panel.
 8. Reach an explicit approval before sending.
 
+The middle panel owns the visible Gmail draft preview. Recipient, subject, and body remain editable before Save or Send. Codex can revise the visible body. Sending occurs only from the explicit Send draft command and displays the connector result.
+
+Codex restores stored thread turns after reload, shows plans and tool activity, accepts same-turn steering, and exposes interruption. Gmail attachments use their exact parent message and attachment identities for preview or download and are included as explicit Codex citation context.
+
 ## Current foundation
 
 The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, paginated Gmail synchronization into a durable SQLite index, full MIME retrieval, safe browser rendering, and the browser experience. Sync state, timestamps, progress, and failures remain visible. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail writes run through Codex and its explicit approval flow; reply and respond requests show a complete preview before any send call.
