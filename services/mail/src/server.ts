@@ -31,7 +31,26 @@ function stateFilter(value: string | null): MailStateFilter | undefined {
   return undefined
 }
 
-export function createMailServer(gmail: GmailProvider = new GmailConnectorProvider()) {
+async function within<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms`)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+export function createMailServer(
+  gmail: GmailProvider = new GmailConnectorProvider(),
+  options: { demoEnabled?: boolean; readinessTimeoutMs?: number } = { demoEnabled: process.env.DISPATCH_DEMO_MAIL === '1' },
+) {
+  const demoEnabled = options.demoEnabled === true
+  const readinessTimeoutMs = options.readinessTimeoutMs ?? 3_000
   return createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return writeJson(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -40,7 +59,15 @@ export function createMailServer(gmail: GmailProvider = new GmailConnectorProvid
       return writeJson(response, 200, { service: 'dispatch-mail', status: 'healthy' })
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
-      return writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'demo' })
+      if (demoEnabled) return writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'demo' })
+      try {
+        const accounts = await within(gmail.accounts(), readinessTimeoutMs, 'Gmail readiness check')
+        return accounts.length > 0
+          ? writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'gmail', accountCount: accounts.length })
+          : writeJson(response, 503, { service: 'dispatch-mail', status: 'not_ready', error: 'gmail_not_connected' })
+      } catch (error) {
+        return writeJson(response, 503, { service: 'dispatch-mail', status: 'not_ready', error: 'gmail_connection_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
     }
     if (request.method === 'GET' && url.pathname === '/v1/conversations') {
       const state = stateFilter(url.searchParams.get('state'))
@@ -57,7 +84,9 @@ export function createMailServer(gmail: GmailProvider = new GmailConnectorProvid
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_conversation_list_failed', detail: error instanceof Error ? error.message : String(error) })
       }
-      return writeJson(response, 200, { source: 'demo', scope: 'demo', state, conversations: provider.listConversations(state) })
+      return demoEnabled
+        ? writeJson(response, 200, { source: 'demo', scope: 'demo', state, conversations: provider.listConversations(state) })
+        : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
     }
     const conversationMatch = /^\/v1\/conversations\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && conversationMatch?.[1]) {
@@ -70,6 +99,7 @@ export function createMailServer(gmail: GmailProvider = new GmailConnectorProvid
           return writeJson(response, 502, { error: 'gmail_conversation_read_failed', detail: error instanceof Error ? error.message : String(error) })
         }
       }
+      if (!demoEnabled) return writeJson(response, 400, { error: 'gmail_account_required' })
       const conversation = provider.readConversation(threadId)
       return conversation ? writeJson(response, 200, { conversation }) : writeJson(response, 404, { error: 'conversation_not_found' })
     }
@@ -84,7 +114,9 @@ export function createMailServer(gmail: GmailProvider = new GmailConnectorProvid
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_list_failed', detail: error instanceof Error ? error.message : String(error) })
       }
-      return writeJson(response, 200, { source: 'demo', messages: provider.listMessages() })
+      return demoEnabled
+        ? writeJson(response, 200, { source: 'demo', messages: provider.listMessages() })
+        : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
     }
     if (request.method === 'GET' && url.pathname === '/v1/accounts') {
       try {
@@ -107,6 +139,7 @@ export function createMailServer(gmail: GmailProvider = new GmailConnectorProvid
       return message ? writeJson(response, 200, { message }) : writeJson(response, 404, { error: 'message_not_found' })
     }
     if (request.method === 'POST' && url.pathname === '/v1/drafts') {
+      if (!demoEnabled) return writeJson(response, 501, { error: 'gmail_draft_not_implemented' })
       try {
         const body = await readJson(request)
         const messageId = typeof body === 'object' && body !== null && 'messageId' in body ? String(body.messageId) : ''

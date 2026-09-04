@@ -11,6 +11,7 @@ export interface RpcMessage {
 type Pending = {
   readonly resolve: (value: unknown) => void
   readonly reject: (reason: Error) => void
+  readonly timer: ReturnType<typeof setTimeout>
 }
 
 export class JsonLineRpc {
@@ -31,10 +32,14 @@ export class JsonLineRpc {
     this.#write({ id, result })
   }
 
-  request(method: string, params: unknown = {}): Promise<unknown> {
+  request(method: string, params: unknown = {}, timeoutMs = 45_000): Promise<unknown> {
     const id = this.#nextId++
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject })
+      const timer = setTimeout(() => {
+        this.#pending.delete(id)
+        reject(new Error(`Codex App Server request timed out after ${timeoutMs} ms: ${method}`))
+      }, timeoutMs)
+      this.#pending.set(id, { resolve, reject, timer })
       this.#write({ id, method, params })
     })
   }
@@ -52,6 +57,7 @@ export class JsonLineRpc {
       const pending = this.#pending.get(message.id)
       if (!pending) return
       this.#pending.delete(message.id)
+      clearTimeout(pending.timer)
       if (message.error) pending.reject(new Error(message.error.message ?? 'Codex App Server request failed'))
       else pending.resolve(message.result)
       return
@@ -65,7 +71,10 @@ export class JsonLineRpc {
   }
 
   rejectAll(reason: Error): void {
-    for (const pending of this.#pending.values()) pending.reject(reason)
+    for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(reason)
+    }
     this.#pending.clear()
   }
 

@@ -169,6 +169,9 @@ export function createAgentServer(runtime: AgentRuntime) {
         const payload = await body(request)
         const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
         const query = typeof payload.query === 'string' ? payload.query : 'in:inbox -in:spam -in:trash'
+        const labelIds = Array.isArray(payload.labelIds)
+          ? payload.labelIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+          : ['INBOX']
         const maxResults = typeof payload.maxResults === 'number' ? Math.max(1, Math.min(50, Math.trunc(payload.maxResults))) : 20
         const gmail = await inventory()
         if (!gmail.server || !gmail.tools.searchMessages) return json(response, 503, { error: 'gmail_message_search_unavailable' })
@@ -177,7 +180,7 @@ export function createAgentServer(runtime: AgentRuntime) {
           server: gmail.server,
           threadId: await connectorThread(linkId),
           tool: gmail.tools.searchMessages,
-          arguments: { link_id: linkId, query, max_results: maxResults, next_page_token: '' },
+          arguments: { link_id: linkId, query, label_ids: labelIds, max_results: maxResults, next_page_token: '' },
         })
         return json(response, 200, result)
       } catch (error) {

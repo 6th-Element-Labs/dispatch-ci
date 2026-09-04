@@ -18,7 +18,7 @@ The middle reading surface is visually primary. Selection changes the explicit C
 
 All connected Gmail accounts enter one date-ordered queue by default. The user can filter that queue to one account. Message rows show a compact date and time. The rendered message header shows the full date and time.
 
-The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. All, Unread, and Read filters operate on conversation state. A conversation is unread when any retrieved member message carries Gmail's `UNREAD` label.
+The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. All, Unread, and Read filters operate on conversation state. A conversation is unread when any retrieved member message carries Gmail's `UNREAD` label. All contains Inbox conversations plus unread conversations outside Inbox, excluding spam and trash. Unread contains every unread conversation outside spam and trash. Read remains scoped to read Inbox conversations.
 
 Selecting a conversation loads the complete Gmail thread in chronological order. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
 
@@ -41,7 +41,7 @@ The first useful version lets a user:
 
 ## Current foundation
 
-The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, read-only inbox search, full MIME retrieval, safe browser rendering, and the browser experience. The mail service labels demo projections explicitly when no connector account is available. Gmail draft and send actions remain disabled until the approval path is implemented and tested.
+The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, read-only inbox search, full MIME retrieval, safe browser rendering, and the browser experience. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail writes run through Codex and its explicit approval flow; reply and respond requests show a complete preview before any send call.
 
 ## Non-goals for the foundation
 

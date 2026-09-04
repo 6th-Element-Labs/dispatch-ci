@@ -21,6 +21,7 @@ export class CodexProcess {
   async #launch(): Promise<void> {
     const process = spawn(this.#command, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] })
     const rpc = new JsonLineRpc(process.stdin)
+    let terminated = false
     this.#process = process
     this.#rpc = rpc
     rpc.subscribe((message) => this.#listeners.forEach((listener) => listener(message)))
@@ -29,8 +30,9 @@ export class CodexProcess {
     process.stderr.on('data', (chunk) => {
       this.#lastError = String(chunk).trim().slice(-1000)
     })
-    process.on('exit', (code, signal) => {
-      const reason = new Error(`Codex App Server exited (${code ?? signal ?? 'unknown'})`)
+    const handleFailure = (reason: Error) => {
+      if (terminated) return
+      terminated = true
       this.#lastError = reason.message
       rpc.rejectAll(reason)
       if (this.#process !== process || this.#closed) return
@@ -41,11 +43,19 @@ export class CodexProcess {
           this.#launch().then(resolve, reject)
         }, 500)
       })
-    })
-    await rpc.request('initialize', {
-      clientInfo: { name: 'dispatch', title: 'Dispatch', version: '0.1.0' },
-      capabilities: { mcpServerOpenaiFormElicitation: true },
-    })
+    }
+    process.on('error', (error) => handleFailure(new Error(`Could not start Codex App Server: ${error.message}`)))
+    process.on('exit', (code, signal) => handleFailure(new Error(`Codex App Server exited (${code ?? signal ?? 'unknown'})`)))
+    try {
+      await rpc.request('initialize', {
+        clientInfo: { name: 'dispatch', title: 'Dispatch', version: '0.1.0' },
+        capabilities: { mcpServerOpenaiFormElicitation: true },
+      })
+    } catch (error) {
+      handleFailure(error instanceof Error ? error : new Error(String(error)))
+      if (!process.killed) process.kill('SIGTERM')
+      throw error
+    }
     rpc.notify('initialized', {})
     this.#lastError = null
     const reconnected = this.#startedOnce

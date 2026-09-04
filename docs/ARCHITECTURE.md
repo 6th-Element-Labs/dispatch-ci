@@ -59,6 +59,8 @@ Browser development uses localhost HTTP and SSE. The macOS shell will start the 
 ## Failure behavior
 
 - Mail failure leaves the mail panel in a visible failed state.
+- Cached mail is labeled with its age while a refresh is active. A failed refresh keeps the provider error visible and never presents stale data as current.
+- Missing or invalid provider fields fail normalization instead of silently becoming read, empty, or current values.
 - Agent failure leaves email readable and shows Codex as unavailable.
 - App Server restart does not fabricate successful turns.
 - Demo mail is visibly labeled and never presented as Gmail evidence.

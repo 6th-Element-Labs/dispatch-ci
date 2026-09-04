@@ -34,4 +34,9 @@ describe('JsonLineRpc', () => {
     rpc.respond('request-1', { decision: 'accept' })
     expect(JSON.parse(written)).toEqual({ id: 'request-1', result: { decision: 'accept' } })
   })
+
+  it('fails a stalled App Server request with its method and deadline', async () => {
+    const rpc = new JsonLineRpc(new PassThrough())
+    await expect(rpc.request('turn/start', {}, 5)).rejects.toThrow('timed out after 5 ms: turn/start')
+  })
 })

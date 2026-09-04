@@ -95,6 +95,26 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('passes exact Gmail system label IDs to message search', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.search_emails': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      if (method === 'mcpServer/tool/call') return { structuredContent: { emails: [] } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/search-messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', query: '-in:spam', labelIds: ['INBOX', 'UNREAD'], maxResults: 20 }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      arguments: { link_id: 'link-one', query: '-in:spam', label_ids: ['INBOX', 'UNREAD'], max_results: 20, next_page_token: '' },
+    }))
+  })
+
   it('returns a user decision to a server-initiated Codex request', async () => {
     const { base, fake } = await start()
     const response = await fetch(`${base}/v1/server-requests/respond`, {
