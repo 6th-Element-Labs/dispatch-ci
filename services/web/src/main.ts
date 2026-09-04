@@ -674,6 +674,18 @@ function scheduleAgentReconnect(): void {
   }, 1500)
 }
 
+function agentHistoryText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(agentHistoryText).filter(Boolean).join('\n')
+  if (!value || typeof value !== 'object') return ''
+  const item = value as Record<string, unknown>
+  for (const field of ['text', 'content', 'value']) {
+    const extracted = agentHistoryText(item[field])
+    if (extracted) return extracted
+  }
+  return ''
+}
+
 async function connectAgent(): Promise<void> {
   if (agentConnecting) return
   agentConnecting = true
@@ -702,8 +714,9 @@ async function connectAgent(): Promise<void> {
       const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
       if (restored.length > 0 && elements.stream.querySelectorAll('.dispatch-agent-message').length === 0) {
         for (const item of restored) {
-          if (item.type === 'userMessage') addAgentMessage('user', String(item.text ?? item.content ?? ''))
-          if (item.type === 'agentMessage') addAgentMessage('agent', String(item.text ?? item.content ?? ''))
+          const text = agentHistoryText(item)
+          if (text && item.type === 'userMessage') addAgentMessage('user', text)
+          if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
         }
       }
     } catch (error) {
