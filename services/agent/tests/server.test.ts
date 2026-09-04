@@ -137,6 +137,16 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('reads history, steers, and interrupts the active Codex turn', async () => {
+    const { base, fake } = await start()
+    await fetch(`${base}/v1/threads/thread-1`)
+    await fetch(`${base}/v1/threads/thread-1/steer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedTurnId: 'turn-1', text: 'Change focus' }) })
+    await fetch(`${base}/v1/threads/thread-1/interrupt`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ turnId: 'turn-1' }) })
+    expect(fake.request).toHaveBeenCalledWith('thread/read', { threadId: 'thread-1', includeTurns: true })
+    expect(fake.request).toHaveBeenCalledWith('turn/steer', { threadId: 'thread-1', expectedTurnId: 'turn-1', input: [{ type: 'text', text: 'Change focus' }] })
+    expect(fake.request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' })
+  })
+
   it('returns a user decision to a server-initiated Codex request', async () => {
     const { base, fake } = await start()
     const response = await fetch(`${base}/v1/server-requests/respond`, {

@@ -97,6 +97,22 @@ test('updates read state only after the Gmail command is accepted', async ({ pag
   await expect.poll(() => command).toEqual({ accountId: 'link-one', unread: false })
 })
 
+test('edits, saves, and sends a Gmail draft from the middle panel', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'Re: Opua berth confirmation', bodyText: '', state: 'draft', accountId: 'link-one' } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts/draft-1', async (route) => route.fulfill({ json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'Re: Opua berth confirmation', bodyText: 'Approved reply', state: 'draft', accountId: 'link-one' } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/draft-1\?action=send.*/, (route) => route.fulfill({ json: { delivery: { id: 'sent-1' } } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Draft body' }).fill('Approved reply')
+  await page.getByRole('button', { name: 'Send draft' }).click()
+  await expect(page.getByText('Gmail confirmed that the draft was sent.')).toBeVisible()
+})
+
 test('allows one, two, or three adjustable panels while keeping one visible', async ({ page }) => {
   await page.goto('/')
   const messagesToggle = page.getByRole('button', { name: 'Messages', exact: true })

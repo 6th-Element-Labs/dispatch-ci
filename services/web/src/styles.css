@@ -110,7 +110,10 @@ button { cursor: pointer; }
 .dispatch-draft { overflow: auto; padding: 20px 30px; }
 .dispatch-draft > div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--dispatch-line); font-size: 12px; }
 .dispatch-draft > div span { color: var(--dispatch-muted); }
+.dispatch-draft > div input { width: 100%; border: 0; outline: none; background: transparent; font-size: 12px; font-weight: 650; }
 .dispatch-draft textarea { width: 100%; min-height: 340px; margin-top: 20px; padding: 0; resize: none; border: 0; outline: none; background: transparent; font-family: ui-serif, Georgia, serif; font-size: 15px; line-height: 1.65; }
+.dispatch-draft footer { display: flex; gap: 7px; }
+.dispatch-draft footer button { padding: 7px 10px; border: 1px solid var(--dispatch-line); border-radius: 8px; background: var(--dispatch-paper); font-size: 10px; }
 .dispatch-reader-actions { display: flex; gap: 7px; padding: 11px 16px; border-top: 1px solid var(--dispatch-line); background: var(--dispatch-window); }
 
 .dispatch-agent { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-left: 1px solid var(--dispatch-line); background: var(--dispatch-chat); }
@@ -148,6 +151,7 @@ button { cursor: pointer; }
 .dispatch-prompt textarea { width: 100%; resize: none; border: 0; outline: none; background: transparent; font-size: 11px; }
 .dispatch-prompt > div { display: flex; align-items: center; justify-content: space-between; color: var(--dispatch-muted); font-size: 9px; }
 .dispatch-prompt [data-send] { width: 24px; height: 24px; border: 0; border-radius: 7px; background: var(--dispatch-accent); color: white; }
+.dispatch-prompt [data-stop] { width: 24px; height: 24px; margin-right: 5px; border: 1px solid var(--dispatch-line); border-radius: 7px; background: transparent; color: #c43d3d; font-size: 9px; }
 
 @media (max-width: 1050px) {
   .dispatch-titlebar { grid-template-columns: 120px 1fr auto; }

@@ -23,7 +23,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'setConversationUnread' | 'searchConversations'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'setConversationUnread' | 'searchConversations' | 'createGmailDraft' | 'updateGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
 
 function stateFilter(value: string | null): MailStateFilter | undefined {
   if (value === null || value === 'all') return 'all'
@@ -182,16 +182,40 @@ export function createMailServer(
       const message = provider.readMessage(decodeURIComponent(messageMatch[1]))
       return message ? writeJson(response, 200, { message }) : writeJson(response, 404, { error: 'message_not_found' })
     }
-    if (request.method === 'POST' && url.pathname === '/v1/drafts') {
-      if (!demoEnabled) return writeJson(response, 501, { error: 'gmail_draft_not_implemented' })
+    const attachmentMatch = /^\/v1\/messages\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname)
+    if (request.method === 'GET' && attachmentMatch?.[1] && attachmentMatch[2] && gmail.readAttachment) {
       try {
-        const body = await readJson(request)
+        const accountId = url.searchParams.get('account') ?? ''
+        const filename = url.searchParams.get('filename') ?? ''
+        return writeJson(response, 200, { attachment: await gmail.readAttachment(accountId, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]), filename) })
+      } catch (error) { return writeJson(response, 502, { error: 'gmail_attachment_read_failed', detail: error instanceof Error ? error.message : String(error) }) }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/drafts') {
+      try {
+        const body = await readJson(request) as Record<string, unknown>
         const messageId = typeof body === 'object' && body !== null && 'messageId' in body ? String(body.messageId) : ''
+        if (typeof body.accountId === 'string' && gmail.createGmailDraft) {
+          const draft = await gmail.createGmailDraft(body.accountId, messageId, String(body.to ?? ''), String(body.subject ?? ''), String(body.bodyText ?? ''))
+          return writeJson(response, 201, { draft })
+        }
+        if (!demoEnabled) return writeJson(response, 400, { error: 'gmail_draft_fields_required' })
         const draft = provider.createDraft(messageId)
         return draft ? writeJson(response, 201, { draft }) : writeJson(response, 404, { error: 'message_not_found' })
       } catch {
         return writeJson(response, 400, { error: 'invalid_json' })
       }
+    }
+    const draftMatch = /^\/v1\/drafts\/([^/]+)$/.exec(url.pathname)
+    if (request.method === 'PUT' && draftMatch?.[1] && gmail.updateGmailDraft) {
+      try {
+        const body = await readJson(request) as Record<string, unknown>
+        const draft = await gmail.updateGmailDraft({ id: decodeURIComponent(draftMatch[1]), inReplyToMessageId: String(body.messageId ?? ''), to: [{ name: String(body.to ?? ''), address: String(body.to ?? ''), initials: '@' }], subject: String(body.subject ?? ''), bodyText: String(body.bodyText ?? ''), state: 'draft', accountId: String(body.accountId ?? '') })
+        return writeJson(response, 200, { draft })
+      } catch (error) { return writeJson(response, 502, { error: 'gmail_draft_update_failed', detail: error instanceof Error ? error.message : String(error) }) }
+    }
+    if (request.method === 'POST' && draftMatch?.[1] && url.searchParams.get('action') === 'send' && gmail.sendGmailDraft) {
+      try { return writeJson(response, 200, { delivery: await gmail.sendGmailDraft(String(url.searchParams.get('account') ?? ''), decodeURIComponent(draftMatch[1])) }) }
+      catch (error) { return writeJson(response, 502, { error: 'gmail_draft_send_failed', detail: error instanceof Error ? error.message : String(error) }) }
     }
     return writeJson(response, 404, { error: 'not_found' })
   })

@@ -58,11 +58,23 @@ export const api = {
     const result = await request<{ message: MessageProjection }>(`${MAIL}/v1/messages/${encodeURIComponent(id)}${query}`)
     return result.message
   },
-  async createDraft(messageId: string): Promise<DraftProjection> {
+  async readAttachment(messageId: string, attachmentId: string, accountId: string, filename: string): Promise<unknown> {
+    const params = new URLSearchParams({ account: accountId, filename })
+    const result = await request<{ attachment: unknown }>(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${params}`)
+    return result.attachment
+  },
+  async createDraft(messageId: string, fields: Record<string, unknown> = {}): Promise<DraftProjection> {
     const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId, ...fields }),
     })
     return result.draft
+  },
+  async updateDraft(id: string, fields: Record<string, unknown>): Promise<DraftProjection> {
+    const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) })
+    return result.draft
+  },
+  async sendDraft(id: string, accountId: string): Promise<void> {
+    await request(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=send&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
   },
   async agentReady(): Promise<boolean> {
     try { return (await fetch(`${AGENT}/ready`, { signal: AbortSignal.timeout(3_000) })).ok } catch { return false }
@@ -78,6 +90,15 @@ export const api = {
   async resumeThread(threadId: string): Promise<string> {
     const result = await request<{ thread: { id: string } }>(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' })
     return result.thread.id
+  },
+  async readThread(threadId: string): Promise<unknown> {
+    return request(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}`)
+  },
+  async steerTurn(threadId: string, expectedTurnId: string, text: string): Promise<void> {
+    await request(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}/steer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedTurnId, text }) })
+  },
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    await request(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}/interrupt`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ turnId }) })
   },
   async startTurn(threadId: string, payload: Record<string, unknown>): Promise<void> {
     await request(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}/turns`, {

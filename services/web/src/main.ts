@@ -35,9 +35,10 @@ app.innerHTML = `
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="dispatch-draft" data-draft hidden>
-            <div><span>To</span><strong data-draft-to></strong></div>
-            <div><span>Subject</span><strong data-draft-subject></strong></div>
+            <div><span>To</span><input data-draft-to aria-label="Draft recipient"></div>
+            <div><span>Subject</span><input data-draft-subject aria-label="Draft subject"></div>
             <textarea data-draft-body aria-label="Draft body"></textarea>
+            <footer><button type="button" data-save-draft>Save draft</button><button type="button" data-revise-draft>Ask Codex to revise</button><button type="button" data-send-draft>Send draft</button></footer>
           </section>
           <footer class="dispatch-reader-actions"><button type="button" data-reply>Reply</button><button type="button" data-read-state>Mark unread</button><button type="button" data-ask>Ask Codex</button></footer>
         </div>
@@ -48,7 +49,7 @@ app.innerHTML = `
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer>
           <div class="dispatch-suggestions"><button type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
-          <div class="dispatch-prompt"><textarea data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div><span data-connector>Checking connectors</span><button type="button" data-send aria-label="Send">↑</button></div></div>
+          <div class="dispatch-prompt"><textarea data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div><span data-connector>Checking connectors</span><span><button type="button" data-stop aria-label="Stop" hidden>■</button><button type="button" data-send aria-label="Send">↑</button></span></div></div>
         </footer>
       </aside>
     </div>
@@ -76,8 +77,8 @@ const elements = {
   body: app.querySelector<HTMLElement>('[data-body]')!,
   attachments: app.querySelector<HTMLElement>('[data-attachments]')!,
   draft: app.querySelector<HTMLElement>('[data-draft]')!,
-  draftTo: app.querySelector<HTMLElement>('[data-draft-to]')!,
-  draftSubject: app.querySelector<HTMLElement>('[data-draft-subject]')!,
+  draftTo: app.querySelector<HTMLInputElement>('[data-draft-to]')!,
+  draftSubject: app.querySelector<HTMLInputElement>('[data-draft-subject]')!,
   draftBody: app.querySelector<HTMLTextAreaElement>('[data-draft-body]')!,
   context: app.querySelector<HTMLElement>('[data-context]')!,
   agentStatus: app.querySelector<HTMLElement>('[data-agent-status]')!,
@@ -85,8 +86,10 @@ const elements = {
   stream: app.querySelector<HTMLElement>('[data-agent-stream]')!,
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
   search: app.querySelector<HTMLInputElement>('[aria-label="Search mail"]')!,
+  stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
 }
+let activeDraft: DraftProjection | undefined
 
 let conversations: ConversationSummary[] = []
 let conversationTotal = 0
@@ -111,6 +114,8 @@ let syncErrorVisible = false
 let mailReconnectTimer: number | undefined
 let searchQuery = ''
 let searchTimer: number | undefined
+let activeTurnId: string | undefined
+let selectedAttachmentContext: { messageId: string; attachmentId: string; filename: string } | undefined
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -280,11 +285,28 @@ function renderThreadMessage(message: MessageProjection): HTMLElement {
     const size = document.createElement('small')
     size.textContent = attachment.sizeLabel
     item.append(attachmentName, size)
+    item.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name, attachment.mediaType) })
     attachmentList.append(item)
   }
   article.append(header, content)
   if (message.attachments.length > 0) article.append(attachmentList)
   return article
+}
+
+async function openAttachment(message: MessageProjection, attachmentId: string, filename: string, mediaType: string): Promise<void> {
+  if (!message.accountId) return
+  selectedAttachmentContext = { messageId: message.id, attachmentId, filename }
+  try {
+    const value = await api.readAttachment(message.id, attachmentId, message.accountId, filename) as Record<string, unknown>
+    const content = (value.structuredContent ?? value) as Record<string, unknown>
+    const encoded = String(content.base64_url_content ?? content.data ?? '')
+    if (!encoded) throw new Error('Gmail attachment response did not contain downloadable bytes')
+    const anchor = document.createElement('a')
+    anchor.href = `data:${String(content.mime_type ?? mediaType)};base64,${encoded.replace(/-/g, '+').replace(/_/g, '/')}`
+    anchor.download = filename
+    anchor.click()
+    addAgentMessage('tool', `Opened attachment citation · ${filename}`)
+  } catch (error) { addAgentMessage('error', error instanceof Error ? error.message : String(error)) }
 }
 
 async function selectConversation(id: string): Promise<void> {
@@ -377,17 +399,29 @@ function prefetchConversations(exceptId: string): void {
 
 async function openDraft(): Promise<void> {
   if (!selected) return
-  if (selected.source === 'gmail') {
-    addAgentMessage('error', 'Gmail draft creation is not enabled until connector approvals are wired.')
-    return
-  }
-  const draft: DraftProjection = await api.createDraft(selected.latestMessageId)
+  const draft: DraftProjection = selected.source === 'gmail' && selected.accountId
+    ? await api.createDraft(selected.latestMessageId, { accountId: selected.accountId, to: selected.sender.address, subject: selected.subject.startsWith('Re:') ? selected.subject : `Re: ${selected.subject}`, bodyText: '' })
+    : await api.createDraft(selected.latestMessageId)
+  activeDraft = draft
   elements.body.hidden = true
   elements.attachments.hidden = true
   elements.draft.hidden = false
-  elements.draftTo.textContent = draft.to.map((address) => `${address.name} <${address.address}>`).join(', ')
-  elements.draftSubject.textContent = draft.subject
+  elements.draftTo.value = draft.to.map((address) => address.address).join(', ')
+  elements.draftSubject.value = draft.subject
   elements.draftBody.value = draft.bodyText
+}
+
+async function saveDraft(): Promise<void> {
+  if (!activeDraft?.accountId) return
+  activeDraft = await api.updateDraft(activeDraft.id, { accountId: activeDraft.accountId, messageId: activeDraft.inReplyToMessageId, to: elements.draftTo.value, subject: elements.draftSubject.value, bodyText: elements.draftBody.value })
+  addAgentMessage('tool', 'Gmail draft saved.')
+}
+
+async function sendDraft(): Promise<void> {
+  if (!activeDraft?.accountId) return
+  await saveDraft()
+  await api.sendDraft(activeDraft.id, activeDraft.accountId)
+  addAgentMessage('agent', 'Gmail confirmed that the draft was sent.')
 }
 
 function addAgentMessage(kind: 'user' | 'agent' | 'tool' | 'error', text: string): HTMLElement {
@@ -586,7 +620,12 @@ function handleAgentEvent(message: AgentEvent): void {
     }
     requestIds.delete(requestId)
   }
-  if (message.method === 'turn/started') elements.agentStatus.textContent = 'Working'
+  if (message.method === 'turn/started') {
+    const turn = params?.turn as Record<string, unknown> | undefined
+    activeTurnId = typeof turn?.id === 'string' ? turn.id : undefined
+    elements.stop.hidden = !activeTurnId
+    elements.agentStatus.textContent = 'Working'
+  }
   if (message.method === 'turn/completed') {
     const turn = params?.turn as Record<string, unknown> | undefined
     const status = String(turn?.status ?? 'completed')
@@ -598,6 +637,8 @@ function handleAgentEvent(message: AgentEvent): void {
       elements.agentStatus.textContent = status === 'interrupted' ? 'Interrupted' : 'Connected'
     }
     activeAgentMessage = undefined
+    activeTurnId = undefined
+    elements.stop.hidden = true
   }
   if (message.method === 'item/agentMessage/delta') {
     if (!activeAgentMessage) activeAgentMessage = addAgentMessage('agent', '')
@@ -606,6 +647,10 @@ function handleAgentEvent(message: AgentEvent): void {
   if (message.method === 'item/started') {
     const item = params?.item as Record<string, unknown> | undefined
     if (item?.type === 'mcpToolCall') addAgentMessage('tool', `Using ${String(item.server ?? 'connector')} · ${String(item.tool ?? 'tool')}`)
+  }
+  if (message.method === 'turn/plan/updated') {
+    const plan = Array.isArray(params?.plan) ? params.plan as Array<Record<string, unknown>> : []
+    addAgentMessage('tool', plan.map((item) => `${String(item.status ?? '')}: ${String(item.step ?? '')}`).join('\n'))
   }
   if (message.method === 'item/completed') {
     const item = params?.item as Record<string, unknown> | undefined
@@ -649,6 +694,18 @@ async function connectAgent(): Promise<void> {
       threadId = await api.startThread()
     }
     localStorage.setItem('dispatch.codex.threadId', threadId)
+    try {
+      const history = await api.readThread(threadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
+      const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
+      if (restored.length > 0 && elements.stream.querySelectorAll('.dispatch-agent-message').length === 0) {
+        for (const item of restored) {
+          if (item.type === 'userMessage') addAgentMessage('user', String(item.text ?? item.content ?? ''))
+          if (item.type === 'agentMessage') addAgentMessage('agent', String(item.text ?? item.content ?? ''))
+        }
+      }
+    } catch (error) {
+      addAgentMessage('error', `Could not restore Codex history: ${error instanceof Error ? error.message : String(error)}`)
+    }
     agentEvents?.close()
     agentEvents = api.events(threadId)
     agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
@@ -674,10 +731,14 @@ async function sendPrompt(): Promise<void> {
   elements.agentStatus.textContent = 'Working'
   elements.prompt.value = ''
   try {
+    if (activeTurnId) {
+      await api.steerTurn(threadId, activeTurnId, text)
+      return
+    }
     await api.startTurn(threadId, {
       text,
       appId: gmailAppId(apps),
-      mailContext: selected ? { messageId: selected.latestMessageId, threadId: selected.threadId, subject: selected.subject, sender: selected.sender.address } : undefined,
+      mailContext: selected ? { messageId: selected.latestMessageId, threadId: selected.threadId, subject: selected.subject, sender: selected.sender.address, attachment: selectedAttachmentContext } : undefined,
     })
   } catch (error) {
     addAgentMessage('error', error instanceof Error ? error.message : String(error))
@@ -881,8 +942,14 @@ elements.messagesDivider.addEventListener('pointerdown', (event) => resizePanel(
 elements.agentDivider.addEventListener('pointerdown', (event) => resizePanel('agentWidth', event))
 app.querySelectorAll('[data-compose], [data-reply]').forEach((button) => button.addEventListener('click', () => { void openDraft() }))
 app.querySelector('[data-ask]')?.addEventListener('click', () => elements.prompt.focus())
+app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft() })
+app.querySelector('[data-send-draft]')?.addEventListener('click', () => { void sendDraft() })
+app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { elements.prompt.value = `Revise this draft:\n\n${elements.draftBody.value}`; elements.prompt.focus() })
 elements.readState.addEventListener('click', () => { void toggleReadState() })
 app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })
+elements.stop.addEventListener('click', () => {
+  if (threadId && activeTurnId) void api.interruptTurn(threadId, activeTurnId)
+})
 app.querySelectorAll<HTMLElement>('[data-suggestion]').forEach((button) => button.addEventListener('click', () => {
   elements.prompt.value = button.dataset.suggestion ?? ''
   elements.prompt.focus()
