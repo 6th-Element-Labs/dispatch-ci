@@ -30,7 +30,7 @@ app.innerHTML = `
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
       </aside>
-      <div class="dispatch-divider" data-divider="messages" role="separator" aria-label="Resize messages panel" aria-orientation="vertical"></div>
+      <div class="dispatch-divider" data-divider="messages" role="separator" tabindex="0" aria-label="Resize messages panel" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="640"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <main class="card rounded-0 border-0 dispatch-reader" aria-label="Selected email">
         <div class="empty dispatch-reader-empty" data-reader-empty><div class="empty-icon"><i class="ti ti-mail-opened"></i></div><p class="empty-title">Select a message</p></div>
         <div data-reader hidden>
@@ -52,7 +52,7 @@ app.innerHTML = `
           <footer class="card-footer dispatch-reader-actions"><button class="btn btn-primary" type="button" data-reply><i class="ti ti-reply me-1" aria-hidden="true"></i>Reply</button><button class="btn btn-outline-secondary" type="button" data-reply-all><i class="ti ti-arrow-back-up-double me-1" aria-hidden="true"></i>Reply all</button><button class="btn btn-outline-secondary" type="button" data-forward><i class="ti ti-arrow-forward-up me-1" aria-hidden="true"></i>Forward</button><button class="btn btn-outline-secondary" type="button" data-read-state>Mark unread</button><button class="btn btn-outline-secondary" type="button" data-ask><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex</button></footer>
         </div>
       </main>
-      <div class="dispatch-divider" data-divider="agent" role="separator" aria-label="Resize Codex panel" aria-orientation="vertical"></div>
+      <div class="dispatch-divider" data-divider="agent" role="separator" tabindex="0" aria-label="Resize Codex panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <aside class="card rounded-0 border-0 dispatch-agent" aria-label="Codex">
         <header class="card-header"><div class="d-flex align-items-center w-100"><span class="avatar avatar-sm bg-dark text-white me-2">✦</span><strong>Codex</strong><span class="badge bg-secondary-lt ms-auto" data-agent-status>Connecting</span></div><div class="alert alert-info mt-3 mb-0 py-2 px-3 dispatch-context" data-context>No email selected</div></header>
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
@@ -171,8 +171,8 @@ function loadPanelState(): PanelState {
       messages: saved.messages ?? defaults.messages,
       reader: saved.reader ?? defaults.reader,
       agent: saved.agent ?? defaults.agent,
-      messagesWidth: Math.max(220, Math.min(440, saved.messagesWidth ?? defaults.messagesWidth)),
-      agentWidth: Math.max(280, Math.min(480, saved.agentWidth ?? defaults.agentWidth)),
+      messagesWidth: Math.max(220, Math.min(640, saved.messagesWidth ?? defaults.messagesWidth)),
+      agentWidth: Math.max(280, Math.min(900, saved.agentWidth ?? defaults.agentWidth)),
     }
   } catch {
     return defaults
@@ -193,19 +193,23 @@ function renderPanels(): void {
   let messagesWidth = panels.messagesWidth
   let agentWidth = panels.agentWidth
   if (panels.messages && panels.reader && panels.agent) {
-    const sideWidth = Math.max(500, window.innerWidth - 72 - 10 - 360)
+    const sideWidth = Math.max(500, window.innerWidth - 72 - 18 - 360)
     if (messagesWidth + agentWidth > sideWidth) {
-      messagesWidth = Math.max(220, Math.round(sideWidth * .44))
+      const scale = sideWidth / (messagesWidth + agentWidth)
+      messagesWidth = Math.max(220, Math.round(messagesWidth * scale))
       agentWidth = Math.max(280, sideWidth - messagesWidth)
+      if (messagesWidth + agentWidth > sideWidth) messagesWidth = Math.max(220, sideWidth - agentWidth)
     }
   }
   const columns: string[] = ['72px']
   if (panels.messages) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${messagesWidth}px`)
-  if (!elements.messagesDivider.hidden) columns.push('5px')
+  if (!elements.messagesDivider.hidden) columns.push('9px')
   if (panels.reader) columns.push('minmax(280px, 1fr)')
-  if (!elements.agentDivider.hidden) columns.push('5px')
+  if (!elements.agentDivider.hidden) columns.push('9px')
   if (panels.agent) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${agentWidth}px`)
   elements.workspace.style.gridTemplateColumns = columns.join(' ')
+  elements.messagesDivider.setAttribute('aria-valuenow', String(Math.round(messagesWidth)))
+  elements.agentDivider.setAttribute('aria-valuenow', String(Math.round(agentWidth)))
   app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => {
     const name = button.dataset.panel as PanelName
     button.setAttribute('aria-pressed', String(panels[name]))
@@ -215,20 +219,38 @@ function renderPanels(): void {
 }
 
 function resizePanel(name: 'messagesWidth' | 'agentWidth', event: PointerEvent): void {
+  event.preventDefault()
   const startX = event.clientX
   const startWidth = panels[name]
   const direction = name === 'messagesWidth' ? 1 : -1
+  const divider = event.currentTarget as HTMLElement
+  divider.setPointerCapture?.(event.pointerId)
+  document.body.classList.add('dispatch-resizing')
   const move = (next: PointerEvent) => {
-    const limit = name === 'messagesWidth' ? [220, 440] : [280, 480]
+    const limit = name === 'messagesWidth' ? [220, 640] : [280, 900]
     panels[name] = Math.max(limit[0]!, Math.min(limit[1]!, startWidth + ((next.clientX - startX) * direction)))
     renderPanels()
   }
   const stop = () => {
+    document.body.classList.remove('dispatch-resizing')
+    if (divider.hasPointerCapture?.(event.pointerId)) divider.releasePointerCapture(event.pointerId)
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', stop)
+  window.addEventListener('pointercancel', stop)
+}
+
+function resizePanelWithKeyboard(name: 'messagesWidth' | 'agentWidth', event: KeyboardEvent): void {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  const direction = name === 'messagesWidth' ? 1 : -1
+  const limit = name === 'messagesWidth' ? [220, 640] : [280, 900]
+  const delta = (event.key === 'ArrowRight' ? 20 : -20) * direction
+  panels[name] = Math.max(limit[0]!, Math.min(limit[1]!, panels[name] + delta))
+  renderPanels()
 }
 
 function defaultEmptyListMessage(): string {
@@ -285,16 +307,20 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     top.className = 'dispatch-message-top'
     const sender = document.createElement('strong')
     sender.textContent = conversation.sender.name
+    sender.title = conversation.sender.name
     const time = document.createElement('time')
     time.textContent = conversation.receivedLabel
     top.append(sender, time)
     const subject = document.createElement('b')
     subject.textContent = conversation.subject
+    subject.title = conversation.subject
     const preview = document.createElement('small')
     preview.textContent = conversation.preview
+    preview.title = conversation.preview
     const account = document.createElement('span')
     account.className = 'dispatch-message-account'
     account.textContent = conversation.accountLabel ?? ''
+    account.title = conversation.accountLabel ?? ''
     content.append(top, subject, preview)
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
@@ -1192,6 +1218,8 @@ app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => butt
 }))
 elements.messagesDivider.addEventListener('pointerdown', (event) => resizePanel('messagesWidth', event))
 elements.agentDivider.addEventListener('pointerdown', (event) => resizePanel('agentWidth', event))
+elements.messagesDivider.addEventListener('keydown', (event) => resizePanelWithKeyboard('messagesWidth', event))
+elements.agentDivider.addEventListener('keydown', (event) => resizePanelWithKeyboard('agentWidth', event))
 app.querySelector('[data-compose]')?.addEventListener('click', openCompose)
 app.querySelector('[data-reply]')?.addEventListener('click', () => { void openDraft(false).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-reply-all]')?.addEventListener('click', () => { void openDraft(true).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })

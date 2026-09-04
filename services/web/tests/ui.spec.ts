@@ -206,6 +206,22 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await page.mouse.up()
   const after = await messagesPanel.boundingBox()
   expect(after!.width).toBeGreaterThan(before!.width + 30)
+  const agentPanel = page.getByRole('complementary', { name: 'Codex' })
+  const agentBefore = await agentPanel.boundingBox()
+  const agentDivider = await page.locator('[data-divider="agent"]').boundingBox()
+  expect(agentBefore).not.toBeNull()
+  expect(agentDivider).not.toBeNull()
+  await page.mouse.move(agentDivider!.x + 4, agentDivider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(agentDivider!.x - 42, agentDivider!.y + 100)
+  await page.mouse.up()
+  const agentAfter = await agentPanel.boundingBox()
+  expect(agentAfter!.width).toBeGreaterThan(agentBefore!.width + 30)
+  await page.reload()
+  const persistedMessages = await messagesPanel.boundingBox()
+  const persistedAgent = await agentPanel.boundingBox()
+  expect(persistedMessages!.width).toBeGreaterThan(before!.width + 30)
+  expect(persistedAgent!.width).toBeGreaterThan(agentBefore!.width + 30)
 })
 
 test('restores structured Codex history as readable text', async ({ page }) => {
@@ -217,6 +233,8 @@ test('restores structured Codex history as readable text', async ({ page }) => {
     thread: { turns: [{ items: [
       { type: 'userMessage', content: [{ type: 'input_text', text: 'Summarize this thread.' }] },
       { type: 'agentMessage', content: { type: 'output_text', text: '## Here is the summary.\n\n- First fact\n- Second fact\n\n| Source | Date |\n| --- | --- |\n| Gmail | Sep 3 |\n\n`thread/read`\n\n[Open evidence](https://example.com)' } },
+      { type: 'userMessage', content: [{ type: 'input_text', text: `Long context ${'x'.repeat(320)}` }] },
+      { type: 'agentMessage', content: { type: 'output_text', text: `Long response ${'y'.repeat(320)}\n\nhttps://example.com/${'path'.repeat(80)}` } },
     ] }] },
   } }))
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
@@ -229,6 +247,10 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   await expect(page.locator('.ai-response code')).toHaveText('thread/read')
   await expect(page.getByRole('link', { name: 'Open evidence' })).toHaveAttribute('target', '_blank')
   await expect(page.getByText('[object Object]', { exact: true })).toHaveCount(0)
+  expect(await page.locator('[data-agent-stream]').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  for (const message of await page.locator('.dispatch-agent-message').all()) {
+    expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  }
 })
 
 test('filters conversations by all, unread, and read state', async ({ page }) => {

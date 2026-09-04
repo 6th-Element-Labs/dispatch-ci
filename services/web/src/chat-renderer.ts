@@ -4,7 +4,7 @@ import { marked } from 'marked'
 export function renderChatMarkdown(value: string): HTMLElement {
   const root = document.createElement('div')
   root.className = 'markdown ai-response'
-  const rendered = marked.parse(value, { async: false, breaks: true, gfm: true }) as string
+  const rendered = marked.parse(value, { async: false, breaks: false, gfm: true }) as string
   root.innerHTML = DOMPurify.sanitize(rendered, { USE_PROFILES: { html: true } })
 
   root.querySelectorAll('table').forEach((table) => table.classList.add('table', 'table-sm', 'table-vcenter'))
