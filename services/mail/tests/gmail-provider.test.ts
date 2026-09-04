@@ -93,10 +93,22 @@ describe('GmailConnectorProvider', () => {
 
   it('paginates Gmail into the durable index and serves the indexed result', async () => {
     const requests: Array<{ labelIds?: string[]; nextPageToken?: string }> = []
+    let failSearch = false
+    let failInventory = false
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
-      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail') {
+        if (failInventory) {
+          response.statusCode = 502
+          return response.end(JSON.stringify({ error: 'inventory_failed' }))
+        }
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }] }))
+      }
       if (request.url === '/v1/connectors/gmail/search-messages') {
+        if (failSearch) {
+          response.statusCode = 502
+          return response.end(JSON.stringify({ error: 'connector_failed' }))
+        }
         const chunks: Buffer[] = []
         for await (const chunk of request) chunks.push(Buffer.from(chunk))
         const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { labelIds?: string[]; nextPageToken?: string }
@@ -122,6 +134,13 @@ describe('GmailConnectorProvider', () => {
     expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
     expect(requests.filter((request) => request.labelIds?.includes('INBOX'))).toHaveLength(2)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
+    failSearch = true
+    await expect(provider.syncNow()).rejects.toThrow('Gmail connector request failed (502)')
+    expect(provider.syncStatus()).toMatchObject({ state: 'failed', messageCount: 2 })
+    await expect(provider.listUnifiedConversations('all')).resolves.toHaveLength(2)
+    failInventory = true
+    await expect(provider.accounts()).resolves.toMatchObject([{ id: 'link-one', email: 'work@example.com' }])
+    expect(provider.syncStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Gmail account refresh failed') })
     provider.stopBackgroundSync()
   })
 })
