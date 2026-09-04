@@ -908,7 +908,7 @@ async function connectMail(): Promise<void> {
     if (accounts.length > 0) {
       const all = document.createElement('option')
       all.value = ''
-      all.textContent = accounts.length > 1 ? `All accounts (${accounts.length})` : 'All mail'
+      all.textContent = `All Gmail inboxes (${accounts.length})`
       all.selected = !selectedAccountId
       elements.account.replaceChildren(all, ...accounts.map((account) => {
         const option = document.createElement('option')

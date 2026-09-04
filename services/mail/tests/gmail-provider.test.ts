@@ -84,8 +84,7 @@ describe('GmailConnectorProvider', () => {
     await provider.listConversations('link-one', 'read', 1)
     expect(searches).toEqual([
       expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['INBOX'] }),
-      expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['UNREAD'] }),
-      expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['UNREAD'] }),
+      expect.objectContaining({ query: '-in:spam -in:trash is:unread', labelIds: ['INBOX', 'UNREAD'] }),
       expect.objectContaining({ query: '-in:spam -in:trash is:read', labelIds: ['INBOX'] }),
     ])
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })

@@ -77,6 +77,7 @@ test('renders a connector-selected Gmail account without trusting list markup', 
   await page.goto('/')
   await expect(page.locator('[data-mail-source]')).toHaveText(/^(Gmail connected|Gmail synced) · /)
   await expect(page.getByRole('combobox', { name: 'Gmail account' })).toHaveValue('')
+  await expect(page.getByRole('combobox', { name: 'Gmail account' }).locator('option').first()).toHaveText('All Gmail inboxes (1)')
   await expect(page.locator('[data-message-list] img')).toHaveCount(0)
   expect(await page.evaluate(() => (window as Window & { attacked?: boolean }).attacked)).not.toBe(true)
 })
