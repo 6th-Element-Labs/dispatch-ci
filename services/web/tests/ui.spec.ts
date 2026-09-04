@@ -230,6 +230,10 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await expect(agentPanel).toBeHidden()
   await codexToggle.click()
   await expect(agentPanel).toBeVisible()
+  await page.keyboard.press('Control+Backquote')
+  await expect(messagesPanel).toBeHidden()
+  await page.keyboard.press('Control+Backquote')
+  await expect(messagesPanel).toBeVisible()
 })
 
 test('uses one native Tabler pane at a time on mobile', async ({ page }) => {
@@ -250,6 +254,10 @@ test('uses one native Tabler pane at a time on mobile', async ({ page }) => {
   await page.getByRole('button', { name: 'Codex', exact: true }).click()
   await expect(agentPanel).toBeVisible()
   await expect(messagesPanel).toBeHidden()
+  await page.keyboard.press('Control+Backquote')
+  await expect(messagesPanel).toBeVisible()
+  await page.keyboard.press('Control+Backquote')
+  await expect(agentPanel).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 })
 

@@ -23,7 +23,7 @@ app.innerHTML = `
     <div class="dispatch-workspace">
       <nav class="dispatch-rail nav nav-pills flex-column bg-white" aria-label="Mail folders"><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
-        <div class="card-header dispatch-pane-heading"><div><h1 class="card-title mb-1" data-mailbox-title>Inbox</h1><span class="text-secondary" data-mail-source>Loading</span></div><div class="btn-list flex-nowrap"><button class="btn btn-icon btn-ghost-secondary dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" aria-label="Message filters"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button></div></div>
+        <div class="card-header dispatch-pane-heading"><div><h1 class="card-title mb-1" data-mailbox-title>Inbox</h1><span class="text-secondary" data-mail-source>Loading</span></div><div class="btn-list flex-nowrap"><button class="btn btn-icon btn-ghost-secondary dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" aria-label="Message filters"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button></div></div>
         <label class="dispatch-folder-select px-3 pt-3"><span class="form-label mb-1">Folder</span><select class="form-select form-select-sm" data-mailbox-select aria-label="Gmail folder"><option value="inbox">Inbox</option><option value="sent">Sent</option><option value="drafts">Drafts</option><option value="archive">Archive</option><option value="spam">Spam</option><option value="trash">Trash</option></select></label>
         <label class="dispatch-account px-3 pt-3" hidden><span class="form-label mb-1">Gmail account</span><select class="form-select form-select-sm" data-account aria-label="Gmail account"></select></label>
         <div class="btn-group mx-3 my-3 dispatch-mail-filters" role="group" aria-label="Message state"><button class="btn btn-sm active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="btn btn-sm" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="btn btn-sm" type="button" data-mail-state="read" aria-pressed="false">Read</button></div>
@@ -62,7 +62,7 @@ app.innerHTML = `
         </footer>
       </aside>
     </div>
-    <footer class="dispatch-statusbar border-top bg-white"><span class="text-secondary"><i class="ti ti-circle-check text-green me-1" aria-hidden="true"></i><span data-status-summary>Gmail and Codex status shown in each pane</span></span><div class="btn-group dispatch-panel-controls" role="group" aria-label="Visible panels"><button class="btn btn-sm active" type="button" data-panel="messages" aria-pressed="true">Messages</button><button class="btn btn-sm active" type="button" data-panel="reader" aria-pressed="true">Email</button><button class="btn btn-sm active" type="button" data-panel="agent" aria-pressed="true">Codex</button></div></footer>
+    <footer class="dispatch-statusbar border-top bg-white"><span class="text-secondary"><i class="ti ti-circle-check text-green me-1" aria-hidden="true"></i><span data-status-summary>Gmail and Codex status shown in each pane</span></span><div class="btn-group dispatch-panel-controls" role="group" aria-label="Visible panels"><button class="btn btn-sm active" type="button" data-panel="messages" aria-pressed="true" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)">Messages</button><button class="btn btn-sm active" type="button" data-panel="reader" aria-pressed="true">Email</button><button class="btn btn-sm active" type="button" data-panel="agent" aria-pressed="true">Codex</button></div></footer>
   </div>`
 
 const elements = {
@@ -154,6 +154,7 @@ let searchTimer: number | undefined
 let activeTurnId: string | undefined
 let selectedAttachmentContext: { messageId: string; attachmentId: string; filename: string } | undefined
 let mobilePanel: PanelName = 'messages'
+let mobileReturnPanel: Exclude<PanelName, 'messages'> = 'reader'
 
 type PanelName = 'messages' | 'reader' | 'agent'
 interface PanelState {
@@ -435,6 +436,7 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   const sequence = ++selectionSequence
   if (revealOnMobile && usesMobilePanels()) {
     mobilePanel = 'reader'
+    mobileReturnPanel = 'reader'
     renderPanels()
   }
   selectedConversationId = id
@@ -592,6 +594,7 @@ function openCompose(): void {
   selectedConversationId = undefined
   if (usesMobilePanels()) {
     mobilePanel = 'reader'
+    mobileReturnPanel = 'reader'
     renderPanels()
   }
   elements.subject.textContent = 'New message'
@@ -1250,6 +1253,7 @@ app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => butt
   const name = button.dataset.panel as PanelName
   if (usesMobilePanels()) {
     mobilePanel = name
+    if (name !== 'messages') mobileReturnPanel = name
     renderPanels()
     return
   }
@@ -1276,7 +1280,7 @@ elements.spam.addEventListener('click', () => { void mutateSelected('spam') })
 elements.trash.addEventListener('click', () => { void mutateSelected('trash') })
 elements.moveInbox.addEventListener('click', () => { void mutateSelected('inbox') })
 app.querySelector('[data-ask]')?.addEventListener('click', () => {
-  if (usesMobilePanels()) { mobilePanel = 'agent'; renderPanels() }
+  if (usesMobilePanels()) { mobilePanel = 'agent'; mobileReturnPanel = 'agent'; renderPanels() }
   elements.prompt.focus()
 })
 app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
@@ -1298,6 +1302,20 @@ elements.prompt.addEventListener('keydown', (event) => {
   }
 })
 window.addEventListener('resize', renderPanels)
+window.addEventListener('keydown', (event) => {
+  if (!event.ctrlKey || event.metaKey || event.altKey || event.code !== 'Backquote') return
+  event.preventDefault()
+  if (usesMobilePanels()) {
+    if (mobilePanel === 'messages') mobilePanel = selectedConversationId || activeDraft ? mobileReturnPanel : 'agent'
+    else {
+      mobileReturnPanel = mobilePanel
+      mobilePanel = 'messages'
+    }
+  } else {
+    panels.messages = !panels.messages
+  }
+  renderPanels()
+})
 
 renderMailbox()
 renderPanels()
