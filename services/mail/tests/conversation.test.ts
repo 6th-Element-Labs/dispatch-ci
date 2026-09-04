@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { groupConversations } from '../src/conversation.js'
-import type { MessageSummary } from '../src/model.js'
+import { groupConversations, projectConversation } from '../src/conversation.js'
+import type { MessageProjection, MessageSummary } from '../src/model.js'
 
 const base: MessageSummary = {
   id: 'm1', threadId: 't1', sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' }, subject: 'Hello',
@@ -22,5 +22,11 @@ describe('conversation projection', () => {
   it('filters read and unread conversations', () => {
     expect(groupConversations([base, { ...base, id: 'm2', threadId: 't2', unread: true }], 'read')).toHaveLength(1)
     expect(groupConversations([base, { ...base, id: 'm2', threadId: 't2', unread: true }], 'unread')).toHaveLength(1)
+  })
+
+  it('renders full conversation messages newest first', () => {
+    const message = { ...base, body: { kind: 'plain-text' as const, content: 'Hello' }, attachments: [], source: 'gmail' as const }
+    const conversation = projectConversation([message, { ...message, id: 'm2', receivedAt: '2026-09-04T09:00:00Z' } satisfies MessageProjection], 'gmail')
+    expect(conversation.messages.map((item) => item.id)).toEqual(['m2', 'm1'])
   })
 })

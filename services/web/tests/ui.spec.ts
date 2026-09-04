@@ -44,14 +44,23 @@ test('renders the three-panel mail surface and sanitizes provider HTML', async (
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Codex' })).toBeVisible()
+  await expect(page.getByText('GPT-5.6 Sol · Medium')).toBeVisible()
   await expect(page.locator('[data-context]')).toContainText('Opua berth confirmation · Ana Morales')
   await expect(page.locator('[data-conversation-id="demo:t1"] time')).toHaveText('Sep 4, 9:42 AM')
   await expect(page.locator('[data-time]')).toHaveText('September 4, 2026 at 9:42 AM')
   await expect(page.locator('[data-body] script')).toHaveCount(0)
   await expect(page.locator('.dispatch-thread-message')).toHaveCount(2)
   await expect(page.getByText('Quoted history')).toHaveCount(2)
-  await expect(page.locator('.dispatch-thread-message time').first()).toHaveText('September 3, 2026 at 7:30 AM')
+  await expect(page.locator('.dispatch-thread-message time').first()).toHaveText('September 4, 2026 at 9:42 AM')
   await expect(page.locator('[data-agent-status]')).toHaveText('Reconnecting')
+})
+
+test('shows a live Tabler activity indicator while Codex is working', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => { const status = document.querySelector('[data-agent-status]'); if (status) status.textContent = 'Working' })
+  await expect(page.locator('[data-agent-activity]')).toBeVisible()
+  await page.evaluate(() => { const status = document.querySelector('[data-agent-status]'); if (status) status.textContent = 'Connected' })
+  await expect(page.locator('[data-agent-activity]')).toBeHidden()
 })
 
 test('changes selection and opens a mail-service-owned draft', async ({ page }) => {
@@ -161,6 +170,7 @@ test('updates read state only after the Gmail command is accepted', async ({ pag
   await page.goto('/')
   await page.getByRole('button', { name: 'Mark read' }).click()
   await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
+  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible()
 })
 
 test('edits, saves, and sends a Gmail draft from the middle panel', async ({ page }) => {
@@ -355,6 +365,20 @@ test('shows cached conversations immediately while Gmail refreshes', async ({ pa
   await expect(page.locator('[data-mail-source]')).toHaveText(/^Refreshing · cached /)
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await expect(page.locator('[data-mail-source]')).toHaveText('Demo mail')
+})
+
+test('Refresh fetches Gmail heads and preserves the selected thread', async ({ page }) => {
+  let refreshed = false
+  await page.route('http://127.0.0.1:8411/v1/sync', async (route) => {
+    refreshed = true
+    await route.fulfill({ json: { sync: { state: 'ready', startedAt: '2026-09-05T09:10:00Z', completedAt: '2026-09-05T09:10:02Z', error: null, messageCount: 3 } } })
+  })
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await page.getByRole('button', { name: 'Refresh' }).click()
+  await expect.poll(() => refreshed).toBe(true)
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Refresh' })).toBeEnabled()
 })
 
 test('derives an immediate unread view from the cached All inbox', async ({ page }) => {

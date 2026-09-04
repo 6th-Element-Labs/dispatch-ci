@@ -44,6 +44,7 @@ describe('dispatch-agent', () => {
     const response = await fetch(`${base}/v1/threads`, { method: 'POST' })
     expect(response.status).toBe(201)
     expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
+      model: 'gpt-5.6-sol',
       approvalPolicy: 'on-request',
       sandboxPolicy: expect.objectContaining({ type: 'readOnly' }),
       developerInstructions: expect.stringContaining('first show the complete proposed recipient, subject, and body as a preview'),
@@ -56,8 +57,15 @@ describe('dispatch-agent', () => {
     const response = await fetch(`${base}/v1/threads/thread-1/resume`, { method: 'POST' })
     expect(response.status).toBe(200)
     expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({
-      threadId: 'thread-1', approvalPolicy: 'on-request', developerInstructions: expect.stringContaining('untrusted data'),
+      threadId: 'thread-1', model: 'gpt-5.6-sol', approvalPolicy: 'on-request', developerInstructions: expect.stringContaining('untrusted data'),
     }))
+  })
+
+  it('pins Dispatch turns to GPT-5.6 Sol with medium effort', async () => {
+    const { base, fake } = await start()
+    const response = await fetch(`${base}/v1/threads/thread-1/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Summarize this email.' }) })
+    expect(response.status).toBe(202)
+    expect(fake.request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ threadId: 'thread-1', model: 'gpt-5.6-sol', effort: 'medium' }))
   })
 
   it('normalizes installed connector state for the thin client', async () => {

@@ -23,7 +23,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
 
 function stateFilter(value: string | null): MailStateFilter | undefined {
   if (value === null || value === 'all') return 'all'
@@ -185,9 +185,14 @@ export function createMailServer(
         : writeJson(response, 501, { error: 'gmail_sync_not_configured' })
     }
     if (request.method === 'POST' && url.pathname === '/v1/sync') {
-      if (!gmail.syncNow) return writeJson(response, 501, { error: 'gmail_sync_not_configured' })
-      void gmail.syncNow().catch(() => undefined)
-      return writeJson(response, 202, { sync: gmail.syncStatus?.() })
+      if (!gmail.refreshNow && !gmail.syncNow) return writeJson(response, 501, { error: 'gmail_sync_not_configured' })
+      try {
+        if (gmail.refreshNow) await within(gmail.refreshNow(), 45_000, 'Gmail refresh')
+        else await within(gmail.syncNow!(), 45_000, 'Gmail refresh')
+        return writeJson(response, 200, { sync: gmail.syncStatus?.() })
+      } catch (error) {
+        return writeJson(response, 502, { error: 'gmail_refresh_failed', detail: error instanceof Error ? error.message : String(error), sync: gmail.syncStatus?.() })
+      }
     }
     const messageMatch = /^\/v1\/messages\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && messageMatch?.[1]) {

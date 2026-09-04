@@ -56,6 +56,8 @@ const dispatchInstructions = [
   'Require the normal user approval flow for external actions, file changes, commands, and requested permissions.',
   'Keep the user informed while work is in progress and provide a clear final answer when the turn completes.',
 ].join(' ')
+const dispatchModel = 'gpt-5.6-sol'
+const dispatchEffort = 'medium'
 
 async function readApps(runtime: AgentRuntime): Promise<unknown> {
   try {
@@ -320,6 +322,7 @@ export function createAgentServer(runtime: AgentRuntime) {
     if (request.method === 'POST' && url.pathname === '/v1/threads') {
       try {
         return json(response, 201, await runtime.request('thread/start', {
+          model: dispatchModel,
           cwd: process.cwd(),
           approvalPolicy: 'on-request',
           sandboxPolicy: { type: 'readOnly', access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [] } },
@@ -336,6 +339,7 @@ export function createAgentServer(runtime: AgentRuntime) {
       try {
         return json(response, 200, await runtime.request('thread/resume', {
           threadId: decodeURIComponent(resumeMatch[1]),
+          model: dispatchModel,
           approvalPolicy: 'on-request',
           developerInstructions: dispatchInstructions,
         }))
@@ -393,6 +397,8 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 202, await runtime.request('turn/start', {
           threadId: decodeURIComponent(turnMatch[1]),
           input,
+          model: dispatchModel,
+          effort: dispatchEffort,
           approvalPolicy: 'on-request',
         }))
       } catch (error) {

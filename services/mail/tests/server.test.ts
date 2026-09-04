@@ -112,6 +112,26 @@ describe('dispatch-mail', () => {
     ])
   })
 
+  it('waits for an authoritative Gmail head refresh', async () => {
+    let refreshed = false
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      refreshNow: async () => { refreshed = true },
+      syncStatus: () => ({ state: 'ready', startedAt: '2026-09-05T09:10:00Z', completedAt: '2026-09-05T09:10:02Z', error: null, messageCount: 1 }),
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${base}/v1/sync`, { method: 'POST' })
+    expect(response.status).toBe(200)
+    expect(refreshed).toBe(true)
+    await expect(response.json()).resolves.toMatchObject({ sync: { state: 'ready', messageCount: 1 } })
+  })
+
   it('fails visibly instead of substituting demo mail when Gmail is disconnected', async () => {
     const server = createMailServer({
       accounts: async () => [],

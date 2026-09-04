@@ -116,7 +116,7 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
   const message = structured(value)
   const payload = record(message.payload) ?? {}
   const messageHeaders = headers(payload)
-  if (!Array.isArray(message.label_ids)) throw new Error('Gmail message is missing label_ids')
+  if (message.label_ids !== null && message.label_ids !== undefined && !Array.isArray(message.label_ids)) throw new Error('Gmail message label_ids must be an array or null')
   if (!messageHeaders.get('from')) throw new Error('Gmail message is missing its From header')
   const receivedAt = received(text(message.internal_date) || messageHeaders.get('date') || '')
   const projection: MessageProjection = {
@@ -169,8 +169,10 @@ export class GmailConnectorProvider {
   readonly #agentBase: string
   readonly #index: GmailIndex | undefined
   readonly #syncIntervalMs: number
+  readonly #refreshIntervalMs: number
   #syncPromise: Promise<void> | undefined
   #syncTimer: ReturnType<typeof setInterval> | undefined
+  #refreshTimer: ReturnType<typeof setInterval> | undefined
   #retryTimer: ReturnType<typeof setTimeout> | undefined
   #stopped = false
   readonly #mailboxCache = new Map<string, { expiresAt: number; conversations: readonly ConversationSummary[] }>()
@@ -178,7 +180,7 @@ export class GmailConnectorProvider {
 
   constructor(
     agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412',
-    options: { indexPath?: string | false; syncIntervalMs?: number } = {},
+    options: { indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number } = {},
   ) {
     this.#agentBase = agentBase
     const indexPath = options.indexPath === false
@@ -186,21 +188,27 @@ export class GmailConnectorProvider {
       : options.indexPath ?? process.env.DISPATCH_MAIL_DB ?? defaultIndexPath()
     this.#index = indexPath ? new GmailIndex(indexPath) : undefined
     this.#syncIntervalMs = options.syncIntervalMs ?? 300_000
+    this.#refreshIntervalMs = options.refreshIntervalMs ?? 60_000
   }
 
   startBackgroundSync(): void {
     if (!this.#index || this.#syncTimer) return
     this.#stopped = false
-    if (this.#index.count() > 0) this.#scheduleSync()
+    if (this.#index.count() > 0) void this.refreshNow().catch(() => this.#scheduleSync(5_000))
+    else this.#scheduleSync()
     this.#syncTimer = setInterval(() => { this.#scheduleSync() }, this.#syncIntervalMs)
     this.#syncTimer.unref()
+    this.#refreshTimer = setInterval(() => { void this.refreshNow().catch(() => undefined) }, this.#refreshIntervalMs)
+    this.#refreshTimer.unref()
   }
 
   stopBackgroundSync(): void {
     this.#stopped = true
     if (this.#syncTimer) clearInterval(this.#syncTimer)
+    if (this.#refreshTimer) clearInterval(this.#refreshTimer)
     if (this.#retryTimer) clearTimeout(this.#retryTimer)
     this.#syncTimer = undefined
+    this.#refreshTimer = undefined
     this.#retryTimer = undefined
     this.#index?.close()
   }
@@ -212,6 +220,40 @@ export class GmailConnectorProvider {
 
   async syncNow(): Promise<void> {
     return this.#synchronize(100, true)
+  }
+
+  async refreshNow(): Promise<void> {
+    if (!this.#index || this.#index.count() === 0) return this.syncNow()
+    if (this.#syncPromise) return this.#syncPromise
+    this.#syncPromise = (async () => {
+      const startedAt = new Date().toISOString()
+      const runId = `${startedAt}:${randomUUID()}`
+      this.#index!.beginSync(startedAt)
+      try {
+        const accounts = await this.accounts()
+        if (accounts.length === 0) throw new Error('Cannot refresh Gmail: no connector accounts are available')
+        this.#index!.replaceAccounts(accounts, startedAt)
+        this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
+        const pages = await Promise.all(accounts.map(async (account) => {
+          const page = await this.#searchPage(account, 50, '-in:spam -in:trash', ['INBOX'], '')
+          this.#syncProgress.pagesFetched += 1
+          this.#syncProgress.fetchedMessages += page.messages.length
+          return { account, messages: page.messages }
+        }))
+        for (const page of pages) {
+          this.#syncProgress.currentAccount = page.account.name
+          this.#index!.replaceAccount(page.account.id, page.messages, runId, false)
+          this.#syncProgress.accountsCompleted += 1
+        }
+        this.#syncProgress.currentAccount = null
+        this.#index!.pruneAccounts(accounts.map((account) => account.id))
+        this.#index!.completeSync(new Date().toISOString(), true)
+      } catch (error) {
+        this.#index!.failSync(error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    })().finally(() => { this.#syncPromise = undefined })
+    return this.#syncPromise
   }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {

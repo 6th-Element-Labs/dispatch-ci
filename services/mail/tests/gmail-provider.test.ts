@@ -38,6 +38,7 @@ describe('GmailConnectorProvider', () => {
       body: { kind: 'sanitized-html', content: '<p>Hello.</p>' },
       attachments: [{ id: 'a1', name: 'arrival.pdf', sizeLabel: '824 KB' }], source: 'gmail',
     })
+    expect(projectGmailMessage({ structuredContent: { ...gmailMessage.structuredContent, label_ids: null } }, true)).toMatchObject({ id: 'gmail-message-1', unread: false })
   })
 
   it('projects bounded Gmail search results without a second read call', () => {
@@ -146,6 +147,9 @@ describe('GmailConnectorProvider', () => {
     expect(await provider.listUnifiedConversations('unread')).toHaveLength(0)
     expect(requests.filter((request) => request.labelIds?.includes('INBOX'))).toHaveLength(2)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
+    await provider.refreshNow()
+    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 2, pagesFetched: 1 })
+    expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
     failSearch = true
     await expect(provider.syncNow()).rejects.toThrow('Gmail connector request failed (502)')
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', messageCount: 2 })

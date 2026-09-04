@@ -54,7 +54,7 @@ app.innerHTML = `
       </main>
       <div class="dispatch-divider" data-divider="agent" role="separator" tabindex="0" aria-label="Resize Codex panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <aside class="card rounded-0 border-0 dispatch-agent" aria-label="Codex">
-        <header class="card-header"><div class="d-flex align-items-center w-100"><span class="avatar avatar-sm bg-dark text-white me-2">✦</span><strong>Codex</strong><span class="badge bg-secondary-lt ms-auto" data-agent-status>Connecting</span></div><div class="alert alert-info mt-3 mb-0 py-2 px-3 dispatch-context" data-context>No email selected</div></header>
+        <header class="card-header"><div class="d-flex align-items-center w-100"><span class="avatar avatar-sm bg-dark text-white me-2">✦</span><strong>Codex</strong><span class="badge bg-blue-lt text-blue ms-2" title="Pinned Dispatch model">GPT-5.6 Sol · Medium</span><span class="badge bg-secondary-lt ms-auto" aria-live="polite" data-agent-status>Connecting</span></div><div class="alert alert-info mt-3 mb-0 py-2 px-3 dispatch-context" data-context>No email selected</div><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div></header>
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
           <div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
@@ -97,6 +97,7 @@ const elements = {
   draftBody: app.querySelector<HTMLTextAreaElement>('[data-draft-body]')!,
   context: app.querySelector<HTMLElement>('[data-context]')!,
   agentStatus: app.querySelector<HTMLElement>('[data-agent-status]')!,
+  agentActivity: app.querySelector<HTMLElement>('[data-agent-activity]')!,
   connector: app.querySelector<HTMLElement>('[data-connector]')!,
   stream: app.querySelector<HTMLElement>('[data-agent-stream]')!,
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
@@ -118,6 +119,7 @@ function renderServiceStatus(): void {
   else if (status === 'Needs attention') elements.agentStatus.classList.add('bg-yellow-lt', 'text-yellow')
   else if (status === 'Failed') elements.agentStatus.classList.add('bg-red-lt', 'text-red')
   else elements.agentStatus.classList.add('bg-secondary-lt')
+  elements.agentActivity.hidden = status !== 'Working'
   elements.statusSummary.textContent = `${elements.mailSource.textContent?.trim() || 'Gmail loading'} · Codex ${status || 'connecting'}`
 }
 
@@ -147,6 +149,7 @@ let agentEvents: EventSource | undefined
 let reconnectTimer: number | undefined
 let agentConnecting = false
 let syncStatusTimer: number | undefined
+let observedSyncCompletedAt: string | null | undefined
 let syncErrorVisible = false
 let mailReconnectTimer: number | undefined
 let searchQuery = ''
@@ -484,7 +487,8 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
     elements.time.textContent = conversation.receivedFullLabel
     elements.time.dateTime = conversation.receivedAt
     elements.context.textContent = `Working with · ${contextLabel(conversation)}`
-    elements.body.replaceChildren(...conversation.messages.map(renderThreadMessage))
+    const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
+    elements.body.replaceChildren(...newestFirst.map(renderThreadMessage))
     prefetchConversations(id)
   } catch (error) {
     if (sequence !== selectionSequence) return
@@ -508,7 +512,7 @@ async function toggleReadState(): Promise<void> {
     conversations = conversations.map((conversation) => conversation.id === selected?.id ? { ...conversation, unread: nextUnread } : conversation)
     elements.readState.textContent = nextUnread ? 'Mark read' : 'Mark unread'
     renderList()
-    void loadConversations()
+    void loadConversations(true)
   } catch (error) {
     elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
     elements.mailError.hidden = false
@@ -1048,28 +1052,30 @@ async function sendPrompt(): Promise<void> {
   }
 }
 
-async function loadConversations(): Promise<void> {
+async function loadConversations(preserveSelection = false): Promise<void> {
   const loadSequence = ++conversationLoadSequence
   const cacheKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailbox}:${mailState}:${searchQuery}`
   let usedCache = false
   let cacheConfirmedAt: number | undefined
-  try {
-    const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[]; nextCursor?: string | null; total?: number } | null
-    if (cached?.savedAt && Date.now() - cached.savedAt < 86_400_000 && Array.isArray(cached.conversations)) {
-      conversations = cached.conversations
-      usedCache = true
-      cacheConfirmedAt = cached.savedAt
-      nextConversationCursor = cached.nextCursor ?? null
-      conversationTotal = cached.total ?? cached.conversations.length
-    } else {
+  if (!preserveSelection) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[]; nextCursor?: string | null; total?: number } | null
+      if (cached?.savedAt && Date.now() - cached.savedAt < 86_400_000 && Array.isArray(cached.conversations)) {
+        conversations = cached.conversations
+        usedCache = true
+        cacheConfirmedAt = cached.savedAt
+        nextConversationCursor = cached.nextCursor ?? null
+        conversationTotal = cached.total ?? cached.conversations.length
+      } else {
+        conversations = []
+        nextConversationCursor = null
+        conversationTotal = 0
+      }
+    } catch {
       conversations = []
-      nextConversationCursor = null
-      conversationTotal = 0
     }
-  } catch {
-    conversations = []
   }
-  if (!usedCache && mailbox === 'inbox' && mailState !== 'all' && !searchQuery) {
+  if (!preserveSelection && !usedCache && mailbox === 'inbox' && mailState !== 'all' && !searchQuery) {
     try {
       const allKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:inbox:all:`
       const cachedAll = JSON.parse(localStorage.getItem(allKey) ?? 'null') as { savedAt?: number; conversations?: ConversationSummary[]; total?: number } | null
@@ -1089,19 +1095,21 @@ async function loadConversations(): Promise<void> {
     : ''
   elements.mailSource.textContent = usedCache ? `Refreshing · cached ${cacheLabel}` : 'Loading'
   elements.mailError.hidden = true
-  selected = undefined
-  selectedConversationId = undefined
-  selectionSequence += 1
-  elements.reader.hidden = true
-  elements.readerEmpty.hidden = false
-  elements.readerEmpty.textContent = usedCache && conversations.length > 0 ? 'Select a message' : `Loading ${mailState === 'all' ? '' : `${mailState} `}${mailboxLabels[mailbox].toLowerCase()}…`
+  if (!preserveSelection) {
+    selected = undefined
+    selectedConversationId = undefined
+    selectionSequence += 1
+    elements.reader.hidden = true
+    elements.readerEmpty.hidden = false
+    elements.readerEmpty.textContent = usedCache && conversations.length > 0 ? 'Select a message' : `Loading ${mailState === 'all' ? '' : `${mailState} `}${mailboxLabels[mailbox].toLowerCase()}…`
+  }
   app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => {
     const active = button.dataset.mailState === mailState
     button.setAttribute('aria-pressed', String(active))
     button.classList.toggle('active', active)
   })
   renderList(usedCache ? defaultEmptyListMessage() : 'Loading messages…')
-  if (usedCache && conversations[0]) void selectConversation(conversations[0].id)
+  if (usedCache && conversations[0] && !preserveSelection) void selectConversation(conversations[0].id)
   try {
     const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery, mailbox)
     if (loadSequence !== conversationLoadSequence) return
@@ -1170,6 +1178,9 @@ async function refreshSyncStatus(): Promise<void> {
       elements.mailSource.textContent = `Gmail synced · ${syncTime(sync.completedAt)}`
       if (syncErrorVisible) elements.mailError.hidden = true
       syncErrorVisible = false
+      const changed = observedSyncCompletedAt !== undefined && sync.completedAt !== observedSyncCompletedAt
+      observedSyncCompletedAt = sync.completedAt
+      if (changed && mailbox === 'inbox') void loadConversations(true)
       if (mailState === 'all' && conversations.length === 0) void loadConversations()
     }
   } catch (error) {
@@ -1225,7 +1236,18 @@ async function start(): Promise<void> {
   await Promise.all([connectMail(), connectAgent()])
 }
 
-app.querySelector('[data-refresh]')?.addEventListener('click', () => location.reload())
+app.querySelector<HTMLButtonElement>('[data-refresh]')?.addEventListener('click', (event) => {
+  const button = event.currentTarget as HTMLButtonElement
+  button.disabled = true
+  elements.mailSource.textContent = 'Refreshing Gmail…'
+  void api.refreshMail().then((sync) => {
+    observedSyncCompletedAt = sync.completedAt
+    return loadConversations(true)
+  }).catch((error) => {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+  }).finally(() => { button.disabled = false })
+})
 elements.account.addEventListener('change', () => {
   selectedAccountId = elements.account.value || undefined
   void loadConversations()

@@ -39,7 +39,6 @@ export function groupConversations(messages: readonly MessageSummary[], state: M
 }
 
 export function projectConversation(messages: readonly MessageProjection[], source: 'demo' | 'gmail'): ConversationProjection {
-  const ordered = [...messages].sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt))
-  return { ...summarizeConversation(ordered), messageCount: ordered.length, messages: ordered, source }
+  const chronological = [...messages].sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt))
+  return { ...summarizeConversation(chronological), messageCount: chronological.length, messages: chronological.reverse(), source }
 }
-
