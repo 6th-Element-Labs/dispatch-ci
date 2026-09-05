@@ -1,0 +1,67 @@
+name: native
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "services/**"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-shell:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Install workspace dependencies
+        run: |
+          set -euo pipefail
+          for dir in services/web services/mail services/agent apps/desktop; do
+            npm --prefix "$dir" ci --prefer-offline --no-audit --no-fund
+          done
+
+      - name: Fetch the pinned Node sidecar
+        run: npm --prefix apps/desktop run fetch-node
+
+      - name: Stage the web client and services for the Tauri build script
+        run: npm --prefix apps/desktop run stage
+
+      - name: Rust unit tests
+        run: npm --prefix apps/desktop run test:native
+
+      - name: Build Dispatch.app
+        run: npm --prefix apps/desktop run build:native -- --bundles app
+
+      - name: Assert the bundle carries its sidecar and services
+        run: |
+          set -euo pipefail
+          app="apps/desktop/src-tauri/target/release/bundle/macos/Dispatch.app"
+          test -x "$app/Contents/MacOS/node"
+          test -f "$app/Contents/Resources/services/mail/server.js"
+          test -f "$app/Contents/Resources/services/agent/server.js"

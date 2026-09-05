@@ -359,4 +359,21 @@ describe('dispatch-agent', () => {
     expect(response.status).toBe(200)
     expect(fake.respond).toHaveBeenCalledWith('approval-1', { decision: 'decline' })
   })
+  it('allows the browser origin by default and honors DISPATCH_ALLOWED_ORIGIN', async () => {
+    const { base } = await start()
+    expect((await fetch(`${base}/health`)).headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:8410')
+    vi.stubEnv('DISPATCH_ALLOWED_ORIGIN', 'tauri://localhost')
+    vi.resetModules()
+    try {
+      const { createAgentServer: fresh } = await import('../src/server.js')
+      const server = fresh(runtime())
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const port = (server.address() as AddressInfo).port
+      expect((await fetch(`http://127.0.0.1:${port}/health`)).headers.get('access-control-allow-origin')).toBe('tauri://localhost')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
 })

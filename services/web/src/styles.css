@@ -10,6 +10,8 @@ button { cursor: pointer; }
 .dispatch-titlebar .container-fluid { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 520px) minmax(180px, 1fr); gap: 1rem; }
 .dispatch-titlebar .navbar-brand { display: flex; align-items: center; gap: .65rem; }
 .dispatch-titlebar .navbar-brand strong { font-size: 1rem; }
+.dispatch-native .dispatch-titlebar { -webkit-user-select: none; user-select: none; }
+.dispatch-native .dispatch-titlebar .container-fluid { padding-left: 84px; }
 .dispatch-search { width: 100%; margin: 0; }
 
 .dispatch-workspace { min-height: 0; display: grid; background: var(--tblr-bg-surface); }

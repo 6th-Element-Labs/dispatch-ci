@@ -6,15 +6,16 @@ import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
-import { contextLabel, gmailAppId } from './model.js'
+import { contextLabel, gmailAppId, isNativeShell } from './model.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
 if (!appElement) throw new Error('Dispatch app root is missing')
 const app: HTMLDivElement = appElement
+if (isNativeShell(window as { isTauri?: unknown })) document.documentElement.classList.add('dispatch-native')
 
 app.innerHTML = `
   <div class="page dispatch-window">
-    <header class="navbar navbar-expand-md d-print-none dispatch-titlebar">
+    <header class="navbar navbar-expand-md d-print-none dispatch-titlebar" data-tauri-drag-region>
       <div class="container-fluid">
         <div class="navbar-brand navbar-brand-autodark m-0"><span class="avatar avatar-sm bg-blue text-white">D</span><strong>Dispatch</strong><span class="badge bg-blue-lt text-blue">All Gmail inboxes</span></div>
         <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control" placeholder="Search Gmail" aria-label="Search mail"></label>

@@ -33,6 +33,20 @@ Open `http://127.0.0.1:8410`.
 
 The mail surface uses the connector-selected Gmail account when available and labels fixture data as demo mail otherwise. The agent service uses the installed Codex App Server. Sending a chat message can consume Codex usage. Gmail write actions are not enabled yet.
 
+## Run as a macOS app
+
+`apps/desktop` wraps the same services in a Tauri window. The app bundles its own Node runtime and starts `dispatch-mail` and `dispatch-agent` as sidecars; it still needs an installed `codex` CLI.
+
+```bash
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run fetch-node
+npm --prefix apps/desktop run build:native
+```
+
+`build:native` stages the services itself. To run the Rust unit tests alone, run `npm --prefix apps/desktop run stage` first; Tauri's build script requires the staged resources to exist.
+
+The bundle lands under `apps/desktop/src-tauri/target/release/bundle`. Service output goes to `~/Library/Logs/Dispatch`. If port 8411 or 8412 is already in use, for example by `scripts/dev.sh`, the app reports the conflict and exits instead of attaching to it. `npm --prefix apps/desktop run dev:native` runs the window against the Vite dev server with real sidecars.
+
 ## Verify
 
 ```bash

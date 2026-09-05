@@ -29,6 +29,7 @@ Reuse suitable SimpleMark patterns for the Tauri/Vite/WebKit shell, native windo
 - `services/mail`: message and draft projections; demo data is explicit until Gmail coverage is proved.
 - `services/agent`: Codex App Server process, JSON-RPC, threads, turns, apps, and event streaming.
 - `contracts`: transport schemas only; no shared domain behavior.
+- `apps/desktop`: native macOS shell composition only (Tauri window, sidecar supervision, menus). No mail, agent, or presentation logic.
 
 ## Validation
 

@@ -7,11 +7,12 @@ import { GmailConnectorProvider } from './gmail-provider.js'
 import type { DraftAttachment, GmailConversationAction, GmailMailbox, MailStateFilter } from './model.js'
 
 const provider = new DemoMailProvider()
+const allowedOrigin = process.env.DISPATCH_ALLOWED_ORIGIN ?? 'http://127.0.0.1:8410'
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': 'http://127.0.0.1:8410',
+    'access-control-allow-origin': allowedOrigin,
     'access-control-allow-headers': 'content-type',
     'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
   })

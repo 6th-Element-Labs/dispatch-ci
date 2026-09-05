@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import { projectDraft } from '../src/draft.js'
 import { createMailServer } from '../src/server.js'
@@ -375,5 +375,30 @@ describe('dispatch-mail', () => {
     const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/ready`)
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toMatchObject({ error: 'gmail_sync_failed', detail: 'page token repeated' })
+  })
+  it('allows the browser origin by default and honors DISPATCH_ALLOWED_ORIGIN', async () => {
+    const base = await start()
+    expect((await fetch(`${base}/health`)).headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:8410')
+    vi.stubEnv('DISPATCH_ALLOWED_ORIGIN', 'tauri://localhost')
+    vi.resetModules()
+    try {
+      const { createMailServer: fresh } = await import('../src/server.js')
+      const server = fresh({
+        accounts: async () => [],
+        listMessages: async () => [],
+        listUnifiedMessages: async () => [],
+        readMessage: async () => { throw new Error('not configured') },
+        listConversations: async () => [],
+        listUnifiedConversations: async () => [],
+        readConversation: async () => { throw new Error('not configured') },
+      }, { demoEnabled: true })
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const port = (server.address() as AddressInfo).port
+      expect((await fetch(`http://127.0.0.1:${port}/health`)).headers.get('access-control-allow-origin')).toBe('tauri://localhost')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
   })
 })

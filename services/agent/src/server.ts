@@ -14,10 +14,12 @@ interface AgentRuntime {
   close(): void
 }
 
+const allowedOrigin = process.env.DISPATCH_ALLOWED_ORIGIN ?? 'http://127.0.0.1:8410'
+
 function headers(contentType = 'application/json; charset=utf-8') {
   return {
     'content-type': contentType,
-    'access-control-allow-origin': 'http://127.0.0.1:8410',
+    'access-control-allow-origin': allowedOrigin,
     'access-control-allow-headers': 'content-type',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
   }
