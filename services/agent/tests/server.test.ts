@@ -47,7 +47,10 @@ describe('dispatch-agent', () => {
       model: 'gpt-5.6-sol',
       approvalPolicy: 'on-request',
       sandboxPolicy: expect.objectContaining({ type: 'readOnly' }),
-      developerInstructions: expect.stringContaining('first show the complete proposed recipient, subject, and body as a preview'),
+      developerInstructions: expect.stringContaining('Never call gmail.send_draft'),
+    }))
+    expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
+      developerInstructions: expect.stringContaining('update that Gmail draft id'),
     }))
   })
 
@@ -159,6 +162,153 @@ describe('dispatch-agent', () => {
     expect((await fetch(`${base}/v1/connectors/gmail/delete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', messageIds: ['m1'] }) })).status).toBe(200)
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ tool: 'gmail.archive_emails', arguments: { link_id: 'link-one', thread_ids: ['t1'] } }))
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ tool: 'gmail.delete_emails', arguments: { link_id: 'link-one', message_ids: ['m1'] } }))
+  })
+
+  it('sends HTML and Markdown payloads for Gmail drafts and forbids Codex sending', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/drafts/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', to: 'to@example.com', subject: 'Hello', bodyMarkdown: '**Hi**', bodyHtml: '<p><strong>Hi</strong></p>' }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      arguments: expect.objectContaining({
+        payload: { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p><strong>Hi</strong></p>' } },
+        text_plain: '**Hi**',
+      }),
+    }))
+
+    await fetch(`${base}/v1/threads`, { method: 'POST' })
+    expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
+      developerInstructions: expect.stringContaining('Never call gmail.send_draft'),
+    }))
+  })
+
+  it('updates a Gmail draft with HTML and plain-text payloads', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/drafts/update`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-1', subject: 'Updated', bodyMarkdown: '**Updated**', bodyHtml: '<p><strong>Updated</strong></p>' }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.update_draft',
+      arguments: expect.objectContaining({
+        payload: { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p><strong>Updated</strong></p>' } },
+        text_plain: '**Updated**',
+      }),
+    }))
+  })
+
+  it('lists Gmail drafts through the connector with pagination', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.list_drafts': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      if (method === 'mcpServer/tool/call') return { structuredContent: { drafts: [] } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/drafts/list`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', maxResults: 25, nextPageToken: 'next-1' }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      server: 'codex_apps',
+      tool: 'gmail.list_drafts',
+      arguments: { link_id: 'link-one', max_results: 25, next_page_token: 'next-1' },
+    }))
+  })
+
+  it('rejects Gmail draft create when linkId is missing', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/drafts/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: 'to@example.com', subject: 'Hello', bodyHtml: '<p>Hi</p>' }),
+    })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: 'linkId_required' })
+    expect(fake.request).not.toHaveBeenCalledWith('mcpServer/tool/call', expect.anything())
+  })
+
+  it('rejects Gmail draft create and update when HTML is missing', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    const request = (path: string, payload: Record<string, string>) => fetch(`${base}${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    })
+    const create = await request('/v1/connectors/gmail/drafts/create', { linkId: 'link-one', bodyText: 'Plain text only' })
+    const update = await request('/v1/connectors/gmail/drafts/update', { linkId: 'link-one', draftId: 'draft-1', bodyMarkdown: '**Plain text only**' })
+    expect(create.status).toBe(400)
+    await expect(create.json()).resolves.toEqual({ error: 'gmail_html_unsupported' })
+    expect(update.status).toBe(400)
+    await expect(update.json()).resolves.toEqual({ error: 'gmail_html_unsupported' })
+    expect(fake.request).not.toHaveBeenCalledWith('mcpServer/tool/call', expect.anything())
+  })
+
+  it('discards a Gmail draft through the explicit delete draft tool', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.delete_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/drafts/discard`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-1' }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.delete_draft',
+      arguments: { link_id: 'link-one', draft_id: 'draft-1' },
+    }))
+  })
+
+  it('returns a service error when Gmail draft discard is unavailable', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/drafts/discard`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-1' }),
+    })
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ error: 'gmail_draft_discard_unavailable' })
   })
 
   it('reads history, steers, and interrupts the active Codex turn', async () => {

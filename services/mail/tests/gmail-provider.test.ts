@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
+import { projectDraft } from '../src/draft.js'
 import { GmailConnectorProvider, projectGmailMessage, projectGmailSearchEmail } from '../src/gmail-provider.js'
 
 const servers: ReturnType<typeof createServer>[] = []
@@ -24,6 +25,16 @@ const gmailMessage = {
         { part_id: 'html', mime_type: 'text/html', filename: '', body: { content: '<p>Hello.</p>' } },
         { part_id: 'file', mime_type: 'application/pdf', filename: 'arrival.pdf', body: { size: 824000, attachment_id: 'a1' } },
       ],
+    },
+  },
+}
+
+const gmailDraftMessage = {
+  structuredContent: {
+    ...gmailMessage.structuredContent,
+    payload: {
+      ...gmailMessage.structuredContent.payload,
+      parts: gmailMessage.structuredContent.payload.parts.filter((part) => !part.filename),
     },
   },
 }
@@ -161,5 +172,258 @@ describe('GmailConnectorProvider', () => {
     await expect(provider.accounts()).resolves.toMatchObject([{ id: 'link-one', email: 'work@example.com' }])
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Gmail account refresh failed') })
     provider.stopBackgroundSync()
+  })
+
+  it('rejects create and update attachments before contacting Gmail', async () => {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      }
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+      requests.push({ path: request.url ?? '', body })
+      if (request.url === '/v1/connectors/gmail/drafts/create') {
+        return response.end(JSON.stringify({ structuredContent: { draft_id: 'draft-1' } }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/update') return response.end(JSON.stringify({ ok: true }))
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await expect(provider.createGmailDraft('link-one', 'message-1', 'to@example.com', '', '', 'Hello', '**Hi**', [
+      { id: 'attachment-1', name: 'arrival.pdf', mediaType: 'application/pdf' },
+    ])).rejects.toMatchObject({
+      message: 'Gmail compose attachments are unsupported',
+      code: 'gmail_attachment_unsupported',
+    })
+    const draft = projectDraft({ id: 'draft-1', inReplyToMessageId: 'message-1', to: [], subject: 'Hello', bodyMarkdown: 'Hi', accountId: 'link-one', attachments: [
+      { id: 'attachment-1', name: 'arrival.pdf', mediaType: 'application/pdf' },
+    ] })
+    await expect(provider.updateGmailDraft(draft)).rejects.toMatchObject({
+      message: 'Gmail compose attachments are unsupported',
+      code: 'gmail_attachment_unsupported',
+    })
+    expect(requests).toEqual([])
+
+    const created = await provider.createGmailDraft('link-one', 'message-1', 'to@example.com', '', '', 'Hello', '**Hi**')
+    expect(created).toMatchObject({ id: 'draft-1', bodyMarkdown: '**Hi**', bodyHtml: expect.stringContaining('<strong>Hi</strong>') })
+    const updated = projectDraft({ ...created, subject: 'Updated', bodyMarkdown: '_Updated_' })
+    await provider.updateGmailDraft(updated)
+    const createRequest = requests[0]!
+    const updateRequest = requests[1]!
+    expect(createRequest).toMatchObject({
+      path: '/v1/connectors/gmail/drafts/create',
+      body: { linkId: 'link-one', bodyMarkdown: '**Hi**', bodyText: '**Hi**' },
+    })
+    expect(createRequest.body).not.toHaveProperty('attachments')
+    expect(updateRequest).toMatchObject({
+      path: '/v1/connectors/gmail/drafts/update',
+      body: { draftId: 'draft-1', bodyMarkdown: '_Updated_', bodyText: '_Updated_' },
+    })
+    expect(updateRequest.body).not.toHaveProperty('attachments')
+  })
+
+  it('opens an existing Gmail draft by its listed message ID', async () => {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      }
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+      requests.push({ path: request.url ?? '', body })
+      if (request.url === '/v1/connectors/gmail/drafts/list') {
+        const second = body.nextPageToken === 'page-2'
+        return response.end(JSON.stringify({ structuredContent: {
+          drafts: second
+            ? [{ draft_id: 'draft-opened', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1', to: 'client@example.com', cc: 'copy@example.com', bcc: 'audit@example.com', subject: 'Saved draft' }]
+            : [{ draft_id: 'other-draft', message_id: 'other-message', thread_id: 'other-thread', to: 'other@example.com', subject: 'Other' }],
+          next_page_token: second ? '' : 'page-2',
+        } }))
+      }
+      if (request.url === '/v1/connectors/gmail/read') return response.end(JSON.stringify(gmailDraftMessage))
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    const draft = await provider.openGmailDraft('link-one', 'gmail-message-1')
+    expect(draft).toMatchObject({
+      id: 'draft-opened',
+      inReplyToMessageId: 'gmail-message-1',
+      to: [{ address: 'client@example.com' }],
+      cc: 'copy@example.com',
+      bcc: 'audit@example.com',
+      subject: 'Saved draft',
+      bodyMarkdown: 'Hello.',
+      attachments: [],
+    })
+    expect(requests.map((request) => request.path)).toEqual([
+      '/v1/connectors/gmail/drafts/list',
+      '/v1/connectors/gmail/drafts/list',
+      '/v1/connectors/gmail/read',
+    ])
+    expect(requests).not.toContainEqual(expect.objectContaining({ path: '/v1/connectors/gmail/drafts/create' }))
+  })
+
+  it('rejects opening a listed Gmail draft that reports has_attachment', async () => {
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/list') {
+        return response.end(JSON.stringify({ structuredContent: { drafts: [{
+          draft_id: 'draft-attached', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1',
+          to: 'client@example.com', subject: 'Saved draft', has_attachment: true,
+        }] } }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await expect(provider.openGmailDraft('link-one', 'gmail-message-1')).rejects.toMatchObject({
+      message: 'Gmail draft attachments are unsupported',
+      code: 'gmail_attachment_unsupported',
+    })
+  })
+
+  it('rejects refreshing a Gmail draft whose read message includes attachments', async () => {
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail/drafts/list') {
+        return response.end(JSON.stringify({ structuredContent: { drafts: [{
+          draft_id: 'draft-1', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1',
+          to: 'client@example.com', subject: 'Saved draft',
+        }] } }))
+      }
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      }
+      if (request.url === '/v1/connectors/gmail/read') return response.end(JSON.stringify(gmailMessage))
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await expect(provider.readGmailDraft('link-one', 'draft-1')).rejects.toMatchObject({
+      message: 'Gmail draft attachments are unsupported',
+      code: 'gmail_attachment_unsupported',
+    })
+  })
+
+  it('refreshes a Gmail draft from the connector instead of returning stale local state', async () => {
+    let listedSubject = 'Original subject'
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail/drafts/create') {
+        return response.end(JSON.stringify({ structuredContent: { draft_id: 'draft-1' } }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/list') {
+        return response.end(JSON.stringify({ structuredContent: { drafts: [{
+          draft_id: 'draft-1', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1',
+          to: 'client@example.com', cc: '', bcc: '', subject: listedSubject,
+        }] } }))
+      }
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      }
+      if (request.url === '/v1/connectors/gmail/read') return response.end(JSON.stringify(gmailDraftMessage))
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await provider.createGmailDraft('link-one', '', 'old@example.com', '', '', 'Local subject', 'Local body')
+    listedSubject = 'Codex revised subject'
+
+    await expect(provider.readGmailDraft('link-one', 'draft-1')).resolves.toMatchObject({
+      id: 'draft-1',
+      subject: 'Codex revised subject',
+      bodyMarkdown: 'Hello.',
+    })
+  })
+
+  it('clears the mailbox cache after each Gmail draft write', async () => {
+    let searches = 0
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      }
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        searches += 1
+        return response.end(JSON.stringify({ structuredContent: { emails: [{
+          id: `message-${searches}`, thread_id: `thread-${searches}`, from_: 'Ana <ana@example.com>',
+          subject: 'Sent', snippet: '', labels: ['SENT'], email_ts: '2026-09-05T01:00:00Z',
+        }] } }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/create') {
+        return response.end(JSON.stringify({ structuredContent: { draft_id: 'draft-1' } }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/update'
+        || request.url === '/v1/connectors/gmail/drafts/discard'
+        || request.url === '/v1/connectors/gmail/drafts/send') {
+        return response.end(JSON.stringify({ ok: true }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    const listSent = () => provider.listMailboxConversations('sent', 'all', 'link-one')
+
+    await listSent()
+    await listSent()
+    expect(searches).toBe(1)
+
+    const draft = await provider.createGmailDraft('link-one', '', 'client@example.com', '', '', 'Subject', 'Body')
+    await listSent()
+    await provider.updateGmailDraft(projectDraft({ ...draft, bodyMarkdown: 'Updated' }))
+    await listSent()
+    await provider.discardGmailDraft('link-one', 'draft-1')
+    await listSent()
+    await provider.sendGmailDraft('link-one', 'draft-1')
+    await listSent()
+
+    expect(searches).toBe(5)
+  })
+
+  it('discards Gmail drafts and maps connector failures to typed errors', async () => {
+    let failure = ''
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      if (failure) {
+        response.statusCode = 503
+        return response.end(JSON.stringify({ error: failure }))
+      }
+      response.end(JSON.stringify({ ok: true }))
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await expect(provider.discardGmailDraft('link-one', 'draft-1')).resolves.toBeUndefined()
+
+    failure = 'gmail_html_unsupported'
+    await expect(provider.createGmailDraft('link-one', '', '', '', '', '', 'Hi')).rejects.toMatchObject({ code: 'gmail_html_unsupported' })
+    failure = 'attachment upload failed'
+    await expect(provider.createGmailDraft('link-one', '', '', '', '', '', 'Hi')).rejects.toMatchObject({ code: 'gmail_attachment_unsupported' })
+    failure = 'gmail_draft_discard_unavailable'
+    await expect(provider.discardGmailDraft('link-one', 'draft-1')).rejects.toMatchObject({ code: 'gmail_draft_discard_unavailable' })
   })
 })

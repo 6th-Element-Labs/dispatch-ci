@@ -41,13 +41,20 @@ app.innerHTML = `
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="card-body dispatch-draft" data-draft hidden>
-            <div class="card"><div class="card-header"><div><span class="badge bg-blue-lt text-blue me-2">Draft</span><strong>Reply preview</strong></div><span class="text-secondary small">Nothing sends without approval</span></div><div class="card-body">
+            <div class="card"><div class="card-header"><div><span class="badge bg-blue-lt text-blue me-2">Draft</span><strong>Reply preview</strong></div><span class="text-secondary small">Send asks for confirm</span></div><div class="card-body">
             <label class="form-label">From<select class="form-select mt-1" data-draft-account aria-label="Draft account"></select></label>
             <label class="form-label">To<input class="form-control mt-1" data-draft-to aria-label="Draft recipient"></label>
             <div class="row g-3 mt-0"><label class="col form-label">Cc<input class="form-control mt-1" data-draft-cc aria-label="Draft Cc"></label><label class="col form-label">Bcc<input class="form-control mt-1" data-draft-bcc aria-label="Draft Bcc"></label></div>
             <label class="form-label">Subject<input class="form-control mt-1" data-draft-subject aria-label="Draft subject"></label>
             <label class="form-label">Message<textarea class="form-control mt-1" data-draft-body aria-label="Draft body"></textarea></label>
-            </div><footer class="card-footer d-flex flex-wrap gap-2"><button class="btn btn-outline-secondary" type="button" data-save-draft>Save draft</button><button class="btn btn-outline-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-primary ms-auto" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send draft</button></footer></div>
+            <div class="dispatch-draft-preview markdown" data-draft-preview aria-label="Draft preview"></div>
+            <p class="text-secondary small" data-draft-error hidden></p>
+            <div class="alert alert-warning" data-send-confirm hidden>
+              <p data-send-confirm-text></p>
+              <button class="btn btn-outline-secondary" type="button" data-send-cancel>Cancel</button>
+              <button class="btn btn-primary" type="button" data-send-confirm-go>Send now</button>
+            </div>
+            </div><footer class="card-footer d-flex flex-wrap gap-2"><button class="btn btn-outline-danger" type="button" data-discard-draft>Discard</button><button class="btn btn-outline-secondary" type="button" data-attach-draft>Attach</button><input type="file" data-draft-files multiple hidden><button class="btn btn-outline-secondary" type="button" data-save-draft>Save draft</button><button class="btn btn-outline-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-primary ms-auto" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send draft</button></footer></div>
           </section>
           <footer class="card-footer dispatch-reader-actions"><button class="btn btn-primary" type="button" data-reply><i class="ti ti-reply me-1" aria-hidden="true"></i>Reply</button><button class="btn btn-outline-secondary" type="button" data-reply-all><i class="ti ti-arrow-back-up-double me-1" aria-hidden="true"></i>Reply all</button><button class="btn btn-outline-secondary" type="button" data-forward><i class="ti ti-arrow-forward-up me-1" aria-hidden="true"></i>Forward</button><button class="btn btn-outline-secondary" type="button" data-read-state>Mark unread</button><button class="btn btn-outline-secondary" type="button" data-ask><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex</button></footer>
         </div>
@@ -95,6 +102,14 @@ const elements = {
   draftAccount: app.querySelector<HTMLSelectElement>('[data-draft-account]')!,
   draftSubject: app.querySelector<HTMLInputElement>('[data-draft-subject]')!,
   draftBody: app.querySelector<HTMLTextAreaElement>('[data-draft-body]')!,
+  draftPreview: app.querySelector<HTMLElement>('[data-draft-preview]')!,
+  draftError: app.querySelector<HTMLElement>('[data-draft-error]')!,
+  draftFiles: app.querySelector<HTMLInputElement>('[data-draft-files]')!,
+  discardDraft: app.querySelector<HTMLButtonElement>('[data-discard-draft]')!,
+  sendDraft: app.querySelector<HTMLButtonElement>('[data-send-draft]')!,
+  sendConfirm: app.querySelector<HTMLElement>('[data-send-confirm]')!,
+  sendConfirmText: app.querySelector<HTMLElement>('[data-send-confirm-text]')!,
+  sendConfirmGo: app.querySelector<HTMLButtonElement>('[data-send-confirm-go]')!,
   context: app.querySelector<HTMLElement>('[data-context]')!,
   agentStatus: app.querySelector<HTMLElement>('[data-agent-status]')!,
   agentActivity: app.querySelector<HTMLElement>('[data-agent-activity]')!,
@@ -127,6 +142,16 @@ new MutationObserver(renderServiceStatus).observe(elements.mailSource, { childLi
 new MutationObserver(renderServiceStatus).observe(elements.agentStatus, { childList: true, subtree: true })
 renderServiceStatus()
 let activeDraft: DraftProjection | undefined
+let draftPreviewTimer: number | undefined
+let draftAutosaveTimer: number | undefined
+let draftPreviewSequence = 0
+let draftEditSession = 0
+let draftDirty = false
+// Keep Gmail draft writes in order so a slow save cannot overwrite a newer save.
+let draftSaveFlight: Promise<DraftProjection | undefined> | undefined
+// Keep Gmail send confirmation single-flight.
+let draftSendFlight: Promise<void> | undefined
+let draftDiscarding = false
 
 let conversations: ConversationSummary[] = []
 let conversationTotal = 0
@@ -437,6 +462,13 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   const summary = conversations.find((conversation) => conversation.id === id)
   if (!summary) return
   const sequence = ++selectionSequence
+  try {
+    await flushDraftAutosave()
+  } catch (error) {
+    if (sequence === selectionSequence) draftError(error)
+    return
+  }
+  if (sequence !== selectionSequence) return
   if (revealOnMobile && usesMobilePanels()) {
     mobilePanel = 'reader'
     mobileReturnPanel = 'reader'
@@ -444,6 +476,11 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   }
   selectedConversationId = id
   selected = undefined
+  activeDraft = undefined
+  draftEditSession += 1
+  draftDirty = false
+  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
+  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
   renderList()
   elements.readerEmpty.hidden = true
   elements.reader.hidden = false
@@ -465,6 +502,21 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   loading.textContent = 'Loading conversation…'
   elements.body.replaceChildren(loading)
   elements.attachments.replaceChildren()
+
+  if (mailbox === 'drafts' && summary.accountId) {
+    try {
+      const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId)
+      if (sequence !== selectionSequence || selectedConversationId !== id) return
+      elements.context.textContent = `Editing draft · ${draft.subject || '(no subject)'}`
+      showDraft(draft, false)
+    } catch (error) {
+      if (sequence !== selectionSequence) return
+      loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
+      loading.textContent = error instanceof Error ? error.message : String(error)
+      elements.context.textContent = `Unavailable · ${summary.subject}`
+    }
+    return
+  }
 
   const key = `${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
   let request = conversationCache.get(key)
@@ -537,7 +589,26 @@ function draftAddressList(addresses: readonly MailAddress[] | undefined): string
   return (addresses ?? []).map((address) => address.address).filter(Boolean).join(', ')
 }
 
+function draftError(error: unknown): void {
+  elements.draftError.hidden = false
+  elements.draftError.textContent = error instanceof Error ? error.message : String(error)
+}
+
+function replyQuoteMarkdown(message: MessageProjection): string {
+  const content = message.body.kind === 'plain-text'
+    ? message.body.content.trim()
+    : renderEmailContent(message.body.kind, message.body.content).textContent?.trim() ?? ''
+  return `\n\n> ${content.split(/\r?\n/).join('\n> ')}`
+}
+
 function showDraft(draft: DraftProjection, accountMutable: boolean): void {
+  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
+  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  draftPreviewTimer = undefined
+  draftAutosaveTimer = undefined
+  draftPreviewSequence += 1
+  draftEditSession += 1
+  draftDirty = false
   activeDraft = draft
   elements.reader.hidden = false
   elements.readerEmpty.hidden = true
@@ -559,32 +630,98 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   elements.draftCc.value = draft.cc ?? ''
   elements.draftBcc.value = draft.bcc ?? ''
   elements.draftSubject.value = draft.subject
-  elements.draftBody.value = draft.bodyText
+  elements.draftBody.value = draft.bodyMarkdown || draft.bodyText
+  elements.draftPreview.innerHTML = draft.bodyHtml
+  elements.draftError.hidden = true
+  elements.draftError.textContent = ''
+  elements.sendConfirm.hidden = true
+  draftDiscarding = false
+}
+
+function hideDraftEditor(): void {
+  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
+  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  draftPreviewTimer = undefined
+  draftAutosaveTimer = undefined
+  draftPreviewSequence += 1
+  draftEditSession += 1
+  draftDirty = false
+  draftDiscarding = false
+  activeDraft = undefined
+  elements.draft.hidden = true
+  elements.sendConfirm.hidden = true
+  elements.draftError.hidden = true
+  elements.reader.classList.remove('dispatch-drafting', 'dispatch-composing')
+  if (selected) {
+    elements.reader.hidden = false
+    elements.readerEmpty.hidden = true
+    elements.body.hidden = false
+    elements.attachments.hidden = false
+  } else {
+    elements.reader.hidden = true
+    elements.readerEmpty.hidden = false
+  }
+}
+
+function refreshPreview(): void {
+  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
+  const sequence = ++draftPreviewSequence
+  draftPreviewTimer = window.setTimeout(() => {
+    draftPreviewTimer = undefined
+    void api.previewDraft(elements.draftBody.value).then((bodyHtml) => {
+      if (sequence === draftPreviewSequence && activeDraft) elements.draftPreview.innerHTML = bodyHtml
+    }).catch(draftError)
+  }, 300)
+}
+
+function autosaveDraft(): void {
+  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  draftAutosaveTimer = window.setTimeout(() => {
+    draftAutosaveTimer = undefined
+    if (activeDraft?.id) void saveDraft(false).catch(draftError)
+  }, 1_500)
+}
+
+async function flushDraftAutosave(): Promise<void> {
+  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  draftAutosaveTimer = undefined
+  const draftId = activeDraft?.id
+  const session = draftEditSession
+  if (!draftId || !draftDirty) return
+  if (draftSaveFlight) await draftSaveFlight
+  if (draftEditSession !== session || activeDraft?.id !== draftId || !draftDirty) return
+  await saveDraft(false)
 }
 
 async function openDraft(replyAll = false): Promise<void> {
   if (!selected) return
   const accountId = selected.accountId
-  const latest = selected.messages.at(-1)
+  const latestMessageId = selected.latestMessageId
+  const latest = selected.messages.find((message) => message.id === latestMessageId) ?? selected.messages[0]
+  if (!latest) return
   const own = accounts.find((account) => account.id === accountId)?.email.toLowerCase()
-  const participants = [selected.sender, ...(latest?.to ?? [])].filter((address, index, values) => address.address.toLowerCase() !== own && values.findIndex((item) => item.address.toLowerCase() === address.address.toLowerCase()) === index)
-  const primary = participants[0] ?? selected.sender
+  const participants = [latest.sender, ...(latest.to ?? [])].filter((address, index, values) => address.address.toLowerCase() !== own && values.findIndex((item) => item.address.toLowerCase() === address.address.toLowerCase()) === index)
+  const primary = participants[0] ?? latest.sender
   const to = replyAll ? draftAddressList(participants) : primary.address
-  const cc = replyAll ? draftAddressList((latest?.cc ?? []).filter((address) => address.address.toLowerCase() !== own && !participants.some((item) => item.address.toLowerCase() === address.address.toLowerCase()))) : ''
+  const cc = replyAll ? draftAddressList((latest.cc ?? []).filter((address) => address.address.toLowerCase() !== own && !participants.some((item) => item.address.toLowerCase() === address.address.toLowerCase()))) : ''
+  const bodyMarkdown = replyQuoteMarkdown(latest)
+  const subject = selected.subject.startsWith('Re:') ? selected.subject : `Re: ${selected.subject}`
+  const fields = { to, cc, bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown }
   const draft: DraftProjection = selected.source === 'gmail' && accountId
-    ? await api.createDraft(selected.latestMessageId, { accountId, to, cc, bcc: '', subject: selected.subject.startsWith('Re:') ? selected.subject : `Re: ${selected.subject}`, bodyText: '' })
-    : await api.createDraft(selected.latestMessageId)
+    ? await api.createDraft(latest.id, { accountId, ...fields })
+    : await api.createDraft(selected.latestMessageId, fields)
   showDraft(draft, false)
 }
 
 async function openForward(): Promise<void> {
   if (!selected?.accountId) return
-  const latest = selected.messages.at(-1)
+  const latestMessageId = selected.latestMessageId
+  const latest = selected.messages.find((message) => message.id === latestMessageId) ?? selected.messages[0]
   if (!latest) return
   const subject = selected.subject.startsWith('Fwd:') ? selected.subject : `Fwd: ${selected.subject}`
   const content = renderEmailContent(latest.body.kind, latest.body.content).textContent?.trim() ?? ''
-  const bodyText = `\n\n---------- Forwarded message ----------\nFrom: ${latest.sender.name} <${latest.sender.address}>\nDate: ${latest.receivedFullLabel}\nSubject: ${latest.subject}\n\n${content}`
-  const draft = await api.createDraft('', { accountId: selected.accountId, to: '', cc: '', bcc: '', subject, bodyText })
+  const bodyMarkdown = `\n\n---------- Forwarded message ----------\nFrom: ${latest.sender.name} <${latest.sender.address}>\nDate: ${latest.receivedFullLabel}\nSubject: ${latest.subject}\n\n${content}`
+  const draft = await api.createDraft('', { accountId: selected.accountId, to: '', cc: '', bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, attachments: latest.attachments })
   showDraft(draft, false)
 }
 
@@ -605,26 +742,154 @@ function openCompose(): void {
   elements.sender.textContent = 'Compose'
   elements.address.textContent = 'Draft preview'
   elements.time.textContent = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
-  const draft: DraftProjection = { id: '', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyText: '', state: 'draft', accountId }
+  const draft: DraftProjection = { id: '', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '', bodyText: '', attachments: [], state: 'draft', accountId }
   showDraft(draft, true)
 }
 
-async function saveDraft(): Promise<void> {
-  if (!activeDraft) return
-  const accountId = activeDraft.id ? activeDraft.accountId : elements.draftAccount.value
+async function saveDraft(notify = true): Promise<void> {
+  if (draftDiscarding) return
+  const session = draftEditSession
+  while (draftSaveFlight) await draftSaveFlight
+  if (draftDiscarding || !activeDraft || session !== draftEditSession) return
+  const draft = activeDraft
+  const accountId = draft.id ? draft.accountId : elements.draftAccount.value
   if (!accountId) throw new Error('Choose a Gmail account for this draft.')
-  activeDraft = activeDraft.id
-    ? await api.updateDraft(activeDraft.id, { accountId, messageId: activeDraft.inReplyToMessageId, to: elements.draftTo.value, cc: elements.draftCc.value, bcc: elements.draftBcc.value, subject: elements.draftSubject.value, bodyText: elements.draftBody.value })
-    : await api.createDraft('', { accountId, to: elements.draftTo.value, cc: elements.draftCc.value, bcc: elements.draftBcc.value, subject: elements.draftSubject.value, bodyText: elements.draftBody.value })
-  elements.draftAccount.disabled = true
-  addAgentMessage('tool', 'Gmail draft saved.')
+  const bodyMarkdown = elements.draftBody.value
+  const fields = { accountId, messageId: draft.inReplyToMessageId, to: elements.draftTo.value, cc: elements.draftCc.value, bcc: elements.draftBcc.value, subject: elements.draftSubject.value, bodyMarkdown, bodyText: bodyMarkdown, attachments: draft.attachments }
+  const operation = (async () => {
+    const savedDraft = draft.id
+      ? await api.updateDraft(draft.id, fields)
+      : await api.createDraft('', fields)
+    if (session !== draftEditSession || activeDraft !== draft || draftDiscarding) return savedDraft
+    activeDraft = savedDraft
+    elements.draftAccount.disabled = true
+    elements.draftPreview.innerHTML = savedDraft.bodyHtml
+    elements.draftError.hidden = true
+    elements.draftError.textContent = ''
+    if (elements.draftTo.value === fields.to
+      && elements.draftCc.value === fields.cc
+      && elements.draftBcc.value === fields.bcc
+      && elements.draftSubject.value === fields.subject
+      && elements.draftBody.value === bodyMarkdown) {
+      draftDirty = false
+    }
+    if (notify) addAgentMessage('tool', 'Gmail draft saved.')
+    return savedDraft
+  })()
+  draftSaveFlight = operation
+  try {
+    await operation
+  } finally {
+    if (draftSaveFlight === operation) draftSaveFlight = undefined
+  }
 }
 
-async function sendDraft(): Promise<void> {
-  if (!activeDraft?.accountId) return
-  await saveDraft()
-  await api.sendDraft(activeDraft.id, activeDraft.accountId)
-  addAgentMessage('agent', 'Gmail confirmed that the draft was sent.')
+async function reviseDraft(): Promise<void> {
+  if (!activeDraft) return
+  if (activeDraft.id) {
+    await flushDraftAutosave()
+  } else {
+    if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+    draftAutosaveTimer = undefined
+    await saveDraft(false)
+  }
+  const draft = activeDraft
+  if (!draft?.id) throw new Error('Gmail did not return a draft ID. Codex did not receive the revision prompt.')
+  if (!draft.accountId) throw new Error('The Gmail account is missing from this draft.')
+  elements.prompt.value = [
+    `Revise Gmail draft ${draft.id} on account ${draft.accountId}.`,
+    `Call Gmail update_draft on that draft ID. Put the revised Markdown in text_plain and the revised HTML in payload.`,
+    'Never call gmail.send_draft or gmail.send_email. Never send this draft.',
+    `Current draft:\n\n${elements.draftBody.value}`,
+  ].join(' ')
+  elements.prompt.focus()
+  await sendPrompt()
+}
+
+function sendDraft(): void {
+  if (!activeDraft || draftSendFlight) return
+  elements.sendConfirmText.textContent = [
+    `To: ${elements.draftTo.value || '(no recipient)'}`,
+    elements.draftCc.value ? `Cc: ${elements.draftCc.value}` : '',
+    elements.draftBcc.value ? `Bcc: ${elements.draftBcc.value}` : '',
+    `Subject: ${elements.draftSubject.value || '(no subject)'}`,
+  ].filter(Boolean).join('\n')
+  elements.sendConfirm.hidden = false
+}
+
+async function confirmSendDraft(): Promise<void> {
+  if (!activeDraft || draftSendFlight || draftDiscarding) return
+  const operation = (async () => {
+    await saveDraft()
+    const draft = activeDraft
+    if (!draft?.id || !draft.accountId) throw new Error('Save the Gmail draft before sending it.')
+    await api.sendDraft(draft.id, draft.accountId)
+    addAgentMessage('agent', 'Gmail confirmed that the draft was sent.')
+    hideDraftEditor()
+    void loadConversations()
+  })()
+  draftSendFlight = operation
+  elements.sendConfirmGo.disabled = true
+  elements.sendDraft.disabled = true
+  elements.discardDraft.disabled = true
+  try {
+    await operation
+  } finally {
+    if (draftSendFlight === operation) draftSendFlight = undefined
+    elements.sendConfirmGo.disabled = false
+    elements.sendDraft.disabled = false
+    elements.discardDraft.disabled = false
+  }
+}
+
+async function discardDraft(): Promise<void> {
+  if (draftSendFlight || draftDiscarding) return
+  const draft = activeDraft
+  if (!draft) return
+  draftDiscarding = true
+  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  draftAutosaveTimer = undefined
+  draftEditSession += 1
+  let savedDraft: DraftProjection | undefined = draft
+  try {
+    if (draftSaveFlight) savedDraft = (await draftSaveFlight) ?? draft
+    const discardId = savedDraft.id
+    if (discardId) {
+      if (!savedDraft.accountId) throw new Error('The Gmail account is missing from this draft.')
+      await api.discardDraft(discardId, savedDraft.accountId)
+    }
+    hideDraftEditor()
+    void loadConversations()
+  } catch (error) {
+    draftDiscarding = false
+    throw error
+  }
+}
+
+async function fileContentBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+async function attachDraftFiles(): Promise<void> {
+  if (!activeDraft) return
+  const files = [...(elements.draftFiles.files ?? [])]
+  if (files.length === 0) return
+  try {
+    const attachments = await Promise.all(files.map(async (file) => ({
+      name: file.name,
+      mediaType: file.type || 'application/octet-stream',
+      contentBase64: await fileContentBase64(file),
+    })))
+    activeDraft = { ...activeDraft, attachments: [...activeDraft.attachments, ...attachments] }
+    await saveDraft()
+  } catch (error) {
+    draftError(error)
+  } finally {
+    elements.draftFiles.value = ''
+  }
 }
 
 async function mutateSelected(action: GmailConversationAction): Promise<void> {
@@ -918,6 +1183,12 @@ function handleAgentEvent(message: AgentEvent): void {
     activeAgentText = ''
     activeTurnId = undefined
     elements.stop.hidden = true
+    const draftToRefresh = activeDraft
+    if (draftToRefresh?.id && draftToRefresh.accountId) {
+      void api.getDraft(draftToRefresh.id, draftToRefresh.accountId).then((draft) => {
+        if (activeDraft?.id === draftToRefresh.id) showDraft(draft, false)
+      }).catch(draftError)
+    }
   }
   if (message.method === 'item/agentMessage/delta') {
     if (!activeAgentMessage) {
@@ -1306,8 +1577,27 @@ app.querySelector('[data-ask]')?.addEventListener('click', () => {
   elements.prompt.focus()
 })
 app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
-app.querySelector('[data-send-draft]')?.addEventListener('click', () => { void sendDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
-app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { elements.prompt.value = `Revise this draft:\n\n${elements.draftBody.value}`; elements.prompt.focus() })
+app.querySelector('[data-send-draft]')?.addEventListener('click', sendDraft)
+app.querySelector('[data-send-cancel]')?.addEventListener('click', () => { elements.sendConfirm.hidden = true })
+app.querySelector('[data-send-confirm-go]')?.addEventListener('click', () => { void confirmSendDraft().catch(draftError) })
+app.querySelector('[data-discard-draft]')?.addEventListener('click', () => { void discardDraft().catch(draftError) })
+app.querySelector('[data-attach-draft]')?.addEventListener('click', () => { elements.draftFiles.click() })
+elements.draftFiles.addEventListener('change', () => { void attachDraftFiles() })
+elements.draftBody.addEventListener('input', () => {
+  elements.sendConfirm.hidden = true
+  draftDirty = true
+  refreshPreview()
+  autosaveDraft()
+})
+for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc, elements.draftSubject]) {
+  field.addEventListener('input', () => {
+    elements.sendConfirm.hidden = true
+    draftDirty = true
+    if (activeDraft?.id) autosaveDraft()
+  })
+}
+elements.draftAccount.addEventListener('input', () => { elements.sendConfirm.hidden = true })
+app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { void reviseDraft().catch(draftError) })
 elements.readState.addEventListener('click', () => { void toggleReadState() })
 app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })
 elements.stop.addEventListener('click', () => {

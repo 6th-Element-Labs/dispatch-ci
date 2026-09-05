@@ -34,7 +34,16 @@ export interface DraftProjection {
   readonly cc?: string
   readonly bcc?: string
   readonly subject: string
+  readonly bodyMarkdown: string
+  readonly bodyHtml: string
   readonly bodyText: string
+  readonly attachments: readonly {
+    readonly id?: string
+    readonly name: string
+    readonly mediaType: string
+    readonly contentBase64?: string
+    readonly sizeLabel?: string
+  }[]
   readonly state: 'draft'
   readonly accountId?: string
 }

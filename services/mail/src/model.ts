@@ -37,6 +37,14 @@ export interface MessageProjection extends MessageSummary {
   readonly source: 'demo' | 'gmail'
 }
 
+export interface DraftAttachment {
+  readonly id?: string
+  readonly name: string
+  readonly mediaType: string
+  readonly contentBase64?: string
+  readonly sizeLabel?: string
+}
+
 export interface DraftProjection {
   readonly id: string
   readonly inReplyToMessageId: string
@@ -44,7 +52,10 @@ export interface DraftProjection {
   readonly cc?: string
   readonly bcc?: string
   readonly subject: string
+  readonly bodyMarkdown: string
+  readonly bodyHtml: string
   readonly bodyText: string
+  readonly attachments: readonly DraftAttachment[]
   readonly state: 'draft'
   readonly accountId?: string
 }

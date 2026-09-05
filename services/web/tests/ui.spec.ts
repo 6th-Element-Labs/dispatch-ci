@@ -36,6 +36,10 @@ test.beforeEach(async ({ page }) => {
     return route.fulfill({ json: { conversation: { ...summary, messageCount: threadMessages.length, source: 'demo', messages: threadMessages } } })
   })
   await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: { id: 'd1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'Re: Opua berth confirmation', bodyText: 'Thanks.', state: 'draft' } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts/preview', async (route) => {
+    const request = await route.request().postDataJSON() as { bodyMarkdown: string }
+    await route.fulfill({ json: { bodyHtml: `<p>${request.bodyMarkdown}</p>` } })
+  })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ status: 503, json: { status: 'not_ready' } }))
 })
 
@@ -135,7 +139,119 @@ test('previews a new compose draft with account, Cc, and Bcc before saving', asy
   await page.getByRole('textbox', { name: 'Draft subject' }).fill('Project update')
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Draft preview')
   await page.getByRole('button', { name: 'Save draft' }).click()
-  await expect.poll(() => draftRequest).toEqual({ messageId: '', accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyText: 'Draft preview' })
+  await expect.poll(() => draftRequest).toEqual({ messageId: '', accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyMarkdown: 'Draft preview', bodyText: 'Draft preview', attachments: [] })
+})
+
+test('autosaves each saved-draft header and keeps the account locked', async ({ page }) => {
+  const updates: Record<string, unknown>[] = []
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: {
+    id: 'autosave-1', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '<p></p>', bodyText: '', attachments: [], state: 'draft', accountId: 'link-one',
+  } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts/autosave-1', async (route) => {
+    const fields = await route.request().postDataJSON() as Record<string, unknown>
+    updates.push(fields)
+    await route.fulfill({ json: { draft: {
+      id: 'autosave-1', inReplyToMessageId: '', to: [], cc: fields.cc, bcc: fields.bcc, subject: fields.subject,
+      bodyMarkdown: fields.bodyMarkdown, bodyHtml: '<p></p>', bodyText: fields.bodyText, attachments: [], state: 'draft', accountId: 'link-one',
+    } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await page.getByRole('button', { name: 'Save draft' }).click()
+  await expect(page.getByRole('combobox', { name: 'Draft account' })).toBeDisabled()
+
+  const changes: Array<[string, string, string]> = [
+    ['Draft recipient', 'client@example.com', 'to'],
+    ['Draft Cc', 'copy@example.com', 'cc'],
+    ['Draft Bcc', 'audit@example.com', 'bcc'],
+    ['Draft subject', 'Updated subject', 'subject'],
+  ]
+  for (const [name, value, field] of changes) {
+    const count = updates.length
+    await page.getByRole('textbox', { name }).fill(value)
+    await expect.poll(() => updates.length).toBe(count + 1)
+    expect(updates.at(-1)?.[field]).toBe(value)
+  }
+})
+
+test('saves a new draft before asking Codex to revise its real Gmail draft ID', async ({ page }) => {
+  let turnRequest: Record<string, unknown> | undefined
+  const operationOrder: string[] = []
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: {
+    id: 'gmail-draft-42', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: 'Plan', bodyMarkdown: 'Original',
+    bodyHtml: '<p>Original</p>', bodyText: 'Original', attachments: [], state: 'draft', accountId: 'link-one',
+  } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts/gmail-draft-42', async (route) => {
+    operationOrder.push('update')
+    const fields = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ json: { draft: {
+      id: 'gmail-draft-42', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: 'Plan',
+      bodyMarkdown: fields.bodyMarkdown, bodyHtml: '<p>Revised locally</p>', bodyText: fields.bodyText,
+      attachments: [], state: 'draft', accountId: 'link-one',
+    } } })
+  })
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-revise' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-revise/turns', async (route) => {
+    operationOrder.push('turn')
+    turnRequest = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 202, json: { turn: { id: 'turn-1' } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.goto('/')
+  await expect(page.locator('[data-connector]')).toHaveText('Gmail available')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await page.getByRole('textbox', { name: 'Draft subject' }).fill('Plan')
+  await page.getByRole('textbox', { name: 'Draft body' }).fill('Original')
+  await page.getByRole('button', { name: 'Ask Codex to revise' }).click()
+
+  await expect.poll(() => turnRequest).toBeDefined()
+  const text = String(turnRequest?.text)
+  expect(text).toContain('gmail-draft-42')
+  expect(text).toContain('link-one')
+  expect(text).toContain('update_draft')
+  expect(text).toContain('text_plain')
+  expect(text).toContain('payload')
+  expect(text).toContain('Never send')
+
+  operationOrder.length = 0
+  turnRequest = undefined
+  await page.getByRole('textbox', { name: 'Draft body' }).fill('Revised locally')
+  await page.getByRole('button', { name: 'Ask Codex to revise' }).click()
+  await expect.poll(() => operationOrder).toEqual(['update', 'turn'])
+})
+
+test('does not ask Codex to revise when Gmail does not return a draft ID', async ({ page }) => {
+  let turnCount = 0
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: {
+    id: '', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '<p></p>',
+    bodyText: '', attachments: [], state: 'draft', accountId: 'link-one',
+  } } }))
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-no-id' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-no-id/turns', async (route) => {
+    turnCount += 1
+    await route.fulfill({ status: 202, json: {} })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.goto('/')
+  await expect(page.locator('[data-connector]')).toHaveText('Gmail available')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await page.getByRole('button', { name: 'Ask Codex to revise' }).click()
+
+  await expect(page.locator('[data-draft-error]')).toContainText('did not return a draft ID')
+  expect(turnCount).toBe(0)
 })
 
 test('creates a threaded reply-all draft without addressing the active account', async ({ page }) => {
@@ -156,6 +272,86 @@ test('creates a threaded reply-all draft without addressing the active account',
   await expect.poll(() => draftRequest).toMatchObject({ messageId: 'm1', accountId: 'link-one', to: 'ana@example.com, colleague@example.com', cc: 'manager@example.com', bcc: '' })
 })
 
+test('uses the newest message for a reply-all draft', async ({ page }) => {
+  let draftRequest: Record<string, unknown> | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const newest = {
+    ...messages[0]!,
+    id: 'newest-message',
+    accountId: 'link-one',
+    source: 'gmail',
+    sender: { name: 'Newest Sender', address: 'newest@example.com', initials: 'NS' },
+    to: [{ name: 'Work', address: 'work@example.com', initials: 'W' }],
+    body: { kind: 'plain-text', content: 'Newest words' },
+    attachments: [],
+  }
+  const oldest = {
+    ...messages[0]!,
+    id: 'oldest-message',
+    accountId: 'link-one',
+    source: 'gmail',
+    sender: { name: 'Older Sender', address: 'older@example.com', initials: 'OS' },
+    to: [{ name: 'Work', address: 'work@example.com', initials: 'W' }],
+    body: { kind: 'plain-text', content: 'Older words' },
+    attachments: [],
+  }
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', latestMessageId: newest.id, messageCount: 2 }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all.*/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [newest, oldest] } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    draftRequest = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 201, json: { draft: { id: 'newest-reply-all', inReplyToMessageId: newest.id, to: [newest.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyMarkdown: '', bodyHtml: '', bodyText: '', attachments: [], state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply all' }).click()
+  await expect.poll(() => draftRequest).toMatchObject({ messageId: 'newest-message', to: 'newest@example.com' })
+  expect(String(draftRequest?.to)).not.toContain('older@example.com')
+})
+
+test('opens a Drafts row in the editor and discards it', async ({ page }) => {
+  let requestedMailbox = ''
+  let openRequest: unknown
+  let discarded = false
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const draftSummary = {
+    ...conversations[0]!,
+    id: 'gmail:draft-thread-9',
+    threadId: 'draft-thread-9',
+    latestMessageId: 'draft-message-9',
+    accountId: 'link-one',
+    accountLabel: 'work@example.com',
+    subject: 'Saved draft',
+  }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
+    requestedMailbox = new URL(route.request().url()).searchParams.get('mailbox') ?? ''
+    const draftConversations = requestedMailbox === 'drafts' && !discarded ? [draftSummary] : []
+    return route.fulfill({ json: { source: 'gmail', conversations: draftConversations, nextCursor: null, total: draftConversations.length } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/drafts/open', async (route) => {
+    openRequest = await route.request().postDataJSON()
+    if (discarded) return route.fulfill({ status: 404, json: { error: 'draft_not_found' } })
+    await route.fulfill({ json: { draft: { id: 'draft-9', inReplyToMessageId: 'draft-message-9', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Saved draft', bodyMarkdown: 'Saved words', bodyHtml: '<p>Saved words</p>', bodyText: 'Saved words', attachments: [], state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/draft-9\?action=discard&account=link-one/, async (route) => {
+    discarded = true
+    await route.fulfill({ json: {} })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await expect.poll(() => requestedMailbox).toBe('drafts')
+  await page.locator('[data-conversation-id="gmail:draft-thread-9"]').click()
+  await expect.poll(() => openRequest).toEqual({ accountId: 'link-one', messageId: 'draft-message-9' })
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Saved words')
+  await page.getByRole('button', { name: 'Discard' }).click()
+  await expect.poll(() => discarded).toBe(true)
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveCount(0)
+})
+
 test('updates read state only after the Gmail command is accepted', async ({ page }) => {
   let command: unknown
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
@@ -174,18 +370,32 @@ test('updates read state only after the Gmail command is accepted', async ({ pag
 })
 
 test('edits, saves, and sends a Gmail draft from the middle panel', async ({ page }) => {
+  let sendCount = 0
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
   const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
-  await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'Re: Opua berth confirmation', bodyText: '', state: 'draft', accountId: 'link-one' } } }))
-  await page.route('http://127.0.0.1:8411/v1/drafts/draft-1', async (route) => route.fulfill({ json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'Re: Opua berth confirmation', bodyText: 'Approved reply', state: 'draft', accountId: 'link-one' } } }))
-  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/draft-1\?action=send.*/, (route) => route.fulfill({ json: { delivery: { id: 'sent-1' } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', (route) => route.fulfill({ status: 201, json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyText: '', state: 'draft', accountId: 'link-one' } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts/draft-1', async (route) => route.fulfill({ json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: 'manager@example.com', bcc: 'audit@example.com', subject: 'Re: Opua berth confirmation', bodyText: 'Approved reply', state: 'draft', accountId: 'link-one' } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/draft-1\?action=send.*/, async (route) => {
+    sendCount += 1
+    await route.fulfill({ json: { delivery: { id: 'sent-1' } } })
+  })
   await page.goto('/')
   await page.getByRole('button', { name: 'Reply', exact: true }).click()
-  await page.getByRole('textbox', { name: 'Draft body' }).fill('Approved reply')
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/[^/]+\/turns/, () => {
+    throw new Error('Send must not call the agent service')
+  })
+  await page.getByRole('textbox', { name: 'Draft body' }).fill('**Approved reply**')
+  await page.getByRole('textbox', { name: 'Draft Cc' }).fill('manager@example.com')
+  await page.getByRole('textbox', { name: 'Draft Bcc' }).fill('audit@example.com')
   await page.getByRole('button', { name: 'Send draft' }).click()
+  await expect(page.getByRole('button', { name: 'Send now' })).toBeVisible()
+  await expect(page.locator('[data-send-confirm-text]')).toHaveText('To: ana@example.com\nCc: manager@example.com\nBcc: audit@example.com\nSubject: Re: Opua berth confirmation')
+  expect(sendCount).toBe(0)
+  await page.getByRole('button', { name: 'Send now' }).click()
+  await expect.poll(() => sendCount).toBe(1)
   await expect(page.getByText('Gmail confirmed that the draft was sent.')).toBeVisible()
 })
 

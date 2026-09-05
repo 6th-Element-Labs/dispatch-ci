@@ -42,3 +42,9 @@ export function projectConversation(messages: readonly MessageProjection[], sour
   const chronological = [...messages].sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt))
   return { ...summarizeConversation(chronological), messageCount: chronological.length, messages: chronological.reverse(), source }
 }
+
+export function replySourceMessage(conversation: ConversationProjection): MessageProjection {
+  const latest = conversation.messages.find((message) => message.id === conversation.latestMessageId)
+  if (!latest) throw new Error('Conversation is missing its latest message')
+  return latest
+}

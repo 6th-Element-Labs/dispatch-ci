@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupConversations, projectConversation } from '../src/conversation.js'
+import { groupConversations, projectConversation, replySourceMessage } from '../src/conversation.js'
 import type { MessageProjection, MessageSummary } from '../src/model.js'
 
 const base: MessageSummary = {
@@ -28,5 +28,29 @@ describe('conversation projection', () => {
     const message = { ...base, body: { kind: 'plain-text' as const, content: 'Hello' }, attachments: [], source: 'gmail' as const }
     const conversation = projectConversation([message, { ...message, id: 'm2', receivedAt: '2026-09-04T09:00:00Z' } satisfies MessageProjection], 'gmail')
     expect(conversation.messages.map((item) => item.id)).toEqual(['m2', 'm1'])
+  })
+
+  it('selects the newest message as the reply source on a newest-first thread', () => {
+    const older = {
+      ...base,
+      id: 'old',
+      receivedAt: '2026-09-04T08:00:00Z',
+      sender: { name: 'Old', address: 'old@example.com', initials: 'O' },
+      to: [{ name: 'Old To', address: 'old-to@example.com', initials: 'T' }],
+      body: { kind: 'plain-text' as const, content: 'Older' },
+      attachments: [],
+      source: 'gmail' as const,
+    }
+    const newer = {
+      ...older,
+      id: 'new',
+      receivedAt: '2026-09-04T10:00:00Z',
+      sender: { name: 'New', address: 'new@example.com', initials: 'N' },
+      to: [{ name: 'New To', address: 'new-to@example.com', initials: 'T' }],
+    }
+    const conversation = projectConversation([older, newer], 'gmail')
+    expect(conversation.messages.map((item) => item.id)).toEqual(['new', 'old'])
+    expect(replySourceMessage(conversation)).toMatchObject({ id: 'new', sender: { address: 'new@example.com' } })
+    expect(conversation.latestMessageId).toBe('new')
   })
 })

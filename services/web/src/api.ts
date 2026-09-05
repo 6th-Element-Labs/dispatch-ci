@@ -23,6 +23,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return value as T
 }
 
+function draftFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const bodyMarkdown = String(fields.bodyMarkdown ?? fields.bodyText ?? '')
+  return { ...fields, bodyMarkdown, bodyText: bodyMarkdown }
+}
+
 export const api = {
   async listAccounts(): Promise<GmailAccount[]> {
     const result = await request<{ accounts: GmailAccount[] }>(`${MAIL}/v1/accounts`)
@@ -74,12 +79,31 @@ export const api = {
   },
   async createDraft(messageId: string, fields: Record<string, unknown> = {}): Promise<DraftProjection> {
     const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId, ...fields }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId, ...draftFields(fields) }),
     })
     return result.draft
   },
   async updateDraft(id: string, fields: Record<string, unknown>): Promise<DraftProjection> {
-    const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) })
+    const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draftFields(fields)) })
+    return result.draft
+  },
+  async previewDraft(bodyMarkdown: string): Promise<string> {
+    const result = await request<{ bodyHtml: string }>(`${MAIL}/v1/drafts/preview`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ bodyMarkdown }),
+    })
+    return result.bodyHtml
+  },
+  async getDraft(id: string, accountId: string): Promise<DraftProjection> {
+    const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?account=${encodeURIComponent(accountId)}`)
+    return result.draft
+  },
+  async discardDraft(id: string, accountId: string): Promise<void> {
+    await request(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=discard&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
+  },
+  async openDraftFromMessage(accountId: string, messageId: string): Promise<DraftProjection> {
+    const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, messageId }),
+    })
     return result.draft
   },
   async sendDraft(id: string, accountId: string): Promise<void> {

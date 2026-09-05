@@ -20,7 +20,7 @@ All connected Gmail accounts enter one date-ordered queue by default. The user c
 
 The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. All, Unread, and Read filters operate on conversation state. A conversation is unread when any retrieved member message carries Gmail's `UNREAD` label. All contains Inbox conversations plus unread conversations outside Inbox, excluding spam and trash. Unread contains every unread conversation outside spam and trash. Read remains scoped to read Inbox conversations.
 
-Selecting a conversation loads the complete Gmail thread in chronological order. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
+Selecting a conversation loads the complete Gmail thread with the newest message first. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
 
 The user can keep one, two, or three panels open. Each panel has an explicit visibility control. At least one panel remains visible. The messages and Codex panel widths are adjustable and persist locally.
 
@@ -37,15 +37,15 @@ The first useful version lets a user:
 5. Open a cited Gmail resource.
 6. Create a draft through Codex.
 7. Review and edit the draft in the middle panel.
-8. Reach an explicit approval before sending.
+8. Confirm recipients and subject, then send from the Send button.
 
-The middle panel owns the visible Gmail draft preview. Recipient, subject, and body remain editable before Save or Send. Codex can revise the visible body. Sending occurs only from the explicit Send draft command and displays the connector result.
+The middle panel owns the visible Gmail draft. Recipient, subject, and Markdown body remain editable. Codex revises that same draft through mail create/update. Sending occurs only after the Send confirm and displays the connector result.
 
 Codex restores stored thread turns after reload, shows plans and tool activity, accepts same-turn steering, and exposes interruption. Gmail attachments use their exact parent message and attachment identities for preview or download and are included as explicit Codex citation context.
 
 ## Current foundation
 
-The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, paginated Gmail synchronization into a durable SQLite index, full MIME retrieval, safe browser rendering, and the browser experience. Sync state, timestamps, progress, and failures remain visible. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail writes run through Codex and its explicit approval flow; reply and respond requests show a complete preview before any send call.
+The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, paginated Gmail synchronization into a durable SQLite index, full MIME retrieval, safe browser rendering, and the browser experience. Sync state, timestamps, progress, and failures remain visible. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail draft create and update may run from the editor or from Codex tools. Sending never runs from Codex. The Send button shows a confirm, then dispatch-mail sends the draft.
 
 ## Non-goals for the foundation
 

@@ -89,6 +89,12 @@ button { cursor: pointer; }
 .dispatch-draft > .card > .card-header { display: flex; justify-content: space-between; gap: 1rem; }
 .dispatch-draft .form-label + .form-label { margin-top: 1rem; }
 .dispatch-draft textarea { min-height: 260px; resize: vertical; line-height: 1.55; }
+.dispatch-draft-preview { min-height: 96px; margin-top: 1rem; padding: 1rem; overflow-wrap: anywhere; border: 1px solid var(--tblr-border-color); border-radius: var(--tblr-border-radius); background: var(--tblr-bg-surface); }
+.dispatch-draft-preview:empty::before { content: "Draft preview"; color: var(--tblr-secondary-color); }
+.dispatch-draft-preview > :last-child { margin-bottom: 0; }
+.dispatch-draft [data-draft-error] { margin: .75rem 0 0; color: var(--tblr-danger) !important; overflow-wrap: anywhere; }
+.dispatch-draft [data-send-confirm] { margin: 1rem 0 0; }
+.dispatch-draft [data-send-confirm-text] { white-space: pre-line; }
 .dispatch-reader-actions { display: flex; flex-wrap: wrap; gap: .5rem; padding: .65rem 1rem; }
 
 .dispatch-agent { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }

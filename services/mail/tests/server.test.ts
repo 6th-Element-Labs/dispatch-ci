@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
+import { projectDraft } from '../src/draft.js'
 import { createMailServer } from '../src/server.js'
 
 const servers: ReturnType<typeof createMailServer>[] = []
@@ -45,6 +46,188 @@ describe('dispatch-mail', () => {
     expect(response.status).toBe(201)
     const body = await response.json()
     expect(body.draft).toMatchObject({ state: 'draft', inReplyToMessageId: 'demo-message-opua' })
+  })
+
+  it('keeps client bodyMarkdown on demo draft create', async () => {
+    const base = await start()
+    const quote = '\n\n> Please confirm.'
+    const response = await fetch(`${base}/v1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messageId: 'demo-message-opua', bodyMarkdown: quote }),
+    })
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.draft.bodyMarkdown).toContain('> Please confirm.')
+  })
+
+  it('renders draft Markdown through mail', async () => {
+    const base = await start()
+    const response = await fetch(`${base}/v1/drafts/preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bodyMarkdown: '**Hi**' }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ bodyHtml: expect.stringContaining('<strong>Hi</strong>') })
+  })
+
+  it('discards a demo draft', async () => {
+    const base = await start()
+    const created = await (await fetch(`${base}/v1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messageId: 'demo-message-opua' }),
+    })).json()
+    const discarded = await fetch(`${base}/v1/drafts/${created.draft.id}?action=discard`, { method: 'POST' })
+    expect(discarded.status).toBe(200)
+  })
+
+  it('reads an owned demo draft', async () => {
+    const base = await start()
+    const created = await (await fetch(`${base}/v1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messageId: 'demo-message-opua' }),
+    })).json()
+    const response = await fetch(`${base}/v1/drafts/${created.draft.id}`)
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ draft: created.draft })
+  })
+
+  it('opens, reads, and discards a Gmail draft through mail', async () => {
+    const calls: unknown[] = []
+    const draft = projectDraft({ id: 'draft-1', inReplyToMessageId: 'message-1', to: [], subject: 'Re: Hello', bodyMarkdown: 'Hello', accountId: 'one' })
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      openGmailDraft: async (accountId, messageId) => { calls.push({ open: { accountId, messageId } }); return draft },
+      readGmailDraft: async (accountId, draftId) => { calls.push({ read: { accountId, draftId } }); return draft },
+      discardGmailDraft: async (accountId, draftId) => { calls.push({ discard: { accountId, draftId } }) },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const opened = await fetch(`${base}/v1/drafts/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accountId: 'one', messageId: 'message-1' }),
+    })
+    expect(opened.status).toBe(201)
+    await expect(opened.json()).resolves.toEqual({ draft })
+    expect((await fetch(`${base}/v1/drafts/draft-1?account=one`)).status).toBe(200)
+    expect((await fetch(`${base}/v1/drafts/draft-1?action=discard&account=one`, { method: 'POST' })).status).toBe(200)
+    expect(calls).toEqual([
+      { open: { accountId: 'one', messageId: 'message-1' } },
+      { read: { accountId: 'one', draftId: 'draft-1' } },
+      { discard: { accountId: 'one', draftId: 'draft-1' } },
+    ])
+  })
+
+  it('returns typed Gmail draft connector failures', async () => {
+    const htmlError = Object.assign(new Error('HTML draft failed'), { code: 'gmail_html_unsupported' })
+    const discardError = Object.assign(new Error('Delete draft unavailable'), { code: 'gmail_draft_discard_unavailable' })
+    const notFoundError = Object.assign(new Error('Gmail draft not found'), { code: 'gmail_draft_not_found' })
+    const unavailableError = Object.assign(new Error('Gmail draft list unavailable'), { code: 'gmail_draft_open_unavailable' })
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      createGmailDraft: async () => { throw htmlError },
+      openGmailDraft: async () => { throw notFoundError },
+      readGmailDraft: async () => { throw unavailableError },
+      discardGmailDraft: async () => { throw discardError },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const create = await fetch(`${base}/v1/drafts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accountId: 'one', bodyMarkdown: 'Hi' }),
+    })
+    expect(create.status).toBe(502)
+    await expect(create.json()).resolves.toEqual({ error: 'gmail_html_unsupported', detail: 'HTML draft failed' })
+    const open = await fetch(`${base}/v1/drafts/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accountId: 'one', messageId: 'missing-message' }),
+    })
+    expect(open.status).toBe(404)
+    await expect(open.json()).resolves.toEqual({ error: 'gmail_draft_not_found', detail: 'Gmail draft not found' })
+    const read = await fetch(`${base}/v1/drafts/draft-1?account=one`)
+    expect(read.status).toBe(503)
+    await expect(read.json()).resolves.toEqual({ error: 'gmail_draft_open_unavailable', detail: 'Gmail draft list unavailable' })
+    const discard = await fetch(`${base}/v1/drafts/draft-1?action=discard&account=one`, { method: 'POST' })
+    expect(discard.status).toBe(502)
+    await expect(discard.json()).resolves.toEqual({ error: 'gmail_draft_discard_unavailable', detail: 'Delete draft unavailable' })
+  })
+
+  it('passes bodyMarkdown to Gmail draft create', async () => {
+    let bodyArg = ''
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      createGmailDraft: async (_accountId, _messageId, _to, _cc, _bcc, _subject, bodyText) => {
+        bodyArg = bodyText
+        return projectDraft({ id: 'draft-1', inReplyToMessageId: '', to: [], subject: '', bodyMarkdown: bodyText, accountId: 'one' })
+      },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${base}/v1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ accountId: 'one', bodyMarkdown: '**Hi**' }),
+    })
+    expect(response.status).toBe(201)
+    expect(bodyArg).toBe('**Hi**')
+    const body = await response.json()
+    expect(body.draft).toMatchObject({ bodyMarkdown: '**Hi**', bodyText: '**Hi**' })
+  })
+
+  it('rejects Gmail draft attachments that the connector cannot persist', async () => {
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      createGmailDraft: async () => { throw new Error('must not be called') },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${base}/v1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'one',
+        bodyMarkdown: 'Hi',
+        attachments: [{ name: 'arrival.pdf', mediaType: 'application/pdf' }],
+      }),
+    })
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toMatchObject({ error: 'gmail_attachment_unsupported' })
+  })
+
+  it('rejects non-object JSON on new draft routes', async () => {
+    const base = await start()
+    for (const path of ['/v1/drafts', '/v1/drafts/preview', '/v1/drafts/open']) {
+      const response = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'null',
+      })
+      expect(response.status, path).toBe(400)
+      await expect(response.json(), path).resolves.toEqual({ error: 'invalid_json' })
+    }
   })
 
   it('exposes threaded conversations with read-state filters', async () => {

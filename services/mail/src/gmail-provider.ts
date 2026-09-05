@@ -1,9 +1,10 @@
 import { groupConversations, projectConversation } from './conversation.js'
+import { plainBodyFromMessage, projectDraft } from './draft.js'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { GmailIndex, type GmailSyncStatus, type IndexedGmailMessage } from './gmail-index.js'
-import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
+import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -20,6 +21,17 @@ interface GmailSyncProgress {
   pagesFetched: number
   fetchedMessages: number
   currentAccount: string | null
+}
+
+interface GmailDraftSummary {
+  readonly draftId: string
+  readonly messageId: string
+  readonly threadId: string
+  readonly to: string
+  readonly cc: string
+  readonly bcc: string
+  readonly subject: string
+  readonly hasAttachment: boolean
 }
 
 function defaultIndexPath(): string {
@@ -62,6 +74,44 @@ function mergeIndexedMessages(messages: readonly IndexedGmailMessage[]): Indexed
       : message)
   }
   return [...merged.values()]
+}
+
+function draftConnectorError(error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error)
+  if (/html|mime_type|text\/html/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_html_unsupported' })
+  if (/attach/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_attachment_unsupported' })
+  if (/discard|delete_draft/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_draft_discard_unavailable' })
+  if (/gmail_draft_list_unavailable/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_draft_open_unavailable' })
+  return error instanceof Error ? error : new Error(detail)
+}
+
+function gmailDraftSummary(value: unknown): GmailDraftSummary {
+  const draft = record(value) ?? {}
+  const draftId = text(draft.draft_id)
+  const messageId = text(draft.message_id)
+  if (!draftId || !messageId) throw new Error('Gmail draft list row is missing draft_id or message_id')
+  return {
+    draftId,
+    messageId,
+    threadId: text(draft.thread_id),
+    to: text(draft.to),
+    cc: text(draft.cc),
+    bcc: text(draft.bcc),
+    subject: text(draft.subject),
+    hasAttachment: draft.has_attachment === true,
+  }
+}
+
+function rejectListedDraftAttachments(summary: GmailDraftSummary): void {
+  if (summary.hasAttachment) {
+    throw Object.assign(new Error('Gmail draft attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
+  }
+}
+
+function rejectReadDraftAttachments(message: MessageProjection): void {
+  if (message.attachments.length > 0) {
+    throw Object.assign(new Error('Gmail draft attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
+  }
 }
 
 function headers(payload: UnknownRecord): Map<string, string> {
@@ -195,6 +245,7 @@ export class GmailConnectorProvider {
   #retryTimer: ReturnType<typeof setTimeout> | undefined
   #stopped = false
   readonly #mailboxCache = new Map<string, { expiresAt: number; conversations: readonly ConversationSummary[] }>()
+  readonly #drafts = new Map<string, DraftProjection>()
   #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
 
   constructor(
@@ -526,21 +577,85 @@ export class GmailConnectorProvider {
     this.#scheduleSync(1_000)
   }
 
-  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyText: string): Promise<DraftProjection> {
-    const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', { linkId: accountId, replyMessageId: messageId || null, to, cc, bcc, subject, bodyText }))
-    const id = text(value.draft_id) || text(value.id)
-    if (!id) throw new Error('Gmail did not return a draft ID')
-    return { id, inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyText, state: 'draft', accountId }
+  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[] = []): Promise<DraftProjection> {
+    if (draftAttachments.length > 0) {
+      throw Object.assign(new Error('Gmail compose attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
+    }
+    const draft = projectDraft({ id: '', inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments: draftAttachments, accountId })
+    try {
+      const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', {
+        linkId: accountId, replyMessageId: messageId || null, to, cc, bcc, subject,
+        bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: bodyMarkdown,
+      }))
+      const id = text(value.draft_id) || text(value.id)
+      if (!id) throw new Error('Gmail did not return a draft ID')
+      const saved = { ...draft, id }
+      this.#drafts.set(`${accountId}:${id}`, saved)
+      this.#mailboxCache.clear()
+      return saved
+    } catch (error) {
+      throw draftConnectorError(error)
+    }
   }
 
   async updateGmailDraft(draft: DraftProjection): Promise<DraftProjection> {
     if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
-    await this.#post('/v1/connectors/gmail/drafts/update', { linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '), cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject, bodyText: draft.bodyText })
+    if (draft.attachments.length > 0) {
+      throw Object.assign(new Error('Gmail compose attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
+    }
+    try {
+      await this.#post('/v1/connectors/gmail/drafts/update', {
+        linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '),
+        cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject,
+        bodyMarkdown: draft.bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: draft.bodyText,
+      })
+      this.#drafts.set(`${draft.accountId}:${draft.id}`, draft)
+      this.#mailboxCache.clear()
+      return draft
+    } catch (error) {
+      throw draftConnectorError(error)
+    }
+  }
+
+  async readGmailDraft(accountId: string, draftId: string): Promise<DraftProjection> {
+    const summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId)
+    if (!summary) {
+      throw Object.assign(new Error(`Gmail draft ${draftId} was not found`), { code: 'gmail_draft_not_found' })
+    }
+    rejectListedDraftAttachments(summary)
+    const message = await this.readMessage(accountId, summary.messageId)
+    const existing = this.#drafts.get(`${accountId}:${draftId}`)
+    const draft = this.#projectGmailDraft(summary, message, existing?.inReplyToMessageId ?? summary.messageId, accountId)
+    this.#drafts.set(`${accountId}:${draftId}`, draft)
     return draft
   }
 
+  async openGmailDraft(accountId: string, messageId: string): Promise<DraftProjection> {
+    const summary = await this.#findGmailDraft(accountId, (draft) => draft.messageId === messageId || draft.threadId === messageId)
+    if (!summary) {
+      throw Object.assign(new Error(`Gmail draft for message ${messageId} was not found`), { code: 'gmail_draft_not_found' })
+    }
+    rejectListedDraftAttachments(summary)
+    const message = await this.readMessage(accountId, summary.messageId)
+    const draft = this.#projectGmailDraft(summary, message, messageId, accountId)
+    this.#drafts.set(`${accountId}:${summary.draftId}`, draft)
+    return draft
+  }
+
+  async discardGmailDraft(accountId: string, draftId: string): Promise<void> {
+    try {
+      await this.#post('/v1/connectors/gmail/drafts/discard', { linkId: accountId, draftId })
+      this.#drafts.delete(`${accountId}:${draftId}`)
+      this.#mailboxCache.clear()
+    } catch (error) {
+      throw draftConnectorError(error)
+    }
+  }
+
   async sendGmailDraft(accountId: string, draftId: string): Promise<unknown> {
-    return this.#post('/v1/connectors/gmail/drafts/send', { linkId: accountId, draftId })
+    const result = await this.#post('/v1/connectors/gmail/drafts/send', { linkId: accountId, draftId })
+    this.#mailboxCache.clear()
+    return result
   }
   async readAttachment(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<unknown> {
     return this.#post('/v1/connectors/gmail/attachment', { linkId: accountId, messageId, attachmentId, filename })
@@ -550,6 +665,45 @@ export class GmailConnectorProvider {
     const account = (await this.accounts()).find((candidate) => candidate.id === accountId)
     if (!account) throw new Error('Unknown Gmail account')
     return account
+  }
+
+  async #findGmailDraft(accountId: string, matches: (draft: GmailDraftSummary) => boolean): Promise<GmailDraftSummary | undefined> {
+    let nextPageToken = ''
+    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      let value: unknown
+      try {
+        value = await this.#post('/v1/connectors/gmail/drafts/list', {
+          linkId: accountId,
+          maxResults: 100,
+          nextPageToken,
+        })
+      } catch (error) {
+        throw draftConnectorError(error)
+      }
+      const content = structured(value)
+      const match = array(content.drafts).map(gmailDraftSummary).find(matches)
+      if (match) return match
+      const next = text(content.next_page_token)
+      if (!next) return undefined
+      if (next === nextPageToken) throw new Error(`Gmail draft pagination repeated page token ${next}`)
+      nextPageToken = next
+    }
+    throw new Error('Gmail draft pagination exceeded 100 pages')
+  }
+
+  #projectGmailDraft(summary: GmailDraftSummary, message: MessageProjection, inReplyToMessageId: string, accountId: string): DraftProjection {
+    rejectReadDraftAttachments(message)
+    return projectDraft({
+      id: summary.draftId,
+      inReplyToMessageId,
+      to: addressList(summary.to),
+      cc: summary.cc,
+      bcc: summary.bcc,
+      subject: summary.subject,
+      bodyMarkdown: plainBodyFromMessage(message),
+      attachments: [],
+      accountId,
+    })
   }
 
   async #post(path: string, bodyValue: UnknownRecord): Promise<unknown> {

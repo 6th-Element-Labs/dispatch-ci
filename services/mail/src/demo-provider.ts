@@ -1,4 +1,5 @@
 import { groupConversations, projectConversation } from './conversation.js'
+import { projectDraft } from './draft.js'
 import type { ConversationProjection, ConversationSummary, DraftProjection, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 const messages: readonly MessageProjection[] = [
@@ -79,18 +80,27 @@ export class DemoMailProvider {
     return thread.length > 0 ? projectConversation(thread, 'demo') : undefined
   }
 
-  createDraft(messageId: string): DraftProjection | undefined {
+  createDraft(messageId: string, fields?: { bodyMarkdown?: string }): DraftProjection | undefined {
     const message = this.readMessage(messageId)
     if (!message) return undefined
-    const draft: DraftProjection = {
+    const defaultBodyMarkdown = `Hi ${message.sender.name.split(' ')[0] ?? message.sender.name},\n\nThank you.\n\nRegards,\nSteve`
+    const bodyMarkdown = typeof fields?.bodyMarkdown === 'string' ? fields.bodyMarkdown : defaultBodyMarkdown
+    const draft = projectDraft({
       id: `demo-draft-${message.id}`,
       inReplyToMessageId: message.id,
       to: [message.sender],
       subject: message.subject.startsWith('Re:') ? message.subject : `Re: ${message.subject}`,
-      bodyText: `Hi ${message.sender.name.split(' ')[0] ?? message.sender.name},\n\nThank you.\n\nRegards,\nSteve`,
-      state: 'draft',
-    }
+      bodyMarkdown,
+    })
     this.#drafts.set(draft.id, draft)
     return draft
+  }
+
+  readDraft(draftId: string): DraftProjection | undefined {
+    return this.#drafts.get(draftId)
+  }
+
+  discardDraft(draftId: string): boolean {
+    return this.#drafts.delete(draftId)
   }
 }
