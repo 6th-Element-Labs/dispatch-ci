@@ -2,6 +2,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import readline from 'node:readline'
 import { JsonLineRpc, type RpcMessage } from './json-line-rpc.js'
 
+const INITIAL_RESTART_DELAY_MS = 500
+const MAX_RESTART_DELAY_MS = 30_000
+
 export class CodexProcess {
   readonly #command: string
   readonly #listeners = new Set<(message: RpcMessage) => void>()
@@ -13,10 +16,27 @@ export class CodexProcess {
   #restartTimer: NodeJS.Timeout | undefined
   #closed = false
   #startedOnce = false
+  #restartDelayMs = INITIAL_RESTART_DELAY_MS
 
   constructor(command = process.env.DISPATCH_CODEX_COMMAND ?? 'codex') {
     this.#command = command
-    this.#ready = this.#launch()
+    this.#ready = this.#observed(this.#launch())
+  }
+
+  /**
+   * Readiness is awaited lazily by /ready and request(); between probes nobody
+   * holds the promise. Attach a no-op handler so a rejected launch is reported
+   * through ready() and lastError() instead of crashing the service as an
+   * unhandled rejection. The returned promise still rejects for callers.
+   */
+  #observed(promise: Promise<void>): Promise<void> {
+    promise.catch(() => undefined)
+    return promise
+  }
+
+  /** Delay before the next relaunch attempt. Doubles on repeated failure, resets on success. */
+  nextRestartDelayMs(): number {
+    return this.#restartDelayMs
   }
 
   async #launch(): Promise<void> {
@@ -40,12 +60,14 @@ export class CodexProcess {
       rpc.rejectAll(reason)
       if (this.#process !== process || this.#closed) return
       this.#listeners.forEach((listener) => listener({ method: 'dispatch/appServerDisconnected', params: { reason: reason.message } }))
-      this.#ready = new Promise<void>((resolve, reject) => {
+      const delay = this.#restartDelayMs
+      this.#restartDelayMs = Math.min(this.#restartDelayMs * 2, MAX_RESTART_DELAY_MS)
+      this.#ready = this.#observed(new Promise<void>((resolve, reject) => {
         this.#restartTimer = setTimeout(() => {
           this.#restartTimer = undefined
           this.#launch().then(resolve, reject)
-        }, 500)
-      })
+        }, delay)
+      }))
     }
     process.on('error', (error) => handleFailure(new Error(`Could not start Codex App Server: ${error.message}`)))
     process.on('exit', (code, signal) => handleFailure(new Error(`Codex App Server exited (${code ?? signal ?? 'unknown'})`)))
@@ -61,6 +83,7 @@ export class CodexProcess {
     }
     rpc.notify('initialized', {})
     this.#lastError = null
+    this.#restartDelayMs = INITIAL_RESTART_DELAY_MS
     const reconnected = this.#startedOnce
     this.#startedOnce = true
     if (reconnected) this.#listeners.forEach((listener) => listener({ method: 'dispatch/appServerReconnected', params: {} }))
