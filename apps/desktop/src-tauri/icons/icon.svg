@@ -1,30 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">Dispatch</title>
-  <desc id="desc">An open charcoal envelope with one clear azure message rising out of it.</desc>
+  <desc id="desc">Three forward chevrons in glowing volt green on an ink tile, with a four-point spark.</desc>
   <defs>
-    <linearGradient id="clear-azure" x1="330" y1="300" x2="700" y2="620" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#168CFF"/>
-      <stop offset="1" stop-color="#0064E8"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1C1F26"/><stop offset="1" stop-color="#0B0D12"/>
     </linearGradient>
-    <filter id="soft-shadow" x="-30%" y="-30%" width="170%" height="190%">
-      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0059B8" flood-opacity=".22"/>
+    <linearGradient id="volt" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#F2FF7A"/><stop offset="1" stop-color="#B9F000"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="170%" height="190%">
+      <feDropShadow dx="0" dy="22" stdDeviation="20" flood-color="#000000" flood-opacity=".55"/>
     </filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>
   </defs>
-  <rect x="60" y="60" width="904" height="904" rx="206" fill="#FFFFFF"/>
-  <rect x="62" y="62" width="900" height="900" rx="204" fill="none" stroke="#E5E7EB" stroke-width="6"/>
-  <!-- envelope body -->
-  <g fill="none" stroke="#20201F" stroke-width="50" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M210 470v290c0 44 36 80 80 80h444c44 0 80-36 80-80V470"/>
-    <path d="M210 470l302 214 302-214"/>
-    <path d="M210 470l110-84M814 470l-110-84"/>
+  <rect x="60" y="60" width="904" height="904" rx="206" fill="url(#tile)"/>
+  <path d="M610 300l210 212-210 212" fill="none" stroke="#C8F51A" stroke-width="120" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)" opacity=".55"/>
+  <g fill="none" stroke="url(#volt)" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <path d="M250 300l210 212-210 212" opacity=".35"/>
+    <path d="M430 300l210 212-210 212" opacity=".65"/>
+    <path d="M610 300l210 212-210 212"/>
   </g>
-  <!-- rising message -->
-  <g filter="url(#soft-shadow)">
-    <rect x="352" y="220" width="320" height="330" rx="34" fill="url(#clear-azure)"/>
-    <g fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" opacity=".92">
-      <path d="M418 316h188"/>
-      <path d="M418 386h188"/>
-      <path d="M418 456h120"/>
-    </g>
-  </g>
+  <path transform="translate(795 255) scale(.75)" d="M0-100C6-40 40-6 100 0 40 6 6 40 0 100-6 40-40 6-100 0-40-6-6-40 0-100z" fill="url(#volt)"/>
 </svg>
