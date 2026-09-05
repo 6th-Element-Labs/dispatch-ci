@@ -224,10 +224,14 @@ function rewriteCidImages(html: string, messageId: string, accountId: string, it
   })
 }
 
-function received(value: string): { iso: string; label: string; fullLabel: string } {
+function received(value: string, context?: { messageId?: string; account?: string }): { iso: string; label: string; fullLabel: string } {
   const numeric = Number(value)
   const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(value)
-  if (Number.isNaN(date.getTime())) throw new Error('Gmail message has an invalid or missing received timestamp')
+  if (Number.isNaN(date.getTime())) {
+    const subject = context?.messageId ? `Gmail message ${context.messageId}` : 'Gmail message'
+    const where = context?.account ? ` in ${context.account}` : ''
+    throw new Error(`${subject}${where} has an invalid or missing received timestamp (got ${JSON.stringify(value)})`)
+  }
   return {
     iso: date.toISOString(),
     label: new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date),
@@ -241,7 +245,7 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
   const messageHeaders = headers(payload)
   if (message.label_ids !== null && message.label_ids !== undefined && !Array.isArray(message.label_ids)) throw new Error('Gmail message label_ids must be an array or null')
   if (!messageHeaders.get('from')) throw new Error('Gmail message is missing its From header')
-  const receivedAt = received(text(message.internal_date) || messageHeaders.get('date') || '')
+  const receivedAt = received(text(message.internal_date) || messageHeaders.get('date') || '', { messageId: text(message.id), account: account?.email })
   const projection: MessageProjection = {
     id: text(message.id),
     threadId: text(message.thread_id),
@@ -277,10 +281,10 @@ export function projectGmailSearchEmail(value: unknown, account: GmailAccountPro
   const email = record(value) ?? {}
   if (!Array.isArray(email.labels)) throw new Error('Gmail search result is missing labels')
   if (!text(email.from_)) throw new Error('Gmail search result is missing from_')
-  const receivedAt = received(text(email.email_ts))
   const id = text(email.id)
   const threadId = text(email.thread_id)
   if (!id || !threadId) throw new Error('Gmail search result is missing stable message identity')
+  const receivedAt = received(text(email.email_ts), { messageId: id, account: account.email || account.name })
   return {
     id,
     threadId,
@@ -488,14 +492,29 @@ export class GmailConnectorProvider {
       linkId: account.id, query, labelIds, maxResults, nextPageToken,
     })
     const content = structured(search)
-    return {
-      messages: array(content.emails).map((email) => {
-        const value = record(email)
-        const labels = array(value?.labels)
-        return { ...projectGmailSearchEmail(email, account), ...folderFlagsFromLabels(labels) }
-      }),
-      nextPageToken: text(content.next_page_token),
+    const messages: IndexedGmailMessage[] = []
+    for (const email of array(content.emails)) {
+      const value = record(email)
+      const labels = array(value?.labels)
+      const completed = text(value?.email_ts) ? email : await this.#withMessageTimestamp(account, value ?? {})
+      messages.push({ ...projectGmailSearchEmail(completed, account), ...folderFlagsFromLabels(labels) })
     }
+    return { messages, nextPageToken: text(content.next_page_token) }
+  }
+
+  /**
+   * The connector's search projection omits email_ts for some messages, seen on
+   * calendar auto-replies in Sent. The full message still carries Gmail's
+   * internal date, so read it rather than failing the whole synchronization.
+   * The fallback is named on stderr; a message with no timestamp anywhere still
+   * fails with its id and account in the error.
+   */
+  async #withMessageTimestamp(account: GmailAccountProjection, email: UnknownRecord): Promise<UnknownRecord> {
+    const messageId = text(email.id)
+    if (!messageId) throw new Error(`Gmail search result in ${account.email || account.name} has no email_ts and no id`)
+    const message = await this.readMessage(account.id, messageId)
+    process.stderr.write(`dispatch-mail: search result ${messageId} in ${account.email || account.name} had no email_ts; using the message internal date ${message.receivedAt}\n`)
+    return { ...email, email_ts: message.receivedAt }
   }
 
   async #ensureIndex(): Promise<void> {

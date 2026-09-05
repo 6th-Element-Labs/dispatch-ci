@@ -1637,6 +1637,8 @@ async function refreshSyncStatus(): Promise<void> {
       elements.mailError.textContent = sync.error ?? 'Gmail synchronization failed without an error detail.'
       syncErrorVisible = true
     } else if (sync.state === 'syncing') {
+      if (syncErrorVisible) elements.mailError.hidden = true
+      syncErrorVisible = false
       const accountProgress = sync.accountCount
         ? ` · account ${Math.min((sync.accountsCompleted ?? 0) + 1, sync.accountCount)}/${sync.accountCount}`
         : ''

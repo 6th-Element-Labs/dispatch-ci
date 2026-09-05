@@ -92,6 +92,61 @@ describe('GmailConnectorProvider', () => {
     }, account)).toThrow('invalid or missing received timestamp')
   })
 
+  it('reads the message when a search result has no email_ts instead of failing the whole page', async () => {
+    const reads: string[] = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messageId?: string } : {}
+      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        return response.end(JSON.stringify({ structuredContent: { emails: [
+          { id: 'sent-ok', thread_id: 't-ok', from_: 'Steve <work@example.com>', subject: 'Normal', snippet: '', labels: ['SENT'], email_ts: '2026-09-03T21:42:00Z' },
+          { id: 'sent-accept', thread_id: 't-accept', from_: 'Steve <work@example.com>', subject: 'Event accepted: Quick meeting', snippet: '', labels: ['SENT'], email_ts: '' },
+        ] } }))
+      }
+      if (request.url === '/v1/connectors/gmail/read') {
+        reads.push(body.messageId ?? '')
+        return response.end(JSON.stringify({ structuredContent: { ...gmailMessage.structuredContent, id: 'sent-accept', thread_id: 't-accept', internal_date: '1788486120000' } }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    const messages = await provider.listMessages('link-one', 10)
+    expect(reads).toEqual(['sent-accept'])
+    expect(messages.map((message) => [message.id, message.receivedAt])).toEqual([
+      ['sent-ok', '2026-09-03T21:42:00.000Z'],
+      ['sent-accept', new Date(1788486120000).toISOString()],
+    ])
+  })
+
+  it('names the message and account when no timestamp exists even after reading it', async () => {
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      for await (const _chunk of request) { /* drain */ }
+      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        return response.end(JSON.stringify({ structuredContent: { emails: [
+          { id: 'sent-accept', thread_id: 't-accept', from_: 'Steve <work@example.com>', subject: 'Event accepted', snippet: '', labels: ['SENT'], email_ts: '' },
+        ] } }))
+      }
+      if (request.url === '/v1/connectors/gmail/read') {
+        const { internal_date: _drop, ...rest } = gmailMessage.structuredContent
+        return response.end(JSON.stringify({ structuredContent: { ...rest, id: 'sent-accept', thread_id: 't-accept', payload: { ...rest.payload, headers: rest.payload.headers.filter((header) => header.name !== 'Date') } } }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await expect(provider.listMessages('link-one', 10)).rejects.toThrow(/sent-accept.*work@example\.com.*invalid or missing received timestamp/)
+  })
+
   it('uses the agent service instead of reading connector state directly', async () => {
     const searches: Array<{ query?: string; labelIds?: string[] }> = []
     const server = createServer(async (request, response) => {
