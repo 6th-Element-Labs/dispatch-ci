@@ -15,20 +15,44 @@ if (isNativeShell(window as { isTauri?: unknown })) document.documentElement.cla
 
 app.innerHTML = `
   <div class="page dispatch-window">
-    <header class="navbar navbar-expand-md d-print-none dispatch-titlebar" data-tauri-drag-region>
-      <div class="container-fluid">
-        <div class="navbar-brand navbar-brand-autodark m-0"><span class="avatar avatar-sm bg-blue text-white">D</span><strong>Dispatch</strong><span class="badge bg-blue-lt text-blue">All Gmail inboxes</span></div>
-        <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control" placeholder="Search Gmail" aria-label="Search mail"></label>
-        <div class="navbar-nav flex-row align-items-center gap-2 ms-auto"><button class="btn btn-icon btn-outline-secondary" type="button" data-refresh aria-label="Refresh"><i class="ti ti-refresh" aria-hidden="true"></i></button><button class="btn btn-primary" type="button" data-compose><i class="ti ti-square-rounded-plus me-1" aria-hidden="true"></i><span data-compose-label>Compose</span></button></div>
+    <header class="dispatch-toolbar" data-tauri-drag-region>
+      <div class="dispatch-toolbar-cluster dispatch-toolbar-messages" data-toolbar-messages>
+        <div class="dispatch-folder">
+          <button class="btn btn-ghost-secondary btn-sm dispatch-folder-button" type="button" data-folder-toggle aria-haspopup="menu" aria-expanded="false"><h1 class="dispatch-folder-title" data-mailbox-title>Inbox</h1><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+          <div class="dropdown-menu dispatch-folder-menu" data-folder-menu role="menu" hidden>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="inbox"><i class="ti ti-inbox dropdown-item-icon" aria-hidden="true"></i>Inbox</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="sent"><i class="ti ti-send dropdown-item-icon" aria-hidden="true"></i>Sent</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="drafts"><i class="ti ti-file-pencil dropdown-item-icon" aria-hidden="true"></i>Drafts</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="archive"><i class="ti ti-archive dropdown-item-icon" aria-hidden="true"></i>Archive</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="spam"><i class="ti ti-alert-octagon dropdown-item-icon" aria-hidden="true"></i>Spam</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="trash"><i class="ti ti-trash dropdown-item-icon" aria-hidden="true"></i>Trash</button>
+          </div>
+        </div>
+        <select class="form-select form-select-sm dispatch-scope" data-account aria-label="Gmail account"><option value="">All inboxes</option></select>
+        <span class="dispatch-toolbar-spacer"></span>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button>
+        <button class="btn btn-icon btn-ghost-primary btn-sm" type="button" data-compose aria-label="Compose" title="Compose"><i class="ti ti-pencil" aria-hidden="true"></i></button>
+      </div>
+      <div class="dispatch-toolbar-cluster dispatch-toolbar-reader">
+        <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button>
+        <span class="dispatch-toolbar-spacer"></span>
+        <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control form-control-sm" data-search placeholder="Search" aria-label="Search mail"><kbd class="dispatch-search-kbd" aria-hidden="true">⌘K</kbd></label>
+      </div>
+      <div class="dispatch-toolbar-cluster dispatch-toolbar-agent" data-toolbar-agent>
+        <span class="dispatch-toolbar-spacer"></span>
+        <div class="btn-group dispatch-panel-controls" role="group" aria-label="Visible panels">
+          <button class="btn btn-sm btn-icon active" type="button" data-panel="messages" aria-pressed="true" aria-label="Messages" title="Messages (Control + &#96;)"><i class="ti ti-layout-sidebar" aria-hidden="true"></i></button>
+          <button class="btn btn-sm btn-icon active" type="button" data-panel="reader" aria-pressed="true" aria-label="Email" title="Email"><i class="ti ti-mail" aria-hidden="true"></i></button>
+          <button class="btn btn-sm btn-icon active" type="button" data-panel="agent" aria-pressed="true" aria-label="Codex" title="Codex"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
+        </div>
       </div>
     </header>
     <div class="dispatch-workspace">
       <nav class="dispatch-rail nav nav-pills flex-column bg-white" aria-label="Mail folders"><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
-        <div class="card-header dispatch-pane-heading"><div><h1 class="card-title mb-1" data-mailbox-title>Inbox</h1><span class="text-secondary" data-mail-source>Loading</span></div><div class="btn-list flex-nowrap"><button class="btn btn-icon btn-ghost-secondary dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" aria-label="Message filters"><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i></button></div></div>
-        <label class="dispatch-folder-select px-3 pt-3"><span class="form-label mb-1">Folder</span><select class="form-select form-select-sm" data-mailbox-select aria-label="Gmail folder"><option value="inbox">Inbox</option><option value="sent">Sent</option><option value="drafts">Drafts</option><option value="archive">Archive</option><option value="spam">Spam</option><option value="trash">Trash</option></select></label>
-        <label class="dispatch-account px-3 pt-3" hidden><span class="form-label mb-1">Gmail account</span><select class="form-select form-select-sm" data-account aria-label="Gmail account"></select></label>
-        <div class="btn-group mx-3 my-3 dispatch-mail-filters" role="group" aria-label="Message state"><button class="btn btn-sm active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="btn btn-sm" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="btn btn-sm" type="button" data-mail-state="read" aria-pressed="false">Read</button></div>
+        <nav class="dispatch-mail-tabs" aria-label="Message state"><button class="dispatch-mail-tab active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="dispatch-mail-tab" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="dispatch-mail-tab" type="button" data-mail-state="read" aria-pressed="false">Read</button></nav>
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
       </aside>
@@ -72,7 +96,6 @@ app.innerHTML = `
         </footer>
       </aside>
     </div>
-    <footer class="dispatch-statusbar border-top bg-white"><span class="text-secondary"><i class="ti ti-circle-check text-green me-1" aria-hidden="true"></i><span data-status-summary>Gmail and Codex status shown in each pane</span></span><div class="btn-group dispatch-panel-controls" role="group" aria-label="Visible panels"><button class="btn btn-sm active" type="button" data-panel="messages" aria-pressed="true" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)">Messages</button><button class="btn btn-sm active" type="button" data-panel="reader" aria-pressed="true">Email</button><button class="btn btn-sm active" type="button" data-panel="agent" aria-pressed="true">Codex</button></div></footer>
   </div>`
 
 const elements = {
@@ -85,8 +108,6 @@ const elements = {
   list: app.querySelector<HTMLElement>('[data-message-list]')!,
   mailSource: app.querySelector<HTMLElement>('[data-mail-source]')!,
   mailboxTitle: app.querySelector<HTMLElement>('[data-mailbox-title]')!,
-  mailboxSelect: app.querySelector<HTMLSelectElement>('[data-mailbox-select]')!,
-  accountWrap: app.querySelector<HTMLElement>('.dispatch-account')!,
   account: app.querySelector<HTMLSelectElement>('[data-account]')!,
   mailError: app.querySelector<HTMLElement>('[data-mail-error]')!,
   reader: app.querySelector<HTMLElement>('[data-reader]')!,
@@ -120,14 +141,18 @@ const elements = {
   connector: app.querySelector<HTMLElement>('[data-connector]')!,
   stream: app.querySelector<HTMLElement>('[data-agent-stream]')!,
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
-  search: app.querySelector<HTMLInputElement>('[aria-label="Search mail"]')!,
+  search: app.querySelector<HTMLInputElement>('[data-search]')!,
+  toolbarMessages: app.querySelector<HTMLElement>('[data-toolbar-messages]')!,
+  toolbarAgent: app.querySelector<HTMLElement>('[data-toolbar-agent]')!,
+  folderToggle: app.querySelector<HTMLButtonElement>('[data-folder-toggle]')!,
+  folderMenu: app.querySelector<HTMLElement>('[data-folder-menu]')!,
+  sync: app.querySelector<HTMLElement>('.dispatch-sync')!,
   stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
   archive: app.querySelector<HTMLButtonElement>('[data-archive]')!,
   spam: app.querySelector<HTMLButtonElement>('[data-spam]')!,
   trash: app.querySelector<HTMLButtonElement>('[data-trash]')!,
   moveInbox: app.querySelector<HTMLButtonElement>('[data-move-inbox]')!,
-  statusSummary: app.querySelector<HTMLElement>('[data-status-summary]')!,
 }
 
 function renderServiceStatus(): void {
@@ -139,7 +164,8 @@ function renderServiceStatus(): void {
   else if (status === 'Failed') elements.agentStatus.classList.add('bg-red-lt', 'text-red')
   else elements.agentStatus.classList.add('bg-secondary-lt')
   elements.agentActivity.hidden = status !== 'Working'
-  elements.statusSummary.textContent = `${elements.mailSource.textContent?.trim() || 'Gmail loading'} · Codex ${status || 'connecting'}`
+  const source = elements.mailSource.textContent?.trim() ?? ''
+  elements.sync.dataset.syncState = /FAILED|Unavailable/.test(source) ? 'failed' : /^(Syncing|Refreshing)/.test(source) ? 'syncing' : /^(STALE|Partial)/.test(source) ? 'stale' : 'ready'
 }
 
 new MutationObserver(renderServiceStatus).observe(elements.mailSource, { childList: true, subtree: true })
@@ -228,6 +254,8 @@ function renderPanels(): void {
     elements.messagesDivider.hidden = true
     elements.agentDivider.hidden = true
     elements.workspace.style.gridTemplateColumns = 'minmax(0, 1fr)'
+    elements.toolbarMessages.style.width = ''
+    elements.toolbarAgent.style.width = ''
     app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => {
       const active = button.dataset.panel === mobilePanel
       button.setAttribute('aria-pressed', String(active))
@@ -263,6 +291,12 @@ function renderPanels(): void {
   if (!elements.agentDivider.hidden) columns.push('9px')
   if (panels.agent) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${agentWidth}px`)
   elements.workspace.style.gridTemplateColumns = columns.join(' ')
+  const messagesCluster = panels.messages && visible.length > 1
+  const agentCluster = panels.agent && visible.length > 1
+  elements.toolbarMessages.style.width = messagesCluster ? `${railWidth + messagesWidth + 9}px` : ''
+  elements.toolbarAgent.style.width = agentCluster ? `${agentWidth + 9}px` : ''
+  elements.toolbarMessages.classList.toggle('dispatch-toolbar-cluster-auto', !messagesCluster)
+  elements.toolbarAgent.classList.toggle('dispatch-toolbar-cluster-auto', !agentCluster)
   elements.messagesDivider.setAttribute('aria-valuenow', String(Math.round(messagesWidth)))
   elements.agentDivider.setAttribute('aria-valuenow', String(Math.round(agentWidth)))
   app.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => {
@@ -319,7 +353,6 @@ const mailboxLabels: Record<GmailMailbox, string> = { inbox: 'Inbox', sent: 'Sen
 
 function renderMailbox(): void {
   elements.mailboxTitle.textContent = mailboxLabels[mailbox]
-  elements.mailboxSelect.value = mailbox
   app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => {
     const active = button.dataset.mailbox === mailbox
     button.classList.toggle('active', active)
@@ -1647,7 +1680,7 @@ async function connectMail(): Promise<void> {
     if (accounts.length > 0) {
       const all = document.createElement('option')
       all.value = ''
-      all.textContent = `All Gmail inboxes (${accounts.length})`
+      all.textContent = `All inboxes (${accounts.length})`
       all.selected = !selectedAccountId
       elements.account.replaceChildren(all, ...accounts.map((account) => {
         const option = document.createElement('option')
@@ -1656,7 +1689,6 @@ async function connectMail(): Promise<void> {
         option.selected = account.id === selectedAccountId
         return option
       }))
-      elements.accountWrap.hidden = false
     }
     await loadConversations()
     if (accounts.length > 0) startSyncStatusWatch()
@@ -1693,11 +1725,6 @@ app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => bu
   renderMailbox()
   void loadConversations()
 }))
-elements.mailboxSelect.addEventListener('change', () => {
-  mailbox = elements.mailboxSelect.value as GmailMailbox
-  renderMailbox()
-  void loadConversations()
-})
 elements.search.addEventListener('input', () => {
   searchQuery = elements.search.value.trim()
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
@@ -1803,8 +1830,28 @@ elements.prompt.addEventListener('keydown', (event) => {
     void sendPrompt()
   }
 })
+function setFolderMenu(open: boolean): void {
+  elements.folderMenu.hidden = !open
+  elements.folderMenu.classList.toggle('show', open)
+  elements.folderToggle.setAttribute('aria-expanded', String(open))
+}
+elements.folderToggle.addEventListener('click', (event) => {
+  event.stopPropagation()
+  setFolderMenu(elements.folderMenu.hidden)
+})
+elements.folderMenu.addEventListener('click', () => setFolderMenu(false))
+document.addEventListener('click', (event) => {
+  if (!elements.folderMenu.hidden && !elements.folderMenu.contains(event.target as Node)) setFolderMenu(false)
+})
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setFolderMenu(false) })
 window.addEventListener('resize', renderPanels)
 window.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    elements.search.focus()
+    elements.search.select()
+    return
+  }
   if (!event.ctrlKey || event.metaKey || event.altKey || event.code !== 'Backquote') return
   event.preventDefault()
   if (usesMobilePanels()) {
