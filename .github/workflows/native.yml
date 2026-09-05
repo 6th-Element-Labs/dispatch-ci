@@ -58,10 +58,5 @@ jobs:
       - name: Build Dispatch.app
         run: npm --prefix apps/desktop run build:native -- --bundles app
 
-      - name: Assert the bundle carries its sidecar and services
-        run: |
-          set -euo pipefail
-          app="apps/desktop/src-tauri/target/release/bundle/macos/Dispatch.app"
-          test -x "$app/Contents/MacOS/node"
-          test -f "$app/Contents/Resources/services/mail/server.js"
-          test -f "$app/Contents/Resources/services/agent/server.js"
+      - name: Start the bundled services with the bundled Node
+        run: npm --prefix apps/desktop run smoke

@@ -12,7 +12,8 @@
     "icon": "mkdir -p .icon-build && qlmanage -t -s 1024 -o .icon-build src-tauri/icons/icon.svg >/dev/null && tauri icon .icon-build/icon.svg.png && rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/Square*.png src-tauri/icons/StoreLogo.png src-tauri/icons/64x64.png",
     "dev:native": "tauri dev",
     "build:native": "tauri build",
-    "test:native": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:native": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "smoke": "node scripts/smoke-bundle.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
