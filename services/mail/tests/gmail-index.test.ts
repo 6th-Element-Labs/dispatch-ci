@@ -26,8 +26,8 @@ describe('GmailIndex', () => {
     index.replaceAccounts([{ id: 'account-1', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }], '2026-09-04T09:00:00Z')
     index.replaceAccount('account-1', [message('m1', true, false), message('m2', false, true), message('m3', true, true)], 'run-1', true)
     index.completeSync('2026-09-04T09:01:00Z')
-    expect(index.conversations('all')).toHaveLength(2)
-    expect(index.conversations('unread')).toMatchObject([{ latestMessageId: 'm3', unread: true }])
+    expect(index.conversations('all')).toHaveLength(3)
+    expect(index.conversations('unread').map((conversation) => conversation.latestMessageId)).toEqual(['m1', 'm3'])
     expect(index.conversations('read')).toMatchObject([{ latestMessageId: 'm2', unread: false }])
     index.close()
 
@@ -58,10 +58,10 @@ describe('GmailIndex', () => {
   it('searches indexed Gmail fields and operators', () => {
     const index = new GmailIndex(':memory:')
     index.replaceAccount('account-1', [{ ...message('m1', true, true), hasAttachment: true }, message('m2', false, true), { ...message('m3', true, false), subject: 'Archived only' }], 'run-1', true)
-    expect(index.searchConversations('from:ana', 'all')).toHaveLength(2)
+    expect(index.searchConversations('from:ana', 'all')).toHaveLength(3)
     expect(index.searchConversations('subject:m1 has:attachment is:unread', 'all')).toHaveLength(1)
     expect(index.searchConversations('after:2026-09-04T08:30:00Z', 'all')).toHaveLength(1)
-    expect(index.searchConversations('subject:Archived', 'all')).toHaveLength(0)
+    expect(index.searchConversations('subject:Archived', 'all')).toHaveLength(1)
     expect(() => index.searchConversations('label:custom', 'all')).toThrow('Unsupported Gmail search operator')
     index.close()
   })

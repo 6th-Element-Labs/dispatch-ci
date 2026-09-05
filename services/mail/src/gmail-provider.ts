@@ -45,6 +45,25 @@ function structured(value: unknown): UnknownRecord {
   return record(root?.structuredContent) ?? {}
 }
 
+const INDEX_STREAMS = [['INBOX'], ['UNREAD']] as const
+
+function queueSearchSpec(state: MailStateFilter): { query: string; labels: readonly string[] } {
+  if (state === 'unread') return { query: 'is:unread -in:spam -in:trash', labels: ['UNREAD'] }
+  if (state === 'read') return { query: 'in:inbox is:read -in:spam -in:trash', labels: ['INBOX'] }
+  return { query: '(in:inbox OR is:unread) -in:spam -in:trash', labels: [] }
+}
+
+function mergeIndexedMessages(messages: readonly IndexedGmailMessage[]): IndexedGmailMessage[] {
+  const merged = new Map<string, IndexedGmailMessage>()
+  for (const message of messages) {
+    const existing = merged.get(message.id)
+    merged.set(message.id, existing
+      ? { ...message, unread: existing.unread || message.unread, inInbox: existing.inInbox || message.inInbox }
+      : message)
+  }
+  return [...merged.values()]
+}
+
 function headers(payload: UnknownRecord): Map<string, string> {
   const result = new Map<string, string>()
   for (const item of array(payload.headers)) {
@@ -235,10 +254,10 @@ export class GmailConnectorProvider {
         this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
         const pages = await Promise.all(accounts.map(async (account) => {
-          const page = await this.#searchPage(account, 50, '-in:spam -in:trash', ['INBOX'], '')
-          this.#syncProgress.pagesFetched += 1
-          this.#syncProgress.fetchedMessages += page.messages.length
-          return { account, messages: page.messages }
+          const streams = await Promise.all(INDEX_STREAMS.map((labelIds) => this.#searchPage(account, 50, '-in:spam -in:trash', labelIds, '')))
+          this.#syncProgress.pagesFetched += streams.length
+          this.#syncProgress.fetchedMessages += streams.reduce((count, page) => count + page.messages.length, 0)
+          return { account, messages: mergeIndexedMessages(streams.flatMap((page) => page.messages)) }
         }))
         for (const page of pages) {
           this.#syncProgress.currentAccount = page.account.name
@@ -282,7 +301,7 @@ export class GmailConnectorProvider {
       return this.#index.messages(accountId).filter((message) => message.inInbox)
     }
     const account = await this.#account(accountId)
-    return this.#listAccountMessages(account, maxResults, 'all')
+    return this.#searchAccountMessages(account, maxResults, '-in:spam -in:trash', ['INBOX'])
   }
 
   async listUnifiedMessages(maxResultsPerAccount = 10): Promise<readonly MessageSummary[]> {
@@ -291,7 +310,7 @@ export class GmailConnectorProvider {
       return this.#index.messages().filter((message) => message.inInbox)
     }
     const accounts = await this.accounts()
-    const lists = await Promise.all(accounts.map((account) => this.#listAccountMessages(account, maxResultsPerAccount, 'all')))
+    const lists = await Promise.all(accounts.map((account) => this.#searchAccountMessages(account, maxResultsPerAccount, '-in:spam -in:trash', ['INBOX'])))
     return lists
       .flat()
       .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
@@ -331,17 +350,18 @@ export class GmailConnectorProvider {
     const cached = this.#mailboxCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) return cached.conversations
     const accounts = accountId ? [await this.#account(accountId)] : await this.accounts()
-    const folder: Record<GmailMailbox, { query: string; labels: string[] }> = {
-      inbox: { query: '-in:spam -in:trash', labels: ['INBOX'] },
+    const folder: Record<GmailMailbox, { query: string; labels: readonly string[] }> = {
+      inbox: queueSearchSpec(state),
       sent: { query: '-in:trash', labels: ['SENT'] },
       drafts: { query: '-in:trash', labels: ['DRAFT'] },
       archive: { query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labels: [] },
       spam: { query: 'in:spam', labels: ['SPAM'] },
       trash: { query: 'in:trash', labels: ['TRASH'] },
     }
-    const stateQuery = state === 'unread' ? 'is:unread' : state === 'read' ? 'is:read' : ''
-    const gmailQuery = [folder[mailbox].query, stateQuery, query].filter(Boolean).join(' ')
-    const labels = state === 'unread' ? [...folder[mailbox].labels, 'UNREAD'] : folder[mailbox].labels
+    const spec = folder[mailbox]
+    const stateQuery = mailbox === 'inbox' ? '' : state === 'unread' ? 'is:unread' : state === 'read' ? 'is:read' : ''
+    const gmailQuery = [spec.query, stateQuery, query].filter(Boolean).join(' ')
+    const labels = mailbox === 'inbox' ? spec.labels : state === 'unread' ? [...spec.labels, 'UNREAD'] : spec.labels
     const pages = await Promise.all(accounts.map((account) => this.#searchPages(account, gmailQuery, labels, 1)))
     const conversations = groupConversations(pages.flat(), state)
     this.#mailboxCache.set(cacheKey, { expiresAt: Date.now() + 60_000, conversations })
@@ -349,12 +369,8 @@ export class GmailConnectorProvider {
   }
 
   async #listAccountMessages(account: GmailAccountProjection, maxResults: number, state: MailStateFilter): Promise<readonly MessageSummary[]> {
-    return this.#searchAccountMessages(
-      account,
-      maxResults,
-      state === 'read' ? '-in:spam -in:trash is:read' : state === 'unread' ? '-in:spam -in:trash is:unread' : '-in:spam -in:trash',
-      state === 'unread' ? ['INBOX', 'UNREAD'] : ['INBOX'],
-    )
+    const spec = queueSearchSpec(state)
+    return this.#searchAccountMessages(account, maxResults, spec.query, spec.labels)
   }
 
   async #searchAccountMessages(account: GmailAccountProjection, maxResults: number, query: string, labelIds: readonly string[]): Promise<readonly MessageSummary[]> {
@@ -430,20 +446,15 @@ export class GmailConnectorProvider {
         const completion: boolean[] = []
         for (const account of accounts) {
           this.#syncProgress.currentAccount = account.name
-          const messages = new Map<string, IndexedGmailMessage>()
+          const messages: IndexedGmailMessage[] = []
           let complete = true
-          for (const labelIds of [['INBOX']] as const) {
+          for (const labelIds of INDEX_STREAMS) {
             let token = ''
             for (let pageNumber = 0; pageNumber < maxPagesPerStream; pageNumber += 1) {
               const page = await this.#searchPage(account, 50, '-in:spam -in:trash', labelIds, token)
               this.#syncProgress.pagesFetched += 1
               this.#syncProgress.fetchedMessages += page.messages.length
-              for (const message of page.messages) {
-                const existing = messages.get(message.id)
-                messages.set(message.id, existing
-                  ? { ...message, unread: existing.unread || message.unread, inInbox: existing.inInbox || message.inInbox }
-                  : message)
-              }
+              messages.push(...page.messages)
               if (!page.nextPageToken) {
                 token = ''
                 break
@@ -456,7 +467,7 @@ export class GmailConnectorProvider {
               if (requireComplete) throw new Error(`Gmail pagination exceeded ${maxPagesPerStream} pages for account ${account.name}`)
             }
           }
-          this.#index!.replaceAccount(account.id, [...messages.values()], runId, complete)
+          this.#index!.replaceAccount(account.id, mergeIndexedMessages(messages), runId, complete)
           completion.push(complete)
           this.#syncProgress.accountsCompleted += 1
         }

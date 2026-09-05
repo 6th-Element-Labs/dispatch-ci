@@ -86,14 +86,16 @@ describe('GmailConnectorProvider', () => {
     const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
     expect(await provider.accounts()).toEqual([{ id: 'link-one', connectorId: '', name: 'Work', email: 'work@example.com' }])
     expect(await provider.listMessages('link-one', 1)).toHaveLength(1)
+    await provider.listConversations('link-one', 'all', 1)
     await provider.listConversations('link-one', 'unread', 1)
     await provider.listConversations('link-one', 'read', 1)
     await provider.listMailboxConversations('sent', 'all', 'link-one')
     await provider.listMailboxConversations('archive', 'all', 'link-one')
     expect(searches).toEqual([
       expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['INBOX'] }),
-      expect.objectContaining({ query: '-in:spam -in:trash is:unread', labelIds: ['INBOX', 'UNREAD'] }),
-      expect.objectContaining({ query: '-in:spam -in:trash is:read', labelIds: ['INBOX'] }),
+      expect.objectContaining({ query: '(in:inbox OR is:unread) -in:spam -in:trash', labelIds: [] }),
+      expect.objectContaining({ query: 'is:unread -in:spam -in:trash', labelIds: ['UNREAD'] }),
+      expect.objectContaining({ query: 'in:inbox is:read -in:spam -in:trash', labelIds: ['INBOX'] }),
       expect.objectContaining({ query: '-in:trash', labelIds: ['SENT'] }),
       expect.objectContaining({ query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labelIds: [] }),
     ])
@@ -123,10 +125,10 @@ describe('GmailConnectorProvider', () => {
         for await (const chunk of request) chunks.push(Buffer.from(chunk))
         const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { labelIds?: string[]; nextPageToken?: string }
         requests.push(payload)
-        const unread = payload.labelIds?.includes('UNREAD')
+        const unread = payload.labelIds?.includes('UNREAD') === true && payload.labelIds.includes('INBOX') !== true
         const second = payload.nextPageToken === 'page-2'
         const emails = unread
-          ? [{ id: 'm2', thread_id: 't2', from_: 'Bea <bea@example.com>', subject: 'Unread', snippet: 'Two', labels: ['UNREAD'], email_ts: '2026-09-04T08:00:00Z' }]
+          ? [{ id: 'm3', thread_id: 't3', from_: 'Cara <cara@example.com>', subject: 'Archived unread', snippet: 'Three', labels: ['UNREAD'], email_ts: '2026-09-04T07:00:00Z' }]
           : [{ id: second ? 'm2' : 'm1', thread_id: second ? 't2' : 't1', from_: 'Ana <ana@example.com>', subject: second ? 'Unread' : 'Inbox', snippet: 'One', labels: second ? ['INBOX', 'UNREAD'] : ['INBOX'], email_ts: second ? '2026-09-04T08:00:00Z' : '2026-09-04T09:00:00Z' }]
         return response.end(JSON.stringify({ structuredContent: { emails, next_page_token: !unread && !second ? 'page-2' : '' } }))
       }
@@ -140,20 +142,21 @@ describe('GmailConnectorProvider', () => {
     directories.push(directory)
     const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: join(directory, 'gmail.sqlite') })
     await provider.syncNow()
-    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 2 })
-    expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
-    expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
+    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3 })
+    expect(await provider.listUnifiedConversations('all')).toHaveLength(3)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(2)
     await provider.setConversationUnread('link-one', 't2', false)
-    expect(await provider.listUnifiedConversations('unread')).toHaveLength(0)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
     expect(requests.filter((request) => request.labelIds?.includes('INBOX'))).toHaveLength(2)
+    expect(requests.filter((request) => request.labelIds?.includes('UNREAD') === true && request.labelIds.includes('INBOX') !== true)).toHaveLength(1)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
     await provider.refreshNow()
-    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 2, pagesFetched: 1 })
-    expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
+    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 2 })
+    expect(await provider.listUnifiedConversations('all')).toHaveLength(3)
     failSearch = true
     await expect(provider.syncNow()).rejects.toThrow('Gmail connector request failed (502)')
-    expect(provider.syncStatus()).toMatchObject({ state: 'failed', messageCount: 2 })
-    await expect(provider.listUnifiedConversations('all')).resolves.toHaveLength(2)
+    expect(provider.syncStatus()).toMatchObject({ state: 'failed', messageCount: 3 })
+    await expect(provider.listUnifiedConversations('all')).resolves.toHaveLength(3)
     failInventory = true
     await expect(provider.accounts()).resolves.toMatchObject([{ id: 'link-one', email: 'work@example.com' }])
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Gmail account refresh failed') })

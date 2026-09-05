@@ -41,6 +41,12 @@ type MessageRow = {
   has_attachment: number
 }
 
+function queueEligible(message: IndexedGmailMessage, state: MailStateFilter): boolean {
+  if (state === 'unread') return message.unread
+  if (state === 'read') return message.inInbox
+  return message.inInbox || message.unread
+}
+
 export class GmailIndex {
   readonly #db: DatabaseSync
 
@@ -208,8 +214,7 @@ export class GmailIndex {
   }
 
   conversations(state: MailStateFilter, accountId?: string): readonly ConversationSummary[] {
-    const eligible = this.messages(accountId).filter((message) => message.inInbox)
-    return groupConversations(eligible, state)
+    return groupConversations(this.messages(accountId).filter((message) => queueEligible(message, state)), state)
   }
 
   searchConversations(query: string, state: MailStateFilter, accountId?: string): readonly ConversationSummary[] {
@@ -232,7 +237,7 @@ export class GmailIndex {
         messages = messages.filter((message) => `${message.sender.name} ${message.sender.address} ${message.subject} ${message.preview}`.toLowerCase().includes(value))
       } else throw new Error(`Unsupported Gmail search operator: ${field}:`)
     }
-    return groupConversations(messages.filter((message) => message.inInbox), state)
+    return groupConversations(messages.filter((message) => queueEligible(message, state)), state)
   }
 
   count(): number {
