@@ -154,7 +154,7 @@ export function createMailServer(
               : accountId ? await gmail.listConversations(accountId, state) : await gmail.listUnifiedConversations(state)
           const page = conversations.slice(cursorValue, cursorValue + limitValue)
           const nextCursor = cursorValue + page.length < conversations.length ? String(cursorValue + page.length) : null
-          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, mailbox, coverage: mailbox === 'inbox' ? 'indexed' : 'recent', conversations: page, nextCursor, total: conversations.length, sync: gmail.syncStatus?.() })
+          return writeJson(response, 200, { source: 'gmail', scope: accountId ? 'account' : 'unified', state, mailbox, coverage: 'indexed', conversations: page, nextCursor, total: conversations.length, sync: gmail.syncStatus?.() })
         }
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_conversation_list_failed', detail: error instanceof Error ? error.message : String(error) })

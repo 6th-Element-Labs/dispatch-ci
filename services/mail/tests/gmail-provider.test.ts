@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { projectDraft } from '../src/draft.js'
-import { GmailConnectorProvider, projectGmailMessage, projectGmailSearchEmail } from '../src/gmail-provider.js'
+import { GmailConnectorProvider, mergeIndexedMessages, projectGmailMessage, projectGmailSearchEmail } from '../src/gmail-provider.js'
 
 const servers: ReturnType<typeof createServer>[] = []
 const directories: string[] = []
@@ -100,15 +100,11 @@ describe('GmailConnectorProvider', () => {
     await provider.listConversations('link-one', 'all', 1)
     await provider.listConversations('link-one', 'unread', 1)
     await provider.listConversations('link-one', 'read', 1)
-    await provider.listMailboxConversations('sent', 'all', 'link-one')
-    await provider.listMailboxConversations('archive', 'all', 'link-one')
     expect(searches).toEqual([
       expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['INBOX'] }),
       expect.objectContaining({ query: '(in:inbox OR is:unread) -in:spam -in:trash', labelIds: [] }),
       expect.objectContaining({ query: 'is:unread -in:spam -in:trash', labelIds: ['UNREAD'] }),
       expect.objectContaining({ query: 'in:inbox is:read -in:spam -in:trash', labelIds: ['INBOX'] }),
-      expect.objectContaining({ query: '-in:trash', labelIds: ['SENT'] }),
-      expect.objectContaining({ query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labelIds: [] }),
     ])
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })
     expect(await provider.readConversation('link-one', 'gmail-thread-1')).toMatchObject({ threadId: 'gmail-thread-1', messageCount: 1, source: 'gmail' })
@@ -137,11 +133,14 @@ describe('GmailConnectorProvider', () => {
         const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { labelIds?: string[]; nextPageToken?: string }
         requests.push(payload)
         const unread = payload.labelIds?.includes('UNREAD') === true && payload.labelIds.includes('INBOX') !== true
+        const inbox = payload.labelIds?.includes('INBOX') === true
         const second = payload.nextPageToken === 'page-2'
         const emails = unread
           ? [{ id: 'm3', thread_id: 't3', from_: 'Cara <cara@example.com>', subject: 'Archived unread', snippet: 'Three', labels: ['UNREAD'], email_ts: '2026-09-04T07:00:00Z' }]
-          : [{ id: second ? 'm2' : 'm1', thread_id: second ? 't2' : 't1', from_: 'Ana <ana@example.com>', subject: second ? 'Unread' : 'Inbox', snippet: 'One', labels: second ? ['INBOX', 'UNREAD'] : ['INBOX'], email_ts: second ? '2026-09-04T08:00:00Z' : '2026-09-04T09:00:00Z' }]
-        return response.end(JSON.stringify({ structuredContent: { emails, next_page_token: !unread && !second ? 'page-2' : '' } }))
+          : inbox
+            ? [{ id: second ? 'm2' : 'm1', thread_id: second ? 't2' : 't1', from_: 'Ana <ana@example.com>', subject: second ? 'Unread' : 'Inbox', snippet: 'One', labels: second ? ['INBOX', 'UNREAD'] : ['INBOX'], email_ts: second ? '2026-09-04T08:00:00Z' : '2026-09-04T09:00:00Z' }]
+            : []
+        return response.end(JSON.stringify({ structuredContent: { emails, next_page_token: inbox && !second ? 'page-2' : '' } }))
       }
       if (request.url === '/v1/connectors/gmail/modify') return response.end(JSON.stringify({ ok: true }))
       response.statusCode = 404
@@ -162,7 +161,7 @@ describe('GmailConnectorProvider', () => {
     expect(requests.filter((request) => request.labelIds?.includes('UNREAD') === true && request.labelIds.includes('INBOX') !== true)).toHaveLength(1)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
     await provider.refreshNow()
-    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 2 })
+    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 7 })
     expect(await provider.listUnifiedConversations('all')).toHaveLength(3)
     failSearch = true
     await expect(provider.syncNow()).rejects.toThrow('Gmail connector request failed (502)')
@@ -172,6 +171,66 @@ describe('GmailConnectorProvider', () => {
     await expect(provider.accounts()).resolves.toMatchObject([{ id: 'link-one', email: 'work@example.com' }])
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Gmail account refresh failed') })
     provider.stopBackgroundSync()
+  })
+
+  it('merges folder flags from multiple streams and treats system labels as not archive', () => {
+    const base = {
+      id: 'm1', threadId: 't1', accountId: 'one', accountLabel: 'Work',
+      sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' },
+      subject: 'Hello', receivedAt: '2026-09-06T01:00:00Z', receivedLabel: 'x', receivedFullLabel: 'x',
+      preview: '', unread: false, inInbox: false, inSent: false, inDrafts: false,
+      inArchive: false, inSpam: false, inTrash: false,
+    }
+    expect(mergeIndexedMessages([
+      { ...base, inInbox: true },
+      { ...base, inSent: true, inArchive: true },
+    ])).toMatchObject([{ id: 'm1', inInbox: true, inSent: true, inArchive: false }])
+  })
+
+  it('lists Sent from the index and does not live-search folders', async () => {
+    const searches: Array<{ query?: string; labelIds?: string[] }> = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }] }))
+      }
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { query?: string; labelIds?: string[] }
+        searches.push(payload)
+        const emails = payload.labelIds?.includes('SENT')
+          ? Array.from({ length: 51 }, (_, offset) => ({
+              id: `sent-${offset}`, thread_id: `thread-sent-${offset}`, from_: 'Ana <ana@example.com>',
+              subject: `Sent ${offset}`, snippet: '', labels: ['SENT'],
+              email_ts: `2026-09-06T01:${String(offset).padStart(2, '0')}:00Z`,
+            }))
+          : []
+        return response.end(JSON.stringify({ structuredContent: { emails } }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-folder-'))
+    directories.push(directory)
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, {
+      indexPath: join(directory, 'gmail.sqlite'),
+    })
+    await provider.syncNow()
+    const before = searches.length
+    const sent = await provider.listMailboxConversations('sent', 'all', 'link-one')
+    expect(sent).toHaveLength(51)
+    expect(searches.length).toBe(before)
+    provider.stopBackgroundSync()
+  })
+
+  it('fails folder lists when the durable index is missing', async () => {
+    const provider = new GmailConnectorProvider('http://127.0.0.1:9', { indexPath: false })
+    await expect(provider.listMailboxConversations('sent', 'all', 'link-one')).rejects.toThrow(
+      'Durable Gmail index is required for mailbox lists',
+    )
   })
 
   it('rejects create and update attachments before contacting Gmail', async () => {
@@ -356,50 +415,98 @@ describe('GmailConnectorProvider', () => {
     })
   })
 
-  it('clears the mailbox cache after each Gmail draft write', async () => {
-    let searches = 0
+  it('keeps folder rows when archiving and refreshes the index after draft writes', async () => {
+    const searches: Array<{ query?: string; labelIds?: string[] }> = []
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
       if (request.url === '/v1/connectors/gmail') {
-        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }] }))
       }
       if (request.url === '/v1/connectors/gmail/search-messages') {
-        searches += 1
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        searches.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as { query?: string; labelIds?: string[] })
         return response.end(JSON.stringify({ structuredContent: { emails: [{
-          id: `message-${searches}`, thread_id: `thread-${searches}`, from_: 'Ana <ana@example.com>',
-          subject: 'Sent', snippet: '', labels: ['SENT'], email_ts: '2026-09-05T01:00:00Z',
+          id: 'm1', thread_id: 't1', from_: 'Ana <ana@example.com>', subject: 'Inbox', snippet: '',
+          labels: ['INBOX'], email_ts: '2026-09-06T02:00:00Z',
         }] } }))
       }
+      if (request.url === '/v1/connectors/gmail/archive') return response.end(JSON.stringify({ ok: true }))
       if (request.url === '/v1/connectors/gmail/drafts/create') {
         return response.end(JSON.stringify({ structuredContent: { draft_id: 'draft-1' } }))
       }
       if (request.url === '/v1/connectors/gmail/drafts/update'
         || request.url === '/v1/connectors/gmail/drafts/discard'
-        || request.url === '/v1/connectors/gmail/drafts/send') {
-        return response.end(JSON.stringify({ ok: true }))
+        || request.url === '/v1/connectors/gmail/drafts/send'
+        || request.url === '/v1/connectors/gmail/drafts/list') {
+        return response.end(JSON.stringify({
+          structuredContent: {
+            drafts: [{
+              draft_id: 'draft-1', message_id: 'm1', thread_id: 't1',
+              to: '', cc: '', bcc: '', subject: 'Inbox',
+            }],
+          },
+        }))
       }
       response.statusCode = 404
       response.end('{}')
     })
     servers.push(server)
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
-    const listSent = () => provider.listMailboxConversations('sent', 'all', 'link-one')
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-mutate-'))
+    directories.push(directory)
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, {
+      indexPath: join(directory, 'gmail.sqlite'),
+    })
+    await provider.syncNow()
+    await provider.mutateConversation('link-one', 't1', ['m1'], 'archive')
+    expect(await provider.listMailboxConversations('archive', 'all', 'link-one')).toHaveLength(1)
+    expect(await provider.listMailboxConversations('inbox', 'all', 'link-one')).toHaveLength(0)
 
-    await listSent()
-    await listSent()
-    expect(searches).toBe(1)
-
-    const draft = await provider.createGmailDraft('link-one', '', 'client@example.com', '', '', 'Subject', 'Body')
-    await listSent()
-    await provider.updateGmailDraft(projectDraft({ ...draft, bodyMarkdown: 'Updated' }))
-    await listSent()
+    const before = searches.length
+    await provider.createGmailDraft('link-one', '', 'client@example.com', '', '', 'Subject', 'Body')
     await provider.discardGmailDraft('link-one', 'draft-1')
-    await listSent()
     await provider.sendGmailDraft('link-one', 'draft-1')
-    await listSent()
+    expect(searches.length).toBeGreaterThan(before)
+    provider.stopBackgroundSync()
+  })
 
-    expect(searches).toBe(5)
+  it('fails a complete sync when one folder stream exceeds 100 pages', async () => {
+    let sentPage = 0
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/v1/connectors/gmail') {
+        return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }] }))
+      }
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { labelIds?: string[] }
+        const looping = payload.labelIds?.includes('SENT') === true
+        if (looping) sentPage += 1
+        return response.end(JSON.stringify({
+          structuredContent: {
+            emails: looping ? [{
+              id: `sent-${sentPage}`, thread_id: 't-sent', from_: 'Ana <ana@example.com>', subject: 'Sent',
+              snippet: '', labels: ['SENT'], email_ts: '2026-09-06T03:00:00Z',
+            }] : [],
+            next_page_token: looping ? `more-${sentPage}` : '',
+          },
+        }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-cap-'))
+    directories.push(directory)
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, {
+      indexPath: join(directory, 'gmail.sqlite'),
+    })
+    await expect(provider.syncNow()).rejects.toThrow('Gmail pagination exceeded 100 pages')
+    expect(provider.syncStatus()).toMatchObject({ state: 'failed' })
+    provider.stopBackgroundSync()
   })
 
   it('discards Gmail drafts and maps connector failures to typed errors', async () => {

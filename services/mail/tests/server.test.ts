@@ -287,7 +287,8 @@ describe('dispatch-mail', () => {
     servers.push(server)
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    expect((await fetch(`${base}/v1/conversations?state=all&mailbox=sent&account=one&q=invoice`)).status).toBe(200)
+    const sent = await (await fetch(`${base}/v1/conversations?state=all&mailbox=sent&account=one&q=invoice`)).json()
+    expect(sent).toMatchObject({ mailbox: 'sent', coverage: 'indexed' })
     expect((await fetch(`${base}/v1/conversations/t1/actions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId: 'one', messageIds: ['m1'], action: 'archive' }) })).status).toBe(202)
     expect(calls).toEqual([
       { mailbox: 'sent', state: 'all', accountId: 'one', query: 'invoice' },
