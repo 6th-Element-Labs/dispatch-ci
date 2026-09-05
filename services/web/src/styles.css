@@ -26,7 +26,7 @@ button { cursor: pointer; }
 .dispatch-divider:hover > i, .dispatch-divider:active > i { color: var(--tblr-primary); }
 .dispatch-resizing { cursor: col-resize !important; user-select: none !important; }
 
-.dispatch-messages { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; overflow: hidden; border-right: 1px solid var(--tblr-border-color) !important; }
+.dispatch-messages { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 1fr) auto; overflow: hidden; border-right: 1px solid var(--tblr-border-color) !important; }
 .dispatch-pane-heading { min-height: 68px; justify-content: space-between; padding: .8rem 1rem; }
 .dispatch-pane-heading > div { min-width: 0; }
 .dispatch-pane-heading [data-mail-source] { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; }
@@ -49,7 +49,7 @@ button { cursor: pointer; }
 .dispatch-pane-error { font-size: .75rem; }
 
 .dispatch-reader { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--tblr-border-color) !important; }
-.dispatch-reader > [data-reader] { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.dispatch-reader > [data-reader] { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; }
 .dispatch-reader > [data-reader].dispatch-drafting { grid-template-rows: auto minmax(140px, .55fr) minmax(300px, 1fr) auto; }
 .dispatch-reader > [data-reader].dispatch-composing { grid-template-rows: auto minmax(0, 1fr) auto; }
 .dispatch-reader > [data-reader].dispatch-composing .dispatch-draft { grid-row: 2; }
@@ -110,7 +110,11 @@ button { cursor: pointer; }
 .dispatch-draft [data-send-confirm-text] { white-space: pre-line; }
 .dispatch-reader-actions { display: flex; flex-wrap: wrap; gap: .5rem; padding: .65rem 1rem; }
 
-.dispatch-agent { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+.dispatch-agent { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+/* Pane children are grid items: without an explicit min-width they refuse to shrink below their nowrap text and the pane overflows the divider. */
+.dispatch-messages > *, .dispatch-reader > [data-reader] > *, .dispatch-agent > * { min-width: 0; }
+.dispatch-agent > header > .d-flex { min-width: 0; flex-wrap: wrap; row-gap: .35rem; }
+.dispatch-agent > header > .d-flex > strong { flex: none; }
 .dispatch-agent > header { display: block; padding: .8rem 1rem; }
 .dispatch-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; }
 .dispatch-agent-stream { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 1rem; background: var(--tblr-bg-surface); }

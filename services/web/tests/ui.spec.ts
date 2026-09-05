@@ -457,6 +457,38 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await expect(messagesPanel).toBeVisible()
 })
 
+test('reflows pane content instead of overflowing when a divider narrows it', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('[data-conversation-id]').first()).toBeVisible()
+  const divider = await page.locator('[data-divider="messages"]').boundingBox()
+  expect(divider).not.toBeNull()
+  await page.mouse.move(divider!.x + 4, divider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(divider!.x - 400, divider!.y + 100, { steps: 10 })
+  await page.mouse.up()
+  const messages = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('.dispatch-messages')!
+    const widths = [...panel.children, ...panel.querySelectorAll('.dispatch-message')].map((child) => child.getBoundingClientRect().width)
+    return { panel: panel.getBoundingClientRect().width, scrollWidth: panel.scrollWidth, maxChild: Math.max(...widths) }
+  })
+  expect(messages.panel).toBeLessThanOrEqual(221)
+  expect(messages.scrollWidth).toBeLessThanOrEqual(Math.ceil(messages.panel))
+  expect(messages.maxChild).toBeLessThanOrEqual(Math.ceil(messages.panel))
+  const agentDivider = await page.locator('[data-divider="agent"]').boundingBox()
+  expect(agentDivider).not.toBeNull()
+  await page.mouse.move(agentDivider!.x + 4, agentDivider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(agentDivider!.x + 400, agentDivider!.y + 100, { steps: 10 })
+  await page.mouse.up()
+  const agent = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('.dispatch-agent')!
+    return { panel: panel.getBoundingClientRect().width, scrollWidth: panel.scrollWidth, maxChild: Math.max(...[...panel.children].map((child) => child.getBoundingClientRect().width)) }
+  })
+  expect(agent.panel).toBeLessThanOrEqual(281)
+  expect(agent.scrollWidth).toBeLessThanOrEqual(Math.ceil(agent.panel))
+  expect(agent.maxChild).toBeLessThanOrEqual(Math.ceil(agent.panel))
+})
+
 test('uses one native Tabler pane at a time on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
