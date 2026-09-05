@@ -296,6 +296,7 @@ export function createAgentServer(runtime: AgentRuntime) {
             body: { content: payload.bodyHtml },
           },
           text_plain: String(payload.bodyMarkdown ?? payload.bodyText ?? ''),
+          ...Array.isArray(payload.attachments) ? { attachments: payload.attachments } : {},
         }
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.createDraft, arguments: args }))
       } catch (error) { return json(response, 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error) }) }
@@ -343,6 +344,7 @@ export function createAgentServer(runtime: AgentRuntime) {
             body: { content: payload.bodyHtml },
           },
           text_plain: String(payload.bodyMarkdown ?? payload.bodyText ?? ''),
+          ...Array.isArray(payload.attachments) ? { attachments: payload.attachments } : {},
         }
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.updateDraft, arguments: args }))
       } catch (error) { return json(response, 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error) }) }

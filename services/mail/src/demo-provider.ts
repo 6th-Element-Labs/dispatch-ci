@@ -1,6 +1,6 @@
 import { groupConversations, projectConversation } from './conversation.js'
 import { projectDraft } from './draft.js'
-import type { ConversationProjection, ConversationSummary, DraftProjection, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
+import type { ConversationProjection, ConversationSummary, DraftProjection, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 const messages: readonly MessageProjection[] = [
   {
@@ -69,6 +69,18 @@ export class DemoMailProvider {
 
   readMessage(id: string): MessageProjection | undefined {
     return messages.find((message) => message.id === id)
+  }
+
+  listRecipients(query: string): readonly MailAddress[] {
+    const needle = query.trim().toLowerCase()
+    const seen = new Map<string, MailAddress>()
+    for (const message of messages) {
+      const address = message.sender.address.toLowerCase()
+      if (seen.has(address)) continue
+      if (needle && !message.sender.name.toLowerCase().includes(needle) && !address.includes(needle)) continue
+      seen.set(address, message.sender)
+    }
+    return [...seen.values()].slice(0, 20)
   }
 
   listConversations(state: MailStateFilter): readonly ConversationSummary[] {

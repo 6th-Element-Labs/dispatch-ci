@@ -191,6 +191,35 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('passes draft attachments to the Gmail connector', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { ok: true }
+    })
+    const attachments = [{ filename: 'arrival.pdf', mime_type: 'application/pdf', data: 'cGRm' }]
+    expect((await fetch(`${base}/v1/connectors/gmail/drafts/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', to: 'to@example.com', subject: 'Hello', bodyMarkdown: 'Hi', bodyHtml: '<p>Hi</p>', attachments }),
+    })).status).toBe(200)
+    expect((await fetch(`${base}/v1/connectors/gmail/drafts/update`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-1', subject: 'Hello', bodyMarkdown: 'Hi', bodyHtml: '<p>Hi</p>', attachments }),
+    })).status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.create_draft',
+      arguments: expect.objectContaining({ attachments }),
+    }))
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.update_draft',
+      arguments: expect.objectContaining({ attachments }),
+    }))
+  })
+
   it('updates a Gmail draft with HTML and plain-text payloads', async () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {

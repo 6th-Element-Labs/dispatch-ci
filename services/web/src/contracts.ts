@@ -21,7 +21,7 @@ export interface MessageSummary {
 
 export interface MessageProjection extends MessageSummary {
   readonly body: { readonly kind: 'sanitized-html' | 'plain-text'; readonly content: string }
-  readonly attachments: readonly { readonly id: string; readonly name: string; readonly mediaType: string; readonly sizeLabel: string }[]
+  readonly attachments: readonly { readonly id: string; readonly name: string; readonly mediaType: string; readonly sizeLabel: string; readonly contentId?: string }[]
   readonly to?: readonly MailAddress[]
   readonly cc?: readonly MailAddress[]
   readonly source: 'demo' | 'gmail'
@@ -43,6 +43,7 @@ export interface DraftProjection {
     readonly mediaType: string
     readonly contentBase64?: string
     readonly sizeLabel?: string
+    readonly sourceMessageId?: string
   }[]
   readonly state: 'draft'
   readonly accountId?: string

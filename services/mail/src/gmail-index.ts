@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { groupConversations } from './conversation.js'
-import type { ConversationSummary, GmailConversationAction, GmailMailbox, MailStateFilter, MessageSummary } from './model.js'
+import type { ConversationSummary, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageSummary } from './model.js'
 
 export interface IndexedGmailMessage extends MessageSummary {
   readonly inInbox: boolean
@@ -377,6 +377,18 @@ export class GmailIndex {
       this.#db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  recipients(query: string, accountId?: string): readonly MailAddress[] {
+    const needle = query.trim().toLowerCase()
+    const seen = new Map<string, MailAddress>()
+    for (const message of this.messages(accountId)) {
+      const address = message.sender.address.toLowerCase()
+      if (seen.has(address)) continue
+      if (needle && !message.sender.name.toLowerCase().includes(needle) && !address.includes(needle)) continue
+      seen.set(address, message.sender)
+    }
+    return [...seen.values()].slice(0, 20)
   }
 
   conversations(state: MailStateFilter, accountId?: string): readonly ConversationSummary[] {

@@ -195,4 +195,15 @@ describe('GmailIndex', () => {
     expect(index.messages().map((item) => item.id)).toEqual(['draft-1'])
     index.close()
   })
+
+  it('suggests distinct indexed senders for recipient autocomplete', () => {
+    const index = new GmailIndex(':memory:')
+    index.replaceAccount('account-1', [
+      message('m1', true, true),
+      { ...message('m2', false, true), sender: { name: 'James Liu', address: 'james@example.com', initials: 'JL' } },
+    ], 'run-1', true)
+    expect(index.recipients('jam')).toEqual([{ name: 'James Liu', address: 'james@example.com', initials: 'JL' }])
+    expect(index.recipients('')).toHaveLength(2)
+    index.close()
+  })
 })

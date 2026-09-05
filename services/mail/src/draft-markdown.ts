@@ -14,7 +14,10 @@ export function renderDraftMarkdown(markdown: string): string {
         node.replaceWith(node.textContent ?? '')
       }
     }
-    if (node.tagName === 'IMG') node.remove()
+    if (node.tagName === 'IMG') {
+      const src = node.getAttribute('src') ?? ''
+      if (!/^(https:|cid:)/i.test(src)) node.remove()
+    }
   })
   try {
     const sanitized = DOMPurify.sanitize(rendered, { USE_PROFILES: { html: true } })

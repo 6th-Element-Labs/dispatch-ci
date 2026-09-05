@@ -7,6 +7,14 @@ const quoteSelector = [
   '[class*="divRplyFwdMsg"]',
 ].join(',')
 
+const allowedImageSrc = /^(?:https:|cid:|http:\/\/127\.0\.0\.1:8411\/)/i
+
+function sanitizeEmailNode(node: Element): void {
+  if (node.tagName !== 'IMG') return
+  const src = node.getAttribute('src') ?? ''
+  if (!allowedImageSrc.test(src)) node.removeAttribute('src')
+}
+
 export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value: string): HTMLElement {
   const root = document.createElement('div')
   root.className = 'dispatch-thread-body'
@@ -17,7 +25,12 @@ export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value:
     return root
   }
 
-  root.innerHTML = DOMPurify.sanitize(value, { USE_PROFILES: { html: true } })
+  DOMPurify.addHook('afterSanitizeAttributes', sanitizeEmailNode)
+  try {
+    root.innerHTML = DOMPurify.sanitize(value, { USE_PROFILES: { html: true } })
+  } finally {
+    DOMPurify.removeHook('afterSanitizeAttributes')
+  }
   const quote = root.querySelector<HTMLElement>(quoteSelector)
   if (!quote) return root
 
@@ -37,4 +50,3 @@ export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value:
   root.append(details)
   return root
 }
-

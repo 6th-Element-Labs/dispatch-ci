@@ -9,6 +9,7 @@ export interface AttachmentProjection {
   readonly name: string
   readonly mediaType: string
   readonly sizeLabel: string
+  readonly contentId?: string
 }
 
 export interface MessageSummary {
@@ -43,6 +44,7 @@ export interface DraftAttachment {
   readonly mediaType: string
   readonly contentBase64?: string
   readonly sizeLabel?: string
+  readonly sourceMessageId?: string
 }
 
 export interface DraftProjection {

@@ -124,16 +124,32 @@ function gmailDraftSummary(value: unknown): GmailDraftSummary {
   }
 }
 
-function rejectListedDraftAttachments(summary: GmailDraftSummary): void {
-  if (summary.hasAttachment) {
-    throw Object.assign(new Error('Gmail draft attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
-  }
+function missingAttachmentBytes(): Error {
+  return Object.assign(new Error('Gmail draft attachment is missing file bytes'), { code: 'gmail_attachment_bytes_required' })
 }
 
-function rejectReadDraftAttachments(message: MessageProjection): void {
-  if (message.attachments.length > 0) {
-    throw Object.assign(new Error('Gmail draft attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
-  }
+function attachmentBytes(value: unknown): string {
+  const content = structured(value)
+  const raw = text(content.base64_url_content) || text(content.data) || text(record(content.attachment)?.data)
+  if (!raw) throw missingAttachmentBytes()
+  return raw.replace(/-/g, '+').replace(/_/g, '/')
+}
+
+function connectorAttachments(items: readonly DraftAttachment[]): Array<{ filename: string; mime_type: string; data: string }> {
+  return items.map((item) => {
+    if (!item.contentBase64) throw missingAttachmentBytes()
+    return { filename: item.name, mime_type: item.mediaType, data: item.contentBase64 }
+  })
+}
+
+function draftAttachmentsFromMessage(message: MessageProjection): readonly DraftAttachment[] {
+  return message.attachments.map((item) => ({
+    id: item.id,
+    name: item.name,
+    mediaType: item.mediaType,
+    sizeLabel: item.sizeLabel,
+    sourceMessageId: message.id,
+  }))
 }
 
 function headers(payload: UnknownRecord): Map<string, string> {
@@ -177,18 +193,34 @@ function body(payload: UnknownRecord): MessageProjection['body'] {
   return { kind: 'plain-text', content: plainContent || 'This message has no readable text body.' }
 }
 
+function partContentId(part: UnknownRecord): string {
+  return (headers(part).get('content-id') ?? '').replace(/^<|>$/g, '')
+}
+
 function attachments(payload: UnknownRecord): readonly AttachmentProjection[] {
   return parts(payload).flatMap((part) => {
     const filename = text(part.filename)
-    if (!filename) return []
+    const contentId = partContentId(part)
+    if (!filename && !contentId) return []
     const partBody = record(part.body)
     const size = typeof partBody?.size === 'number' ? partBody.size : 0
     return [{
-      id: text(partBody?.attachment_id) || text(part.part_id) || filename,
-      name: filename,
+      id: text(partBody?.attachment_id) || text(part.part_id) || filename || contentId,
+      name: filename || contentId,
       mediaType: text(part.mime_type) || 'application/octet-stream',
       sizeLabel: size > 1_000_000 ? `${(size / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1000))} KB`,
+      ...contentId ? { contentId } : {},
     }]
+  })
+}
+
+function rewriteCidImages(html: string, messageId: string, accountId: string, items: readonly AttachmentProjection[]): string {
+  const mailBase = process.env.DISPATCH_MAIL_URL ?? 'http://127.0.0.1:8411'
+  return html.replace(/cid:([^"'>\s]+)/gi, (match, rawId: string) => {
+    const id = rawId.replace(/^<|>$/g, '')
+    const attachment = items.find((item) => item.contentId === id)
+    if (!attachment) return match
+    return `${mailBase}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachment.id)}?account=${encodeURIComponent(accountId)}&filename=${encodeURIComponent(attachment.name)}`
   })
 }
 
@@ -229,6 +261,15 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
     accountLabel: account?.email || account?.name,
   }
   if (!projection.id || !projection.threadId) throw new Error('Gmail response is missing stable message identity')
+  if (projection.body.kind === 'sanitized-html' && account?.id) {
+    return {
+      ...projection,
+      body: {
+        kind: 'sanitized-html',
+        content: rewriteCidImages(projection.body.content, projection.id, account.id, projection.attachments),
+      },
+    }
+  }
   return projection
 }
 
@@ -413,6 +454,12 @@ export class GmailConnectorProvider {
     return this.#index.searchConversations(query, state, accountId)
   }
 
+  async listRecipients(query: string, accountId?: string): Promise<readonly MailAddress[]> {
+    if (!this.#index) return []
+    await this.#ensureIndex()
+    return this.#index.recipients(query, accountId)
+  }
+
   async listMailboxConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): Promise<readonly ConversationSummary[]> {
     if (!this.#index) throw new Error('Durable Gmail index is required for mailbox lists')
     await this.#ensureIndex()
@@ -566,14 +613,13 @@ export class GmailConnectorProvider {
   }
 
   async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[] = []): Promise<DraftProjection> {
-    if (draftAttachments.length > 0) {
-      throw Object.assign(new Error('Gmail compose attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
-    }
-    const draft = projectDraft({ id: '', inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments: draftAttachments, accountId })
+    const attachments = await this.#resolveDraftAttachments(accountId, draftAttachments)
+    const draft = projectDraft({ id: '', inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments, accountId })
     try {
       const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', {
         linkId: accountId, replyMessageId: messageId || null, to, cc, bcc, subject,
         bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: bodyMarkdown,
+        ...attachments.length > 0 ? { attachments: connectorAttachments(attachments) } : {},
       }))
       const id = text(value.draft_id) || text(value.id)
       if (!id) throw new Error('Gmail did not return a draft ID')
@@ -588,18 +634,19 @@ export class GmailConnectorProvider {
 
   async updateGmailDraft(draft: DraftProjection): Promise<DraftProjection> {
     if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
-    if (draft.attachments.length > 0) {
-      throw Object.assign(new Error('Gmail compose attachments are unsupported'), { code: 'gmail_attachment_unsupported' })
-    }
+    const existing = this.#drafts.get(`${draft.accountId}:${draft.id}`)
+    const attachments = await this.#resolveDraftAttachments(draft.accountId, draft.attachments, existing?.attachments ?? [])
+    const saved = { ...draft, attachments }
     try {
       await this.#post('/v1/connectors/gmail/drafts/update', {
         linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '),
         cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject,
         bodyMarkdown: draft.bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: draft.bodyText,
+        ...attachments.length > 0 ? { attachments: connectorAttachments(attachments) } : {},
       })
-      this.#drafts.set(`${draft.accountId}:${draft.id}`, draft)
+      this.#drafts.set(`${draft.accountId}:${draft.id}`, saved)
       await this.#refreshIndexedDrafts()
-      return draft
+      return saved
     } catch (error) {
       throw draftConnectorError(error)
     }
@@ -610,10 +657,9 @@ export class GmailConnectorProvider {
     if (!summary) {
       throw Object.assign(new Error(`Gmail draft ${draftId} was not found`), { code: 'gmail_draft_not_found' })
     }
-    rejectListedDraftAttachments(summary)
     const message = await this.readMessage(accountId, summary.messageId)
     const existing = this.#drafts.get(`${accountId}:${draftId}`)
-    const draft = this.#projectGmailDraft(summary, message, existing?.inReplyToMessageId ?? summary.messageId, accountId)
+    const draft = this.#projectGmailDraft(summary, message, existing?.inReplyToMessageId ?? summary.messageId, accountId, existing)
     this.#drafts.set(`${accountId}:${draftId}`, draft)
     return draft
   }
@@ -623,7 +669,6 @@ export class GmailConnectorProvider {
     if (!summary) {
       throw Object.assign(new Error(`Gmail draft for message ${messageId} was not found`), { code: 'gmail_draft_not_found' })
     }
-    rejectListedDraftAttachments(summary)
     const message = await this.readMessage(accountId, summary.messageId)
     const draft = this.#projectGmailDraft(summary, message, messageId, accountId)
     this.#drafts.set(`${accountId}:${summary.draftId}`, draft)
@@ -691,8 +736,19 @@ export class GmailConnectorProvider {
     throw new Error('Gmail draft pagination exceeded 100 pages')
   }
 
-  #projectGmailDraft(summary: GmailDraftSummary, message: MessageProjection, inReplyToMessageId: string, accountId: string): DraftProjection {
-    rejectReadDraftAttachments(message)
+  async #resolveDraftAttachments(accountId: string, items: readonly DraftAttachment[], stored: readonly DraftAttachment[] = []): Promise<DraftAttachment[]> {
+    return Promise.all(items.map(async (item) => {
+      if (item.contentBase64) return item
+      const cached = stored.find((candidate) => candidate.contentBase64 && candidate.name === item.name && (candidate.id === item.id || !item.id))
+      if (cached?.contentBase64) return { ...item, contentBase64: cached.contentBase64 }
+      if (item.sourceMessageId && item.id) {
+        return { ...item, contentBase64: attachmentBytes(await this.readAttachment(accountId, item.sourceMessageId, item.id, item.name)) }
+      }
+      throw missingAttachmentBytes()
+    }))
+  }
+
+  #projectGmailDraft(summary: GmailDraftSummary, message: MessageProjection, inReplyToMessageId: string, accountId: string, existing?: DraftProjection): DraftProjection {
     return projectDraft({
       id: summary.draftId,
       inReplyToMessageId,
@@ -701,7 +757,7 @@ export class GmailConnectorProvider {
       bcc: summary.bcc,
       subject: summary.subject,
       bodyMarkdown: plainBodyFromMessage(message),
-      attachments: [],
+      attachments: existing?.attachments.length ? existing.attachments : draftAttachmentsFromMessage(message),
       accountId,
     })
   }

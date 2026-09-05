@@ -4,6 +4,7 @@ import './styles.css'
 import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
+import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { contextLabel, gmailAppId } from './model.js'
 
@@ -43,10 +44,11 @@ app.innerHTML = `
           <section class="card-body dispatch-draft" data-draft hidden>
             <div class="card"><div class="card-header"><div><span class="badge bg-blue-lt text-blue me-2">Draft</span><strong>Reply preview</strong></div><span class="text-secondary small">Send asks for confirm</span></div><div class="card-body">
             <label class="form-label">From<select class="form-select mt-1" data-draft-account aria-label="Draft account"></select></label>
-            <label class="form-label">To<input class="form-control mt-1" data-draft-to aria-label="Draft recipient"></label>
-            <div class="row g-3 mt-0"><label class="col form-label">Cc<input class="form-control mt-1" data-draft-cc aria-label="Draft Cc"></label><label class="col form-label">Bcc<input class="form-control mt-1" data-draft-bcc aria-label="Draft Bcc"></label></div>
+            <label class="form-label">To<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-to aria-label="Draft recipient" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Recipient suggestions"></ul></div></label>
+            <div class="row g-3 mt-0"><label class="col form-label">Cc<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-cc aria-label="Draft Cc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Cc suggestions"></ul></div></label><label class="col form-label">Bcc<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-bcc aria-label="Draft Bcc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Bcc suggestions"></ul></div></label></div>
             <label class="form-label">Subject<input class="form-control mt-1" data-draft-subject aria-label="Draft subject"></label>
             <label class="form-label">Message<textarea class="form-control mt-1" data-draft-body aria-label="Draft body"></textarea></label>
+            <ul class="dispatch-draft-attachments" data-draft-attachments aria-label="Draft attachments" hidden></ul>
             <div class="dispatch-draft-preview markdown" data-draft-preview aria-label="Draft preview"></div>
             <p class="text-secondary small" data-draft-error hidden></p>
             <div class="alert alert-warning" data-send-confirm hidden>
@@ -104,6 +106,7 @@ const elements = {
   draftBody: app.querySelector<HTMLTextAreaElement>('[data-draft-body]')!,
   draftPreview: app.querySelector<HTMLElement>('[data-draft-preview]')!,
   draftError: app.querySelector<HTMLElement>('[data-draft-error]')!,
+  draftAttachments: app.querySelector<HTMLElement>('[data-draft-attachments]')!,
   draftFiles: app.querySelector<HTMLInputElement>('[data-draft-files]')!,
   discardDraft: app.querySelector<HTMLButtonElement>('[data-discard-draft]')!,
   sendDraft: app.querySelector<HTMLButtonElement>('[data-send-draft]')!,
@@ -144,6 +147,7 @@ renderServiceStatus()
 let activeDraft: DraftProjection | undefined
 let draftPreviewTimer: number | undefined
 let draftAutosaveTimer: number | undefined
+let recipientSuggestTimer: number | undefined
 let draftPreviewSequence = 0
 let draftEditSession = 0
 let draftDirty = false
@@ -589,6 +593,149 @@ function draftAddressList(addresses: readonly MailAddress[] | undefined): string
   return (addresses ?? []).map((address) => address.address).filter(Boolean).join(', ')
 }
 
+function recipientField(input: HTMLInputElement): HTMLElement {
+  const field = input.closest<HTMLElement>('[data-recipient-field]')
+  if (!field) throw new Error('Draft recipient field is missing')
+  return field
+}
+
+function recipientChipAddresses(input: HTMLInputElement): string[] {
+  return [...recipientField(input).querySelectorAll('[data-recipient-address]')].map((chip) => chip.getAttribute('data-recipient-address') ?? '').filter(Boolean)
+}
+
+function recipientValue(input: HTMLInputElement): string {
+  return serializeRecipientList(recipientChipAddresses(input), input.value)
+}
+
+function hideRecipientSuggestions(input: HTMLInputElement): void {
+  const list = recipientField(input).querySelector<HTMLElement>('.dispatch-recipient-suggestions')
+  if (!list) return
+  list.hidden = true
+  list.replaceChildren()
+}
+
+function renderRecipientChips(input: HTMLInputElement, addresses: readonly string[]): void {
+  const chips = recipientField(input).querySelector('.dispatch-recipient-chips')
+  if (!chips) throw new Error('Draft recipient chips are missing')
+  chips.replaceChildren(...[...new Set(addresses.filter(Boolean))].map((address) => {
+    const chip = document.createElement('span')
+    chip.className = 'dispatch-recipient-chip'
+    chip.dataset.recipientAddress = address
+    const label = document.createElement('span')
+    label.textContent = address
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'btn-close'
+    remove.setAttribute('aria-label', `Remove ${address}`)
+    remove.addEventListener('click', () => {
+      chip.remove()
+      hideRecipientSuggestions(input)
+      draftDirty = true
+      if (activeDraft?.id) autosaveDraft()
+    })
+    chip.append(label, remove)
+    return chip
+  }))
+}
+
+function setRecipientField(input: HTMLInputElement, value: string): void {
+  renderRecipientChips(input, parseRecipientList(value))
+  input.value = ''
+  hideRecipientSuggestions(input)
+}
+
+function addRecipientChip(input: HTMLInputElement, address: string): void {
+  const next = address.trim()
+  if (!next) return
+  renderRecipientChips(input, [...recipientChipAddresses(input), next])
+  input.value = ''
+  hideRecipientSuggestions(input)
+}
+
+async function suggestRecipients(input: HTMLInputElement): Promise<void> {
+  const query = input.value.trim()
+  const list = recipientField(input).querySelector<HTMLElement>('.dispatch-recipient-suggestions')
+  if (!list) return
+  if (!query) {
+    hideRecipientSuggestions(input)
+    return
+  }
+  const accountId = activeDraft?.accountId || elements.draftAccount.value || selectedAccountId
+  try {
+    const recipients = await api.listRecipients(query, accountId)
+    const exclude = new Set(recipientChipAddresses(input).map((address) => address.toLowerCase()))
+    const matches = recipients.filter((recipient) => !exclude.has(recipient.address.toLowerCase()))
+    if (matches.length === 0) {
+      hideRecipientSuggestions(input)
+      return
+    }
+    list.replaceChildren(...matches.map((recipient) => {
+      const item = document.createElement('button')
+      item.type = 'button'
+      item.setAttribute('role', 'option')
+      item.className = 'dropdown-item'
+      item.textContent = recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address
+      item.addEventListener('mousedown', (event) => {
+        event.preventDefault()
+        addRecipientChip(input, recipient.address)
+        draftDirty = true
+        if (activeDraft?.id) autosaveDraft()
+      })
+      return item
+    }))
+    list.hidden = false
+  } catch (error) {
+    hideRecipientSuggestions(input)
+    draftError(error)
+  }
+}
+
+function scheduleRecipientSuggestions(input: HTMLInputElement): void {
+  if (recipientSuggestTimer !== undefined) window.clearTimeout(recipientSuggestTimer)
+  recipientSuggestTimer = window.setTimeout(() => {
+    void suggestRecipients(input)
+  }, 150)
+}
+
+function acceptRecipientInput(input: HTMLInputElement): void {
+  const leftover = input.value.trim()
+  if (!leftover) return
+  addRecipientChip(input, leftover)
+}
+
+function onRecipientInput(input: HTMLInputElement): void {
+  const parsed = commitRecipientToken(input.value)
+  if (parsed.committed.length > 0) {
+    renderRecipientChips(input, [...recipientChipAddresses(input), ...parsed.committed])
+    input.value = parsed.leftover
+  }
+  scheduleRecipientSuggestions(input)
+}
+
+function renderDraftAttachments(): void {
+  const items = activeDraft?.attachments ?? []
+  elements.draftAttachments.replaceChildren(...items.map((attachment, index) => {
+    const row = document.createElement('li')
+    row.className = 'dispatch-draft-attachment'
+    const name = document.createElement('strong')
+    name.textContent = attachment.name
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'btn btn-sm btn-ghost-secondary'
+    remove.setAttribute('aria-label', `Remove attachment ${attachment.name}`)
+    remove.addEventListener('click', () => {
+      if (!activeDraft) return
+      activeDraft = { ...activeDraft, attachments: activeDraft.attachments.filter((_, itemIndex) => itemIndex !== index) }
+      renderDraftAttachments()
+      draftDirty = true
+      if (activeDraft.id) void saveDraft(false).catch(draftError)
+    })
+    row.append(name, remove)
+    return row
+  }))
+  elements.draftAttachments.hidden = items.length === 0
+}
+
 function draftError(error: unknown): void {
   elements.draftError.hidden = false
   elements.draftError.textContent = error instanceof Error ? error.message : String(error)
@@ -626,15 +773,16 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
     return option
   }))
   elements.draftAccount.disabled = !accountMutable
-  elements.draftTo.value = draft.to.map((address) => address.address).join(', ')
-  elements.draftCc.value = draft.cc ?? ''
-  elements.draftBcc.value = draft.bcc ?? ''
+  setRecipientField(elements.draftTo, draft.to.map((address) => address.address).join(', '))
+  setRecipientField(elements.draftCc, draft.cc ?? '')
+  setRecipientField(elements.draftBcc, draft.bcc ?? '')
   elements.draftSubject.value = draft.subject
   elements.draftBody.value = draft.bodyMarkdown || draft.bodyText
   elements.draftPreview.innerHTML = draft.bodyHtml
   elements.draftError.hidden = true
   elements.draftError.textContent = ''
   elements.sendConfirm.hidden = true
+  renderDraftAttachments()
   draftDiscarding = false
 }
 
@@ -721,7 +869,22 @@ async function openForward(): Promise<void> {
   const subject = selected.subject.startsWith('Fwd:') ? selected.subject : `Fwd: ${selected.subject}`
   const content = renderEmailContent(latest.body.kind, latest.body.content).textContent?.trim() ?? ''
   const bodyMarkdown = `\n\n---------- Forwarded message ----------\nFrom: ${latest.sender.name} <${latest.sender.address}>\nDate: ${latest.receivedFullLabel}\nSubject: ${latest.subject}\n\n${content}`
-  const draft = await api.createDraft('', { accountId: selected.accountId, to: '', cc: '', bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, attachments: latest.attachments })
+  const draft = await api.createDraft('', {
+    accountId: selected.accountId,
+    to: '',
+    cc: '',
+    bcc: '',
+    subject,
+    bodyMarkdown,
+    bodyText: bodyMarkdown,
+    attachments: latest.attachments.map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      mediaType: attachment.mediaType,
+      sizeLabel: attachment.sizeLabel,
+      sourceMessageId: latest.id,
+    })),
+  })
   showDraft(draft, false)
 }
 
@@ -755,7 +918,7 @@ async function saveDraft(notify = true): Promise<void> {
   const accountId = draft.id ? draft.accountId : elements.draftAccount.value
   if (!accountId) throw new Error('Choose a Gmail account for this draft.')
   const bodyMarkdown = elements.draftBody.value
-  const fields = { accountId, messageId: draft.inReplyToMessageId, to: elements.draftTo.value, cc: elements.draftCc.value, bcc: elements.draftBcc.value, subject: elements.draftSubject.value, bodyMarkdown, bodyText: bodyMarkdown, attachments: draft.attachments }
+  const fields = { accountId, messageId: draft.inReplyToMessageId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, bodyMarkdown, bodyText: bodyMarkdown, attachments: draft.attachments }
   const operation = (async () => {
     const savedDraft = draft.id
       ? await api.updateDraft(draft.id, fields)
@@ -766,9 +929,9 @@ async function saveDraft(notify = true): Promise<void> {
     elements.draftPreview.innerHTML = savedDraft.bodyHtml
     elements.draftError.hidden = true
     elements.draftError.textContent = ''
-    if (elements.draftTo.value === fields.to
-      && elements.draftCc.value === fields.cc
-      && elements.draftBcc.value === fields.bcc
+    if (recipientValue(elements.draftTo) === fields.to
+      && recipientValue(elements.draftCc) === fields.cc
+      && recipientValue(elements.draftBcc) === fields.bcc
       && elements.draftSubject.value === fields.subject
       && elements.draftBody.value === bodyMarkdown) {
       draftDirty = false
@@ -809,9 +972,9 @@ async function reviseDraft(): Promise<void> {
 function sendDraft(): void {
   if (!activeDraft || draftSendFlight) return
   elements.sendConfirmText.textContent = [
-    `To: ${elements.draftTo.value || '(no recipient)'}`,
-    elements.draftCc.value ? `Cc: ${elements.draftCc.value}` : '',
-    elements.draftBcc.value ? `Bcc: ${elements.draftBcc.value}` : '',
+    `To: ${recipientValue(elements.draftTo) || '(no recipient)'}`,
+    recipientValue(elements.draftCc) ? `Cc: ${recipientValue(elements.draftCc)}` : '',
+    recipientValue(elements.draftBcc) ? `Bcc: ${recipientValue(elements.draftBcc)}` : '',
     `Subject: ${elements.draftSubject.value || '(no subject)'}`,
   ].filter(Boolean).join('\n')
   elements.sendConfirm.hidden = false
@@ -884,6 +1047,7 @@ async function attachDraftFiles(): Promise<void> {
       contentBase64: await fileContentBase64(file),
     })))
     activeDraft = { ...activeDraft, attachments: [...activeDraft.attachments, ...attachments] }
+    renderDraftAttachments()
     await saveDraft()
   } catch (error) {
     draftError(error)
@@ -1589,13 +1753,38 @@ elements.draftBody.addEventListener('input', () => {
   refreshPreview()
   autosaveDraft()
 })
-for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc, elements.draftSubject]) {
+for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc]) {
   field.addEventListener('input', () => {
     elements.sendConfirm.hidden = true
     draftDirty = true
+    onRecipientInput(field)
     if (activeDraft?.id) autosaveDraft()
   })
+  field.addEventListener('keydown', (event) => {
+    if ((event.key === 'Enter' || event.key === 'Tab') && field.value.trim()) {
+      if (event.key === 'Enter') event.preventDefault()
+      acceptRecipientInput(field)
+      draftDirty = true
+      if (activeDraft?.id) autosaveDraft()
+    }
+    if (event.key === 'Backspace' && !field.value) {
+      const chips = recipientChipAddresses(field)
+      if (chips.length === 0) return
+      renderRecipientChips(field, chips.slice(0, -1))
+      draftDirty = true
+      if (activeDraft?.id) autosaveDraft()
+    }
+    if (event.key === 'Escape') hideRecipientSuggestions(field)
+  })
+  field.addEventListener('blur', () => {
+    window.setTimeout(() => hideRecipientSuggestions(field), 120)
+  })
 }
+elements.draftSubject.addEventListener('input', () => {
+  elements.sendConfirm.hidden = true
+  draftDirty = true
+  if (activeDraft?.id) autosaveDraft()
+})
 elements.draftAccount.addEventListener('input', () => { elements.sendConfirm.hidden = true })
 app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { void reviseDraft().catch(draftError) })
 elements.readState.addEventListener('click', () => { void toggleReadState() })

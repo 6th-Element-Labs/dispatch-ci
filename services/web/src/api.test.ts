@@ -66,4 +66,11 @@ describe('draft API', () => {
       bodyText: '# Update',
     })
   })
+
+  it('asks mail for recipient suggestions', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ recipients: [{ name: 'Ana', address: 'ana@example.com', initials: 'A' }] }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.listRecipients('ana', 'link-one')).resolves.toEqual([{ name: 'Ana', address: 'ana@example.com', initials: 'A' }])
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:8411/v1/recipients?q=ana&account=link-one', expect.anything())
+  })
 })

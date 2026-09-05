@@ -26,6 +26,12 @@ async function start() {
 }
 
 describe('dispatch-mail', () => {
+  it('suggests demo recipients from known senders', async () => {
+    const base = await start()
+    const value = await (await fetch(`${base}/v1/recipients?q=ana`)).json() as { recipients: Array<{ address: string }> }
+    expect(value.recipients).toEqual([expect.objectContaining({ address: 'ana@opuamarina.example' })])
+  })
+
   it('exposes health, readiness, and explicit demo projections', async () => {
     const base = await start()
     expect((await fetch(`${base}/health`)).status).toBe(200)
@@ -192,14 +198,18 @@ describe('dispatch-mail', () => {
     expect(body.draft).toMatchObject({ bodyMarkdown: '**Hi**', bodyText: '**Hi**' })
   })
 
-  it('rejects Gmail draft attachments that the connector cannot persist', async () => {
+  it('persists Gmail draft attachments through the mail owner', async () => {
+    const calls: unknown[] = []
     const server = createMailServer({
       accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
       listMessages: async () => [], listUnifiedMessages: async () => [],
       readMessage: async () => { throw new Error('not configured') },
       listConversations: async () => [], listUnifiedConversations: async () => [],
       readConversation: async () => { throw new Error('not configured') },
-      createGmailDraft: async () => { throw new Error('must not be called') },
+      createGmailDraft: async (accountId, messageId, to, cc, bcc, subject, bodyMarkdown, attachments) => {
+        calls.push({ accountId, attachments })
+        return projectDraft({ id: 'draft-1', inReplyToMessageId: messageId, to: [], subject, bodyMarkdown, attachments, accountId })
+      },
     })
     servers.push(server)
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -210,11 +220,14 @@ describe('dispatch-mail', () => {
       body: JSON.stringify({
         accountId: 'one',
         bodyMarkdown: 'Hi',
-        attachments: [{ name: 'arrival.pdf', mediaType: 'application/pdf' }],
+        attachments: [{ name: 'arrival.pdf', mediaType: 'application/pdf', contentBase64: 'cGRm' }],
       }),
     })
-    expect(response.status).toBe(502)
-    await expect(response.json()).resolves.toMatchObject({ error: 'gmail_attachment_unsupported' })
+    expect(response.status).toBe(201)
+    expect(calls).toEqual([{
+      accountId: 'one',
+      attachments: [{ name: 'arrival.pdf', mediaType: 'application/pdf', contentBase64: 'cGRm' }],
+    }])
   })
 
   it('rejects non-object JSON on new draft routes', async () => {

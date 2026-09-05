@@ -25,7 +25,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -54,6 +54,7 @@ function draftAttachments(value: unknown): readonly DraftAttachment[] {
       mediaType: attachment.mediaType,
       contentBase64: typeof attachment.contentBase64 === 'string' ? attachment.contentBase64 : undefined,
       sizeLabel: typeof attachment.sizeLabel === 'string' ? attachment.sizeLabel : undefined,
+      sourceMessageId: typeof attachment.sourceMessageId === 'string' ? attachment.sourceMessageId : undefined,
     }]
   })
 }
@@ -62,17 +63,6 @@ function draftObject(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
-}
-
-function hasDraftAttachments(value: Record<string, unknown>): boolean {
-  return Array.isArray(value.attachments) && value.attachments.length > 0
-}
-
-function unsupportedDraftAttachments(response: ServerResponse): void {
-  writeJson(response, 502, {
-    error: 'gmail_attachment_unsupported',
-    detail: 'Gmail draft attachments are not supported because the connector does not persist them.',
-  })
 }
 
 function stateFilter(value: string | null): MailStateFilter | undefined {
@@ -228,6 +218,22 @@ export function createMailServer(
         return writeJson(response, 502, { error: 'gmail_accounts_failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
+    if (request.method === 'GET' && url.pathname === '/v1/recipients') {
+      const query = url.searchParams.get('q') ?? ''
+      const accountId = url.searchParams.get('account')
+      try {
+        const accounts = await gmail.accounts()
+        if (accounts.length > 0) {
+          const recipients = gmail.listRecipients ? await gmail.listRecipients(query, accountId ?? undefined) : []
+          return writeJson(response, 200, { recipients })
+        }
+      } catch (error) {
+        return writeJson(response, 502, { error: 'gmail_recipients_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
+      return demoEnabled
+        ? writeJson(response, 200, { recipients: provider.listRecipients(query) })
+        : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
+    }
     if (request.method === 'GET' && url.pathname === '/v1/sync/status') {
       const status = gmail.syncStatus?.()
       return status
@@ -282,10 +288,6 @@ export function createMailServer(
         return writeJson(response, 400, { error: 'invalid_json' })
       }
       if (!body) return writeJson(response, 400, { error: 'invalid_json' })
-      if (hasDraftAttachments(body)) {
-        unsupportedDraftAttachments(response)
-        return
-      }
       if (typeof body.accountId !== 'string' || typeof body.messageId !== 'string') {
         return writeJson(response, 400, { error: 'accountId_and_messageId_required' })
       }
@@ -304,10 +306,6 @@ export function createMailServer(
         return writeJson(response, 400, { error: 'invalid_json' })
       }
       if (!body) return writeJson(response, 400, { error: 'invalid_json' })
-      if (hasDraftAttachments(body)) {
-        unsupportedDraftAttachments(response)
-        return
-      }
       const messageId = 'messageId' in body ? String(body.messageId) : ''
       if (typeof body.accountId === 'string' && gmail.createGmailDraft) {
         try {
@@ -342,10 +340,6 @@ export function createMailServer(
       try {
         const body = draftObject(await readJson(request))
         if (!body) return writeJson(response, 400, { error: 'invalid_json' })
-        if (hasDraftAttachments(body)) {
-          unsupportedDraftAttachments(response)
-          return
-        }
         const draft = await gmail.updateGmailDraft(projectDraft({ id: decodeURIComponent(draftMatch[1]), inReplyToMessageId: String(body.messageId ?? ''), to: [{ name: String(body.to ?? ''), address: String(body.to ?? ''), initials: '@' }], cc: String(body.cc ?? ''), bcc: String(body.bcc ?? ''), subject: String(body.subject ?? ''), bodyMarkdown: String(body.bodyMarkdown ?? body.bodyText ?? ''), attachments: draftAttachments(body.attachments), accountId: String(body.accountId ?? '') }))
         return writeJson(response, 200, { draft })
       } catch (error) { return writeJson(response, 502, draftError(error, 'gmail_draft_update_failed')) }

@@ -10,14 +10,14 @@ describe('renderDraftMarkdown', () => {
     expect(html).toContain('<blockquote>')
   })
 
-  it('strips javascript links and images', () => {
-    const html = renderDraftMarkdown('[x](javascript:alert(1))\n\n![x](https://evil.example/x.png)')
+  it('strips javascript links and keeps https images', () => {
+    const html = renderDraftMarkdown('[x](javascript:alert(1))\n\n![ok](https://example.com/x.png)')
     expect(html).not.toContain('javascript:')
-    expect(html).not.toContain('<img')
+    expect(html).toContain('<img')
+    expect(html).toContain('https://example.com/x.png')
   })
 
-  it('returns an empty paragraph for empty or fully sanitized Markdown', () => {
+  it('returns an empty paragraph for empty Markdown', () => {
     expect(renderDraftMarkdown('')).toBe('<p></p>')
-    expect(renderDraftMarkdown('![x](https://evil.example/x.png)')).toBe('<p></p>')
   })
 })

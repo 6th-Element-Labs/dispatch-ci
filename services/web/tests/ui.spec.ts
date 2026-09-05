@@ -41,6 +41,7 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ json: { bodyHtml: `<p>${request.bodyMarkdown}</p>` } })
   })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ status: 503, json: { status: 'not_ready' } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/recipients/, (route) => route.fulfill({ json: { recipients: [] } }))
 })
 
 test('renders the three-panel mail surface and sanitizes provider HTML', async ({ page }) => {
@@ -671,4 +672,70 @@ test('marks a conversation selected before its full thread finishes loading', as
   await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
   await expect(page.getByText('Loading conversation…')).toBeVisible()
   await expect(page.getByText('Loaded.')).toBeVisible()
+})
+
+test('forwards source message attachments and lists them on the draft', async ({ page }) => {
+  let draftRequest: Record<string, unknown> | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  const attachment = { id: 'a1', name: 'arrival.pdf', mediaType: 'application/pdf', sizeLabel: '824 KB' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [attachment] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    draftRequest = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 201, json: { draft: { id: 'fwd-1', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: 'Fwd: Opua berth confirmation', bodyMarkdown: '', bodyHtml: '<p></p>', bodyText: '', attachments: draftRequest.attachments, state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Forward' }).click()
+  await expect.poll(() => draftRequest?.attachments).toEqual([{ ...attachment, sourceMessageId: 'm1' }])
+  await expect(page.getByLabel('Draft attachments')).toContainText('arrival.pdf')
+})
+
+test('attaches a local file to the open draft', async ({ page }) => {
+  let saved: Record<string, unknown> | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    saved = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 201, json: { draft: { id: 'attach-1', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '<p></p>', bodyText: '', attachments: saved.attachments, state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await page.locator('[data-draft-files]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
+  await expect.poll(() => saved?.attachments).toEqual([expect.objectContaining({ name: 'notes.txt', mediaType: 'text/plain', contentBase64: 'aGVsbG8=' })])
+  await expect(page.getByLabel('Draft attachments')).toContainText('notes.txt')
+})
+
+test('adds a recipient chip from mail autocomplete', async ({ page }) => {
+  let draftRequest: Record<string, unknown> | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/recipients/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/recipients/, (route) => route.fulfill({ json: { recipients: [{ name: 'Ana Morales', address: 'ana@example.com', initials: 'AM' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    draftRequest = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 201, json: { draft: { id: 'chip-1', inReplyToMessageId: '', to: [{ name: 'Ana Morales', address: 'ana@example.com', initials: 'AM' }], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '<p></p>', bodyText: '', attachments: [], state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await page.getByRole('textbox', { name: 'Draft recipient' }).fill('ana')
+  await page.getByRole('option', { name: 'Ana Morales <ana@example.com>' }).click()
+  await page.getByRole('button', { name: 'Save draft' }).click()
+  await expect.poll(() => draftRequest?.to).toBe('ana@example.com')
+  await expect(page.getByRole('button', { name: 'Remove ana@example.com' })).toBeVisible()
+})
+
+test('renders rewritten CID images in the thread reader', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  const src = 'http://127.0.0.1:8411/v1/messages/m1/attachments/img-1?account=link-one&filename=logo.png'
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'sanitized-html', content: `<p><img src="${src}" alt="logo"></p>` }, attachments: [{ id: 'img-1', name: 'logo.png', mediaType: 'image/png', sizeLabel: '1 KB', contentId: 'logo@mail' }] }] } } }))
+  await page.goto('/')
+  await expect(page.locator('.dispatch-thread-body img')).toHaveAttribute('src', src)
 })

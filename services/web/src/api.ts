@@ -1,4 +1,4 @@
-import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -32,6 +32,13 @@ export const api = {
   async listAccounts(): Promise<GmailAccount[]> {
     const result = await request<{ accounts: GmailAccount[] }>(`${MAIL}/v1/accounts`)
     return result.accounts
+  },
+  async listRecipients(query: string, accountId?: string): Promise<MailAddress[]> {
+    const params = new URLSearchParams()
+    if (query) params.set('q', query)
+    if (accountId) params.set('account', accountId)
+    const result = await request<{ recipients: MailAddress[] }>(`${MAIL}/v1/recipients?${params}`)
+    return result.recipients
   },
   async syncStatus(): Promise<GmailSyncStatus> {
     const result = await request<{ sync: GmailSyncStatus }>(`${MAIL}/v1/sync/status`)
