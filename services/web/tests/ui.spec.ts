@@ -517,6 +517,62 @@ test('marks an unread Gmail conversation read after a 5 second selection dwell',
   await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
 })
 
+test('keeps a dwell-marked row read when a later list still says unread', async ({ page }) => {
+  let command: unknown
+  await page.clock.install()
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const first = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [first, second], nextCursor: null, total: 2 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...first, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...second, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Other' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    command = await route.request().postDataJSON()
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(5000)
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
+  await page.getByRole('button', { name: 'More actions' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+})
+
+test('keeps a dwell-marked row read when a late thread fetch still says unread', async ({ page }) => {
+  let command: unknown
+  let releaseThread: (() => void) | undefined
+  const threadHeld = new Promise<void>((resolve) => { releaseThread = resolve })
+  await page.clock.install()
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const first = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [first, second], nextCursor: null, total: 2 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, async (route) => {
+    await threadHeld
+    await route.fulfill({ json: { conversation: { ...first, source: 'gmail', unread: true, messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', unread: true, body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...second, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Other' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    command = await route.request().postDataJSON()
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/sync', (route) => route.fulfill({ json: { sync: { state: 'ready', startedAt: '2026-09-06T08:00:00Z', completedAt: '2026-09-06T08:00:02Z', error: null, messageCount: 2 } } }))
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(5000)
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: [], unread: false })
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
+  releaseThread?.()
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
+  await page.getByRole('button', { name: 'More actions' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await page.getByRole('button', { name: 'Refresh' }).click()
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
+})
+
 test('does not mark read when the user leaves before 5 seconds', async ({ page }) => {
   let command: unknown
   await page.clock.install()

@@ -129,6 +129,7 @@ function filterSearch(messages: readonly IndexedGmailMessage[], query: string): 
 
 export class GmailIndex {
   readonly #db: DatabaseSync
+  readonly #acceptedUnread = new Map<string, boolean>()
 
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
@@ -217,6 +218,7 @@ export class GmailIndex {
         )
       }
       if (complete) this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND sync_run_id <> ?').run(accountId, runId)
+      this.#reapplyAcceptedUnread(accountId, messages)
       this.#db.exec('COMMIT')
     } catch (error) {
       this.#db.exec('ROLLBACK')
@@ -292,11 +294,31 @@ export class GmailIndex {
     const update = this.#db.prepare('UPDATE gmail_messages SET unread = ? WHERE account_id = ? AND id = ?')
     this.#db.exec('BEGIN IMMEDIATE')
     try {
-      for (const id of messageIds) update.run(Number(unread), accountId, id)
+      for (const id of messageIds) {
+        update.run(Number(unread), accountId, id)
+        this.#acceptedUnread.set(`${accountId}\0${id}`, unread)
+      }
       this.#db.exec('COMMIT')
     } catch (error) {
       this.#db.exec('ROLLBACK')
       throw error
+    }
+  }
+
+  #reapplyAcceptedUnread(accountId: string, incoming: readonly IndexedGmailMessage[]): void {
+    const incomingById = new Map(incoming.map((message) => [message.id, message]))
+    const update = this.#db.prepare('UPDATE gmail_messages SET unread = ? WHERE account_id = ? AND id = ?')
+    const exists = this.#db.prepare('SELECT 1 FROM gmail_messages WHERE account_id = ? AND id = ?')
+    for (const [key, unread] of [...this.#acceptedUnread]) {
+      const separator = key.indexOf('\0')
+      if (key.slice(0, separator) !== accountId) continue
+      const id = key.slice(separator + 1)
+      const snapshot = incomingById.get(id)
+      if (snapshot?.unread === unread || !exists.get(accountId, id)) {
+        this.#acceptedUnread.delete(key)
+        continue
+      }
+      update.run(Number(unread), accountId, id)
     }
   }
 

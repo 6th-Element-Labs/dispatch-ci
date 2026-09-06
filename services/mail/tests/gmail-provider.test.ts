@@ -253,6 +253,7 @@ describe('GmailConnectorProvider', () => {
     await provider.refreshNow()
     expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 7 })
     expect(await provider.listUnifiedConversations('all')).toHaveLength(3)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
     failSearch = true
     await expect(provider.syncNow()).rejects.toThrow('Gmail connector request failed (502)')
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', messageCount: 3 })

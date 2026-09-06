@@ -232,6 +232,7 @@ let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
 const BINDING_CACHE = 'dispatch.codex.bindings.v1'
 type CodexPaneKey = { kind: 'unbound' } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
+const acceptedReadState = new Map<string, boolean>()
 let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
 
 function bindingCacheKey(key: CodexPaneKey): string {
@@ -517,7 +518,7 @@ async function loadMoreConversations(): Promise<void> {
   renderList()
   try {
     const result = await api.listConversations(mailState, selectedAccountId, nextConversationCursor, searchQuery, mailbox)
-    conversations = [...new Map([...conversations, ...result.conversations].map((conversation) => [conversation.id, conversation])).values()]
+    conversations = applyAcceptedReadState([...new Map([...conversations, ...result.conversations].map((conversation) => [conversation.id, conversation])).values()])
     nextConversationCursor = result.nextCursor ?? null
     conversationTotal = result.total ?? conversations.length
   } catch (error) {
@@ -764,7 +765,9 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     if (sequence !== selectionSequence || selectedConversationId !== id) return
     selected = conversation
     elements.readState.hidden = !conversation.accountId
-    elements.readState.textContent = conversation.unread ? 'Mark read' : 'Mark unread'
+    const acceptedUnread = selectedConversationId ? acceptedReadState.get(selectedConversationId) : undefined
+    if (acceptedUnread !== undefined) selected = { ...selected, unread: acceptedUnread }
+    elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
     elements.subject.textContent = conversation.subject
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
     elements.context.textContent = `Working with · ${contextLabel(conversation)}`
@@ -795,12 +798,11 @@ async function completeReadDwell(conversationId: string): Promise<void> {
   if (selectedConversationId !== conversationId) return
   const summary = conversations.find((conversation) => conversation.id === conversationId)
   if (!summary?.accountId || !summary.unread) return
-  const messageIds = selected?.id === conversationId ? selected.messages.map((message) => message.id) : []
+  const messageIds = selectedConversationId === conversationId && selected ? selected.messages.map((message) => message.id) : []
   try {
     await api.setConversationUnread(summary.threadId, summary.accountId, false, messageIds)
     if (selectedConversationId !== conversationId) return
     applyLocalReadState(conversationId, false)
-    void loadConversations(true)
   } catch (error) {
     if (selectedConversationId !== conversationId) return
     elements.mailError.hidden = false
@@ -809,12 +811,41 @@ async function completeReadDwell(conversationId: string): Promise<void> {
 }
 
 function applyLocalReadState(conversationId: string, unread: boolean): void {
-  if (selected?.id === conversationId) selected = { ...selected, unread }
+  acceptedReadState.set(conversationId, unread)
+  dropConversationCache(conversationId)
+  if (selectedConversationId === conversationId && selected) selected = { ...selected, unread }
   conversations = conversations
     .map((conversation) => conversation.id === conversationId ? { ...conversation, unread } : conversation)
     .filter((conversation) => mailState !== 'unread' || conversation.unread)
-  if (selected?.id === conversationId) elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
+  if (selectedConversationId === conversationId) elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
   renderList()
+}
+
+function dropConversationCache(conversationId: string): void {
+  const threadId = (selectedConversationId === conversationId ? selected?.threadId : undefined)
+    ?? conversations.find((conversation) => conversation.id === conversationId)?.threadId
+  if (!threadId) return
+  for (const key of conversationCache.keys()) {
+    if (key.endsWith(`:${threadId}`)) conversationCache.delete(key)
+  }
+}
+
+function applyAcceptedReadState(items: readonly ConversationSummary[]): ConversationSummary[] {
+  return items
+    .map((conversation) => {
+      const unread = acceptedReadState.get(conversation.id)
+      return unread === undefined ? conversation : { ...conversation, unread }
+    })
+    .filter((conversation) => mailState !== 'unread' || conversation.unread)
+}
+
+function syncSelectedReadState(): void {
+  if (!selected || !selectedConversationId) return
+  const unread = acceptedReadState.get(selectedConversationId)
+    ?? conversations.find((conversation) => conversation.id === selectedConversationId)?.unread
+  if (unread === undefined || selected.unread === unread) return
+  selected = { ...selected, unread }
+  elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
 }
 
 async function toggleReadState(): Promise<void> {
@@ -827,7 +858,6 @@ async function toggleReadState(): Promise<void> {
     await api.setConversationUnread(selected.threadId, selected.accountId, nextUnread, selected.messages.map((message) => message.id))
     if (selectedConversationId !== conversationId) return
     applyLocalReadState(conversationId, nextUnread)
-    void loadConversations(true)
   } catch (error) {
     elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
     elements.mailError.hidden = false
@@ -1843,7 +1873,8 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   try {
     const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery, mailbox)
     if (loadSequence !== conversationLoadSequence) return
-    conversations = result.conversations
+    conversations = applyAcceptedReadState(result.conversations)
+    syncSelectedReadState()
     noteArrivals()
     if (mailReconnectTimer !== undefined) window.clearTimeout(mailReconnectTimer)
     mailReconnectTimer = undefined

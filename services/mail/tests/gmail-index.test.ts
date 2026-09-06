@@ -46,6 +46,21 @@ describe('GmailIndex', () => {
     reopened.close()
   })
 
+  it('does not let a later account refresh restore an accepted unread write', () => {
+    const index = new GmailIndex(':memory:')
+    index.replaceAccount('account-1', [message('m1', true, true)], 'run-1', true)
+    index.setUnread('account-1', ['m1'], false)
+    expect(index.conversations('unread')).toHaveLength(0)
+    index.replaceAccount('account-1', [message('m1', true, true)], 'run-2', true)
+    expect(index.conversations('unread')).toHaveLength(0)
+    expect(index.conversations('read')).toMatchObject([{ latestMessageId: 'm1', unread: false }])
+    index.replaceAccount('account-1', [message('m1', false, true)], 'run-3', true)
+    expect(index.conversations('read')).toMatchObject([{ latestMessageId: 'm1', unread: false }])
+    index.replaceAccount('account-1', [message('m1', true, true)], 'run-4', true)
+    expect(index.conversations('unread')).toMatchObject([{ latestMessageId: 'm1', unread: true }])
+    index.close()
+  })
+
   it('prunes records absent from a completed account refresh', () => {
     const index = new GmailIndex(':memory:')
     index.replaceAccount('account-1', [message('m1', true, false), message('m2', false, true)], 'run-1', true)
