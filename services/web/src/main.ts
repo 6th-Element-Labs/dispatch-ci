@@ -6,14 +6,17 @@ import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
+import { threadContextMenuItems } from './thread-context-menu.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
 if (!appElement) throw new Error('Dispatch app root is missing')
 const app: HTMLDivElement = appElement
 if (isNativeShell(window as { isTauri?: unknown })) document.documentElement.classList.add('dispatch-native')
+const popupContextMenu = createContextMenuPopup(window as Window & { isTauri?: unknown; __TAURI__?: { core?: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } } })
 
 app.innerHTML = `
   <div class="page dispatch-window">
@@ -504,6 +507,10 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
     button.addEventListener('click', () => { void selectConversation(conversation.id, { revealOnMobile: true, startReadDwell: true }) })
+    button.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      void openThreadContextMenu(event, conversation.id)
+    })
     elements.list.append(button)
   }
   if (nextConversationCursor) {
@@ -848,9 +855,8 @@ function syncSelectedReadState(): void {
   elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
 }
 
-async function toggleReadState(): Promise<void> {
+async function applyReadState(nextUnread: boolean): Promise<void> {
   if (!selected?.accountId) return
-  const nextUnread = !selected.unread
   const conversationId = selected.id
   elements.readState.disabled = true
   elements.readState.textContent = nextUnread ? 'Marking unread…' : 'Marking read…'
@@ -864,6 +870,70 @@ async function toggleReadState(): Promise<void> {
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
   } finally {
     elements.readState.disabled = false
+  }
+}
+
+async function toggleReadState(): Promise<void> {
+  if (!selected) return
+  await applyReadState(!selected.unread)
+}
+
+function askCodex(): void {
+  if (usesMobilePanels()) { mobilePanel = 'agent'; mobileReturnPanel = 'agent'; renderPanels() }
+  elements.prompt.focus()
+}
+
+async function openThreadContextMenu(event: MouseEvent, conversationId: string): Promise<void> {
+  const load = selectConversation(conversationId, { revealOnMobile: true })
+  const summary = conversations.find((conversation) => conversation.id === conversationId)
+  if (!summary) return
+  const unread = acceptedReadState.get(conversationId) ?? summary.unread
+  const items = threadContextMenuItems({ mailbox, unread, hasAccountId: Boolean(summary.accountId) })
+  try {
+    const chosen = await popupContextMenu(items, { clientX: event.clientX, clientY: event.clientY })
+    if (!chosen) return
+    await load
+    await runThreadContextCommand(chosen)
+  } catch (error) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function runThreadContextCommand(id: string): Promise<void> {
+  switch (id) {
+    case 'reply':
+      await openDraft(false).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error)))
+      return
+    case 'replyAll':
+      await openDraft(true).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error)))
+      return
+    case 'forward':
+      await openForward().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error)))
+      return
+    case 'markRead':
+      await applyReadState(false)
+      return
+    case 'markUnread':
+      await applyReadState(true)
+      return
+    case 'archive':
+      await mutateSelected('archive')
+      return
+    case 'inbox':
+      await mutateSelected('inbox')
+      return
+    case 'spam':
+      await mutateSelected('spam')
+      return
+    case 'trash':
+      await mutateSelected('trash')
+      return
+    case 'ask':
+      askCodex()
+      return
+    default:
+      throw new Error(`Dispatch received an unknown menu command: ${id}`)
   }
 }
 
@@ -2097,10 +2167,7 @@ elements.archive.addEventListener('click', () => { void mutateSelected('archive'
 elements.spam.addEventListener('click', () => { void mutateSelected('spam') })
 elements.trash.addEventListener('click', () => { void mutateSelected('trash') })
 elements.moveInbox.addEventListener('click', () => { void mutateSelected('inbox') })
-app.querySelector('[data-ask]')?.addEventListener('click', () => {
-  if (usesMobilePanels()) { mobilePanel = 'agent'; mobileReturnPanel = 'agent'; renderPanels() }
-  elements.prompt.focus()
-})
+app.querySelector('[data-ask]')?.addEventListener('click', askCodex)
 app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-send-draft]')?.addEventListener('click', sendDraft)
 app.querySelector('[data-send-cancel]')?.addEventListener('click', () => { elements.sendConfirm.hidden = true })

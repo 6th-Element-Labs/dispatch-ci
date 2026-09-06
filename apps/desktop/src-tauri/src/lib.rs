@@ -5,6 +5,7 @@
 //! no product behavior: mail, agent, and presentation logic stay in `services/`.
 
 mod codex_path;
+mod context_menu;
 mod menu;
 mod preflight;
 mod sidecars;
@@ -28,6 +29,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(context_menu::ContextMenuPending::default())
+        .invoke_handler(tauri::generate_handler![context_menu::popup_context_menu])
         .setup(|app| {
             let handle = app.handle().clone();
             let resources = handle.path().resource_dir()?;
@@ -79,7 +82,7 @@ pub fn run() {
                         show_error(app, "Dispatch could not open its log folder", &error.to_string());
                     }
                 }
-                _ => {}
+                id => context_menu::record_choice(app, id),
             });
             Ok(())
         })

@@ -1286,3 +1286,96 @@ test('renders rewritten CID images in the thread reader', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.dispatch-thread-body img')).toHaveAttribute('src', src)
 })
+
+async function stubGmailInbox(page: import('@playwright/test').Page, summary: typeof conversations[number] & { accountId: string }) {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+}
+
+async function chooseThreadMenu(page: import('@playwright/test').Page, name: string) {
+  await page.locator('[data-conversation-id="demo:t1"]').click({ button: 'right' })
+  await expect(page.locator('[data-thread-context-menu]')).toBeVisible()
+  await page.locator('[data-thread-context-menu]').getByRole('menuitem', { name, exact: true }).evaluate((node) => (node as HTMLButtonElement).click())
+}
+
+test('opens a thread context menu on right-click and blocks the page menu', async ({ page }) => {
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await stubGmailInbox(page, summary)
+  await page.goto('/')
+  const row = page.locator('[data-conversation-id="demo:t1"]')
+  const prevented = await row.evaluate((element) => {
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    element.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+  expect(prevented).toBe(true)
+  await expect(page.locator('[data-thread-context-menu]')).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Reply', exact: true })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Move to Trash', exact: true })).toBeVisible()
+  await expect(row).toHaveAttribute('aria-selected', 'true')
+})
+
+test('replies from the thread context menu through the same draft handler', async ({ page }) => {
+  let draftRequest: unknown
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await stubGmailInbox(page, summary)
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    draftRequest = await route.request().postDataJSON()
+    await route.fulfill({ status: 201, json: { draft: { id: 'ctx-reply', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyText: '', state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.goto('/')
+  await chooseThreadMenu(page, 'Reply')
+  await expect.poll(() => draftRequest).toMatchObject({ messageId: 'm1', accountId: 'link-one' })
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toBeVisible()
+})
+
+test('marks unread from the thread context menu through the same read-state handler', async ({ page }) => {
+  let command: unknown
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: false }
+  await stubGmailInbox(page, summary)
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    command = await route.request().postDataJSON()
+    await route.fulfill({ json: { accepted: true, result: { unread: true } } })
+  })
+  await page.goto('/')
+  await chooseThreadMenu(page, 'Mark as Unread')
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: true })
+})
+
+test('moves a conversation to Trash from the thread context menu', async ({ page }) => {
+  let action: unknown
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await stubGmailInbox(page, summary)
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/actions', async (route) => {
+    action = await route.request().postDataJSON()
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await chooseThreadMenu(page, 'Move to Trash')
+  await expect.poll(() => action).toEqual({ accountId: 'link-one', messageIds: ['m1'], action: 'trash' })
+})
+
+test('does not start the read dwell from a thread-row right-click', async ({ page }) => {
+  let command: unknown
+  await page.clock.install()
+  const first = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [first, second], nextCursor: null, total: 2 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...first, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...second, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Other' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/.+\/read-state/, async (route) => {
+    command = await route.request().postDataJSON()
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t2"]').click({ button: 'right' })
+  await expect(page.locator('[data-thread-context-menu]')).toBeVisible()
+  await page.clock.fastForward(5000)
+  expect(command).toBeUndefined()
+  await expect(page.locator('[data-conversation-id="demo:t2"]')).toHaveClass(/dispatch-message-unread/)
+})

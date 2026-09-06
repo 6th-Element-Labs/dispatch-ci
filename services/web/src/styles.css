@@ -81,6 +81,18 @@ button { cursor: pointer; }
 .dispatch-reader-divider { width: 1px; height: 20px; background: var(--tblr-border-color); flex: none; }
 .dispatch-reader-more { position: relative; }
 .dispatch-reader-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 180px; }
+.dispatch-thread-context-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 180px;
+  margin: 0;
+  padding: .25rem 0;
+  background: var(--tblr-bg-surface);
+  border: 1px solid var(--tblr-border-color);
+  border-radius: var(--tblr-border-radius);
+  box-shadow: var(--tblr-box-shadow-lg);
+}
+.dispatch-thread-context-menu .dropdown-item { width: 100%; text-align: left; }
 .dispatch-thread-meta { display: flex; align-items: center; gap: .4rem; min-width: 0; color: var(--tblr-secondary-color); font-size: .75rem; }
 .dispatch-thread-meta [data-address] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dispatch-account-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tblr-blue); flex: none; }
