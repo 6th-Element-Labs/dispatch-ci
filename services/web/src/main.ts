@@ -1551,14 +1551,9 @@ function handleAgentEvent(message: AgentEvent): void {
     activeAgentText += String(params?.delta ?? '')
     updateAgentMessage(activeAgentMessage, activeAgentText)
   }
-  if (message.method === 'item/started') {
-    const item = params?.item as Record<string, unknown> | undefined
-    if (item?.type === 'mcpToolCall') addAgentMessage('tool', `Using ${String(item.server ?? 'connector')} · ${String(item.tool ?? 'tool')}`)
-  }
-  if (message.method === 'turn/plan/updated') {
-    const plan = Array.isArray(params?.plan) ? params.plan as Array<Record<string, unknown>> : []
-    addAgentMessage('tool', plan.map((item) => `${String(item.status ?? '')}: ${String(item.step ?? '')}`).join('\n'))
-  }
+  // Tool-call starts (item/started for mcpToolCall) and plan updates are
+  // intentionally not echoed into the chat: the Working badge and activity
+  // bar already show progress, and the rows only added noise.
   if (message.method === 'item/completed') {
     const item = params?.item as Record<string, unknown> | undefined
     if (item?.type === 'agentMessage') {
