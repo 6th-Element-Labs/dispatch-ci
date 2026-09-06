@@ -17,6 +17,8 @@ app.innerHTML = `
   <div class="page dispatch-window">
     <header class="dispatch-toolbar" data-tauri-drag-region>
       <div class="dispatch-toolbar-cluster dispatch-toolbar-messages" data-toolbar-messages data-tauri-drag-region>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button>
+        <button class="btn btn-icon btn-ghost-primary btn-sm" type="button" data-compose aria-label="Compose" title="Compose"><i class="ti ti-pencil" aria-hidden="true"></i></button>
         <div class="dispatch-folder">
           <button class="btn btn-ghost-secondary btn-sm dispatch-folder-button" type="button" data-folder-toggle aria-haspopup="menu" aria-expanded="false"><h1 class="dispatch-folder-title" data-mailbox-title>Inbox</h1><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
           <div class="dropdown-menu dispatch-folder-menu" data-folder-menu role="menu" hidden>
@@ -31,8 +33,6 @@ app.innerHTML = `
         </div>
         <select class="form-select form-select-sm dispatch-scope" data-account aria-label="Gmail account"><option value="">All inboxes</option></select>
         <span class="dispatch-toolbar-spacer" data-tauri-drag-region></span>
-        <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button>
-        <button class="btn btn-icon btn-ghost-primary btn-sm" type="button" data-compose aria-label="Compose" title="Compose"><i class="ti ti-pencil" aria-hidden="true"></i></button>
       </div>
       <div class="dispatch-toolbar-cluster dispatch-toolbar-reader" data-tauri-drag-region>
         <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
