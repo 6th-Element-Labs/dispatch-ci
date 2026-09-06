@@ -14,6 +14,8 @@ button { cursor: pointer; }
 .dispatch-toolbar-reader { flex: 1; }
 .dispatch-toolbar-agent { border-right: 0; }
 .dispatch-toolbar-spacer { flex: 1; }
+.btn-icon { min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.btn-icon > .ti { font-size: 1.125rem; line-height: 1; }
 .dispatch-folder { position: relative; }
 .dispatch-folder-button { display: inline-flex; align-items: center; gap: .25rem; padding-inline: .4rem; color: var(--tblr-body-color); }
 .dispatch-folder-title { margin: 0; font-size: .9375rem; font-weight: 600; line-height: 1.2; }

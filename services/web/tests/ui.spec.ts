@@ -485,6 +485,53 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await expect(messagesPanel).toBeVisible()
 })
 
+test('toolbar icon buttons are large enough to hit and the bar drags the native window', async ({ page }) => {
+  await page.goto('/')
+  const buttons = page.locator('.dispatch-toolbar .btn-icon:visible')
+  expect(await buttons.count()).toBeGreaterThanOrEqual(6)
+  for (const box of await buttons.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(30)
+    expect(box.height).toBeGreaterThanOrEqual(30)
+  }
+  const readerButtons = page.locator('.dispatch-reader-toolbar .btn-icon')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  for (const box of await readerButtons.evaluateAll((nodes) => nodes.filter((node) => getComputedStyle(node).display !== 'none').map((node) => node.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(30)
+    expect(box.height).toBeGreaterThanOrEqual(30)
+  }
+  const dragRegions = page.locator('.dispatch-toolbar [data-tauri-drag-region]')
+  await expect(page.locator('.dispatch-toolbar-cluster:not([data-tauri-drag-region])')).toHaveCount(0)
+  await expect(page.locator('.dispatch-toolbar-spacer:not([data-tauri-drag-region])')).toHaveCount(0)
+  expect(await dragRegions.count()).toBeGreaterThanOrEqual(5)
+  await expect(page.locator('.dispatch-toolbar button[data-tauri-drag-region], .dispatch-toolbar input[data-tauri-drag-region], .dispatch-toolbar select[data-tauri-drag-region]')).toHaveCount(0)
+})
+
+test('dragging a divider past its minimum closes that panel', async ({ page }) => {
+  await page.goto('/')
+  const messagesPanel = page.getByRole('complementary', { name: 'Messages' })
+  const agentPanel = page.getByRole('complementary', { name: 'Codex' })
+  const divider = await page.locator('[data-divider="messages"]').boundingBox()
+  expect(divider).not.toBeNull()
+  await page.mouse.move(divider!.x + 4, divider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(divider!.x - 320, divider!.y + 100, { steps: 12 })
+  await page.mouse.up()
+  await expect(messagesPanel).toBeHidden()
+  await page.getByRole('button', { name: 'Messages', exact: true }).click()
+  await expect(messagesPanel).toBeVisible()
+  expect((await messagesPanel.boundingBox())!.width).toBeGreaterThanOrEqual(220)
+  const agentDivider = await page.locator('[data-divider="agent"]').boundingBox()
+  expect(agentDivider).not.toBeNull()
+  await page.mouse.move(agentDivider!.x + 4, agentDivider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(agentDivider!.x + 420, agentDivider!.y + 100, { steps: 12 })
+  await page.mouse.up()
+  await expect(agentPanel).toBeHidden()
+  await page.getByRole('button', { name: 'Codex', exact: true }).click()
+  await expect(agentPanel).toBeVisible()
+  expect((await agentPanel.boundingBox())!.width).toBeGreaterThanOrEqual(280)
+})
+
 test('reflows pane content instead of overflowing when a divider narrows it', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-conversation-id]').first()).toBeVisible()
