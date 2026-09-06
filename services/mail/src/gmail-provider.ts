@@ -723,8 +723,10 @@ export class GmailConnectorProvider {
       this.#scheduleSync(5_000)
     }
   }
-  async readAttachment(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<unknown> {
-    return this.#post('/v1/connectors/gmail/attachment', { linkId: accountId, messageId, attachmentId, filename })
+  async readAttachment(accountId: string, messageId: string, attachmentId: string, _filename: string): Promise<unknown> {
+    // The connector selects by attachment id. Sending the filename as well makes
+    // the selector ambiguous when a message carries several files with one name.
+    return this.#post('/v1/connectors/gmail/attachment', { linkId: accountId, messageId, attachmentId })
   }
 
   async #account(accountId: string): Promise<GmailAccountProjection> {

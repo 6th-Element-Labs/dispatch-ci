@@ -893,13 +893,51 @@ test('opens a desktop attachment through mail instead of downloading it', async 
     opened = { method: route.request().method(), url: route.request().url() }
     await route.fulfill({ json: { opened: true, filename: 'arrival.pdf', path: '/tmp/arrival.pdf' } })
   })
+  const warmed: string[] = []
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/m1\/attachments\/att-9\/cache/, async (route) => {
+    warmed.push(route.request().url())
+    await route.fulfill({ json: { cached: true, reused: false, filename: 'arrival.pdf', mediaType: 'application/pdf' } })
+  })
   await page.goto('/')
-  await page.getByRole('button', { name: /arrival\.pdf/ }).click()
+  await expect.poll(() => warmed).toEqual(['http://127.0.0.1:8411/v1/messages/m1/attachments/att-9/cache?filename=arrival.pdf&account=link-one'])
+  await page.getByRole('button', { name: 'arrival.pdf 12 KB' }).click()
   await expect.poll(() => opened).toEqual({
     method: 'POST',
     url: 'http://127.0.0.1:8411/v1/messages/m1/attachments/att-9/open?filename=arrival.pdf&account=link-one',
   })
   await expect(page.getByText('Opened arrival.pdf')).toBeVisible()
+  const preview = page.getByRole('button', { name: 'Preview arrival.pdf' })
+  await preview.click()
+  await expect(page.locator('iframe.dispatch-attachment-frame')).toHaveAttribute('src', 'http://127.0.0.1:8411/v1/messages/m1/attachments/att-9?filename=arrival.pdf&account=link-one')
+  await preview.click()
+  await expect(page.locator('iframe.dispatch-attachment-frame')).toHaveCount(0)
+})
+
+test('shows image attachments inline from the mail cache', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1/, (route) => {
+    if (route.request().url().includes('/actions') || route.request().url().includes('/read-state')) return route.fallback()
+    return route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{
+      ...messages[0]!,
+      accountId: 'link-one',
+      source: 'gmail',
+      body: { kind: 'plain-text', content: 'Photos attached' },
+      attachments: [
+        { id: 'img-a', name: 'image.png', mediaType: 'image/png', sizeLabel: '3 KB' },
+        { id: 'img-b', name: 'image.png', mediaType: 'image/png', sizeLabel: '97 KB' },
+      ],
+    }] } } })
+  })
+  await page.route(/8411\/v1\/messages\/m1\/attachments\/img-[ab]\/cache/, (route) => route.fulfill({ json: { cached: true } }))
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+  await page.route(/8411\/v1\/messages\/m1\/attachments\/img-[ab]\?/, (route) => route.fulfill({ body: png, contentType: 'image/png' }))
+  await page.goto('/')
+  const images = page.locator('.dispatch-attachment-preview img')
+  await expect(images).toHaveCount(2)
+  await expect(images.nth(1)).toHaveAttribute('src', 'http://127.0.0.1:8411/v1/messages/m1/attachments/img-b?filename=image.png&account=link-one')
+  await expect.poll(() => images.nth(0).evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBe(1)
 })
 
 test('renders rewritten CID images in the thread reader', async ({ page }) => {

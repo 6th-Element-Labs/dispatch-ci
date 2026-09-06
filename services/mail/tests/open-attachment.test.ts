@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { attachmentDownloadUrl, nativeOpenCommand, openAttachmentFile, safeId } from '../src/open-attachment.js'
+import { attachmentDownloadUrl, ensureAttachmentFile, mediaTypeFor, nativeOpenCommand, openAttachmentFile, safeId } from '../src/open-attachment.js'
 
 async function cacheDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dispatch-attachment-'))
@@ -25,7 +25,7 @@ describe('openAttachmentFile', () => {
       messageId: 'msg/1',
       attachmentId: 'att/9',
       filename: 'Opua arrival instructions.pdf',
-      payload: { data: Buffer.from('%PDF-1.1 demo').toString('base64') },
+      loadPayload: async () => ({ data: Buffer.from('%PDF-1.1 demo').toString('base64') }),
       cacheDir: cache,
       openPath: async (path) => { opened.push(path) },
     })
@@ -43,7 +43,7 @@ describe('openAttachmentFile', () => {
       messageId: 'm1',
       attachmentId: 'a1',
       filename: 'note.txt',
-      payload: { structuredContent: { base64_url_content: bytes.toString('base64url') } },
+      loadPayload: async () => ({ structuredContent: { base64_url_content: bytes.toString('base64url') } }),
       cacheDir: cache,
       openPath: async () => undefined,
     })
@@ -58,7 +58,7 @@ describe('openAttachmentFile', () => {
       messageId: 'm1',
       attachmentId: 'a1',
       filename: '1670281874.pdf',
-      payload: { content: [{ type: 'text', text: 'Action completed.' }], structuredContent: { message_id: 'm1', filename: '1670281874.pdf', mime_type: 'application/pdf', size_bytes: 13, file_uri: { download_url: url, file_id: 'file_1' }, content: [{ type: 'text', text: 'extracted text' }], content_truncated: true } },
+      loadPayload: async () => ({ content: [{ type: 'text', text: 'Action completed.' }], structuredContent: { message_id: 'm1', filename: '1670281874.pdf', mime_type: 'application/pdf', size_bytes: 13, file_uri: { download_url: url, file_id: 'file_1' }, content: [{ type: 'text', text: 'extracted text' }], content_truncated: true } }),
       cacheDir: cache,
       openPath: async () => undefined,
       download: async (target) => { requested.push(target); return Buffer.from('%PDF-1.1 demo') },
@@ -74,7 +74,7 @@ describe('openAttachmentFile', () => {
       messageId: 'm1',
       attachmentId: 'a1',
       filename: 'note.pdf',
-      payload: { structuredContent: { size_bytes: 99, download_url: 'https://files.example.com/x' } },
+      loadPayload: async () => ({ structuredContent: { size_bytes: 99, download_url: 'https://files.example.com/x' } }),
       cacheDir: await cacheDir(),
       openPath: async () => undefined,
       download: async () => Buffer.from('short'),
@@ -92,11 +92,35 @@ describe('openAttachmentFile', () => {
       messageId: '1a073fd8fd45e872',
       attachmentId: longId,
       filename: '1670281874.pdf',
-      payload: { data: Buffer.from('%PDF').toString('base64') },
+      loadPayload: async () => ({ data: Buffer.from('%PDF').toString('base64') }),
       cacheDir: cache,
       openPath: async () => undefined,
     })
     expect(result.path).toBe(join(cache, '1a073fd8fd45e872', segment, '1670281874.pdf'))
+  })
+
+  it('reuses a cached file without asking the connector again', async () => {
+    const cache = await cacheDir()
+    let loads = 0
+    const input = { messageId: 'm1', attachmentId: 'a1', filename: 'photo.png', cacheDir: cache, loadPayload: async () => { loads += 1; return { structuredContent: { mime_type: 'image/png', data: Buffer.from('png-bytes').toString('base64') } } } }
+    const first = await ensureAttachmentFile(input)
+    const second = await ensureAttachmentFile(input)
+    expect(first).toMatchObject({ cached: false, mediaType: 'image/png' })
+    expect(second).toMatchObject({ cached: true, path: first.path, mediaType: 'image/png' })
+    expect(loads).toBe(1)
+    expect(mediaTypeFor('Report.PDF')).toBe('application/pdf')
+    expect(mediaTypeFor('unknown.bin')).toBe('application/octet-stream')
+  })
+
+  it('surfaces the connector error instead of a generic missing-bytes message', async () => {
+    await expect(openAttachmentFile({
+      messageId: 'm1',
+      attachmentId: 'a1',
+      filename: 'image.png',
+      loadPayload: async () => ({ isError: true, content: [{ type: 'text', text: 'GmailConnectorError: Failed to read attachment' }], structuredContent: { error: 'GmailConnectorError: Failed to read attachment', error_data: { message: 'Attachment selector ambiguous' } } }),
+      cacheDir: await cacheDir(),
+      openPath: async () => undefined,
+    })).rejects.toThrow('Gmail connector could not read the attachment: Attachment selector ambiguous')
   })
 
   it('rejects a missing attachment payload', async () => {
@@ -104,7 +128,7 @@ describe('openAttachmentFile', () => {
       messageId: 'm1',
       attachmentId: 'a1',
       filename: 'note.pdf',
-      payload: {},
+      loadPayload: async () => ({}),
       cacheDir: await cacheDir(),
       openPath: async () => undefined,
     })).rejects.toThrow('Gmail attachment response did not contain downloadable bytes')
@@ -116,7 +140,7 @@ describe('openAttachmentFile', () => {
       messageId: 'm1',
       attachmentId: 'a1',
       filename: '../../etc/passwd',
-      payload: { data: Buffer.from('x').toString('base64') },
+      loadPayload: async () => ({ data: Buffer.from('x').toString('base64') }),
       cacheDir: cache,
       openPath: async () => undefined,
     })
@@ -131,7 +155,7 @@ describe('openAttachmentFile', () => {
         messageId: 'm1',
         attachmentId: 'a1',
         filename,
-        payload: { data: Buffer.from('x').toString('base64') },
+        loadPayload: async () => ({ data: Buffer.from('x').toString('base64') }),
         cacheDir: cache,
         openPath: async () => undefined,
       })).rejects.toThrow('Attachment filename is missing or unsafe')
@@ -143,7 +167,7 @@ describe('openAttachmentFile', () => {
       messageId: 'm1',
       attachmentId: 'a1',
       filename: 'note.pdf',
-      payload: { data: Buffer.from('x').toString('base64') },
+      loadPayload: async () => ({ data: Buffer.from('x').toString('base64') }),
       cacheDir: await cacheDir(),
       openPath: async () => { throw new Error('Preview is not available') },
     })).rejects.toThrow('Preview is not available')

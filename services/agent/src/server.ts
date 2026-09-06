@@ -378,7 +378,8 @@ export function createAgentServer(runtime: AgentRuntime) {
         const payload = await body(request)
         const gmail = await inventory()
         if (!gmail.server || !gmail.tools.readAttachment) return json(response, 503, { error: 'gmail_attachment_unavailable' })
-        const args = { link_id: String(payload.linkId ?? ''), message_id: String(payload.messageId ?? ''), attachment_id: String(payload.attachmentId ?? ''), filename: String(payload.filename ?? '') }
+        // Selecting by id only: a filename makes the connector's selector ambiguous when a message has duplicate names.
+        const args = { link_id: String(payload.linkId ?? ''), message_id: String(payload.messageId ?? ''), attachment_id: String(payload.attachmentId ?? '') }
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.readAttachment, arguments: args }))
       } catch (error) { return json(response, 502, { error: 'gmail_attachment_read_failed', detail: errorMessage(error) }) }
     }

@@ -552,7 +552,10 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
   if (message.attachments.length > 0) {
     const attachmentList = document.createElement('div')
     attachmentList.className = 'dispatch-thread-attachments'
+    const previews = document.createElement('div')
+    previews.className = 'dispatch-attachment-previews'
     for (const attachment of message.attachments) {
+      if (attachment.contentId && message.body.kind === 'sanitized-html' && message.body.content.includes(encodeURIComponent(attachment.id))) continue
       const item = document.createElement('button')
       item.type = 'button'
       item.className = 'btn btn-sm dispatch-thread-attachment'
@@ -566,10 +569,67 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
       item.append(badge, attachmentName, size)
       item.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name) })
       attachmentList.append(item)
+      const fileUrl = api.attachmentFileUrl(message.id, attachment.id, message.accountId, attachment.name)
+      if (attachment.mediaType.startsWith('image/')) {
+        const figure = document.createElement('figure')
+        figure.className = 'dispatch-attachment-preview'
+        const image = document.createElement('img')
+        image.src = fileUrl
+        image.alt = attachment.name
+        image.loading = 'lazy'
+        image.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name) })
+        figure.append(image)
+        previews.append(figure)
+      } else if (attachment.mediaType === 'application/pdf') {
+        const toggle = document.createElement('button')
+        toggle.type = 'button'
+        toggle.className = 'btn btn-sm btn-ghost-secondary dispatch-attachment-preview-toggle'
+        toggle.textContent = 'Preview'
+        toggle.setAttribute('aria-expanded', 'false')
+        toggle.setAttribute('aria-label', `Preview ${attachment.name}`)
+        let frame: HTMLIFrameElement | undefined
+        toggle.addEventListener('click', () => {
+          if (frame) {
+            frame.remove()
+            frame = undefined
+            toggle.textContent = 'Preview'
+            toggle.setAttribute('aria-expanded', 'false')
+            return
+          }
+          frame = document.createElement('iframe')
+          frame.className = 'dispatch-attachment-frame'
+          frame.src = fileUrl
+          frame.title = attachment.name
+          previews.append(frame)
+          toggle.textContent = 'Hide preview'
+          toggle.setAttribute('aria-expanded', 'true')
+        })
+        attachmentList.append(toggle)
+      }
     }
     article.append(attachmentList)
+    if (previews.childElementCount > 0 || attachmentList.querySelector('.dispatch-attachment-preview-toggle')) article.append(previews)
   }
   return article
+}
+
+/**
+ * Warms the mail cache for every attachment in the thread, newest message
+ * first, so opening or previewing one later is instant. Stops as soon as the
+ * selection moves on; failures are left for the explicit open to report.
+ */
+async function warmAttachments(conversation: ConversationProjection, sequence: number): Promise<void> {
+  const ordered = [...conversation.messages].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))
+  for (const message of ordered) {
+    for (const attachment of message.attachments) {
+      if (sequence !== selectionSequence) return
+      try {
+        await api.cacheAttachment(message.id, attachment.id, message.accountId, attachment.name)
+      } catch {
+        // The explicit open reports connector failures; warming stays silent.
+      }
+    }
+  }
 }
 
 async function openAttachment(message: MessageProjection, attachmentId: string, filename: string): Promise<void> {
@@ -655,6 +715,7 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
     elements.context.textContent = `Working with · ${contextLabel(conversation)}`
     const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
     elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0)))
+    void warmAttachments(conversation, sequence)
     prefetchConversations(id)
   } catch (error) {
     if (sequence !== selectionSequence) return

@@ -1,18 +1,30 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 
-export interface OpenAttachmentInput {
+export interface EnsureAttachmentInput {
   readonly messageId: string
   readonly attachmentId: string
   readonly filename: string
-  readonly payload: unknown
+  /** Asks the connector for the attachment. Only called when the cache has no copy. */
+  readonly loadPayload: () => Promise<unknown>
   readonly cacheDir: string
-  readonly openPath: (path: string) => Promise<void>
   /** Fetches the bytes behind a connector download URL. Defaults to an https-only fetch. */
   readonly download?: (url: string) => Promise<Buffer>
+}
+
+export interface OpenAttachmentInput extends EnsureAttachmentInput {
+  readonly openPath: (path: string) => Promise<void>
+}
+
+export interface CachedAttachment {
+  readonly path: string
+  readonly filename: string
+  readonly mediaType: string
+  /** True when the file was already on disk and the connector was not asked. */
+  readonly cached: boolean
 }
 
 /** Connector responses may exceed this before Dispatch refuses to write them to disk. */
@@ -62,6 +74,8 @@ export async function defaultDownload(url: string): Promise<Buffer> {
  * bytes win; otherwise the URL is fetched. Anything else is a hard failure.
  */
 export async function resolveAttachmentBytes(payload: unknown, download: (url: string) => Promise<Buffer> = defaultDownload): Promise<Buffer> {
+  const failure = connectorFailure(payload)
+  if (failure) throw new Error(`Gmail connector could not read the attachment: ${failure}`)
   const inline = inlineAttachmentBytes(payload)
   if (inline) return inline
   const url = attachmentDownloadUrl(payload)
@@ -100,18 +114,67 @@ function expectedAttachmentSize(payload: unknown): number | undefined {
   return typeof size === 'number' && Number.isInteger(size) && size >= 0 ? size : undefined
 }
 
-export async function openAttachmentFile(input: OpenAttachmentInput): Promise<OpenedAttachment> {
+/**
+ * Returns the attachment as a file in the cache, downloading it once. A file
+ * already on disk is reused as-is: attachment ids are stable per message, so
+ * the connector round trip (about two seconds, it also extracts text) is paid
+ * only the first time.
+ */
+export async function ensureAttachmentFile(input: EnsureAttachmentInput): Promise<CachedAttachment> {
   const filename = safeAttachmentName(input.filename)
-  const bytes = await resolveAttachmentBytes(input.payload, input.download)
   const directory = join(input.cacheDir, safeId(input.messageId), safeId(input.attachmentId))
   const path = join(directory, filename)
   if (!resolve(path).startsWith(resolve(input.cacheDir) + sep)) {
     throw new Error('Attachment filename is missing or unsafe')
   }
+  const existing = await stat(path).catch(() => undefined)
+  if (existing?.isFile() && existing.size > 0) {
+    return { path, filename, mediaType: mediaTypeFor(filename), cached: true }
+  }
+  const payload = await input.loadPayload()
+  const bytes = await resolveAttachmentBytes(payload, input.download)
   await mkdir(directory, { recursive: true })
   await writeFile(path, bytes)
-  await input.openPath(path)
-  return { path, filename }
+  return { path, filename, mediaType: mediaTypeFor(filename, payload), cached: false }
+}
+
+export async function openAttachmentFile(input: OpenAttachmentInput): Promise<OpenedAttachment> {
+  const file = await ensureAttachmentFile(input)
+  await input.openPath(file.path)
+  return { path: file.path, filename: file.filename }
+}
+
+const MEDIA_TYPES: Record<string, string> = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', heic: 'image/heic',
+  txt: 'text/plain', csv: 'text/csv', html: 'text/html', json: 'application/json', zip: 'application/zip',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+export function mediaTypeFor(filename: string, payload?: unknown): string {
+  const record = asRecord(payload)
+  const content = asRecord(record?.structuredContent) ?? record
+  const declared = content?.mime_type
+  if (typeof declared === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(declared)) return declared
+  const extension = filename.split('.').pop()?.toLowerCase() ?? ''
+  return MEDIA_TYPES[extension] ?? 'application/octet-stream'
+}
+
+/** The connector reports failures inside a 200 response: `isError` plus an error record. */
+function connectorFailure(payload: unknown): string | undefined {
+  const record = asRecord(payload)
+  if (!record) return undefined
+  const content = asRecord(record.structuredContent)
+  const data = asRecord(content?.error_data)
+  const message = [data?.message, content?.error, asRecord(asArray(record.content)[0])?.text]
+    .find((value): value is string => typeof value === 'string' && value.length > 0)
+  if (record.isError === true || typeof content?.error === 'string') return message ?? 'unknown connector error'
+  return undefined
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
 }
 
 function safeAttachmentName(filename: string): string {

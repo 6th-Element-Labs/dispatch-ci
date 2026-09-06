@@ -191,6 +191,26 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('reads a Gmail attachment by id without a filename selector', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.read_attachment': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { structuredContent: { mime_type: 'image/png', download_url: 'https://files.example.com/x' } }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/attachment`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', messageId: 'm1', attachmentId: 'att-1', filename: 'image.png' }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.read_attachment',
+      arguments: { link_id: 'link-one', message_id: 'm1', attachment_id: 'att-1' },
+    }))
+  })
+
   it('passes draft attachments to the Gmail connector', async () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {

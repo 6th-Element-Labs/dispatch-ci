@@ -441,6 +441,33 @@ describe('dispatch-mail', () => {
     await expect(readFile(body.path, 'utf8')).resolves.toBe('%PDF-1.1 gmail')
   })
 
+  it('caches an attachment ahead of time and streams the bytes to the browser', async () => {
+    let reads = 0
+    const cache = await mkdtemp(join(tmpdir(), 'dispatch-mail-cache-'))
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      readAttachment: async () => { reads += 1; return { structuredContent: { mime_type: 'image/png', data: Buffer.from('png-bytes').toString('base64') } } },
+    }, { demoEnabled: false, attachmentCacheDir: cache, openPath: async () => { throw new Error('must not open') } })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const cached = await fetch(`${base}/v1/messages/m1/attachments/img-1/cache?account=one&filename=logo.png`, { method: 'POST' })
+    expect(cached.status).toBe(200)
+    await expect(cached.json()).resolves.toMatchObject({ cached: true, reused: false, filename: 'logo.png', mediaType: 'image/png' })
+    const raw = await fetch(`${base}/v1/messages/m1/attachments/img-1?account=one&filename=logo.png`)
+    expect(raw.status).toBe(200)
+    expect(raw.headers.get('content-type')).toBe('image/png')
+    expect(raw.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:8410')
+    expect(Buffer.from(await raw.arrayBuffer()).toString()).toBe('png-bytes')
+    const json = await fetch(`${base}/v1/messages/m1/attachments/img-1?account=one&filename=logo.png`, { headers: { accept: 'application/json' } })
+    await expect(json.json()).resolves.toMatchObject({ attachment: { structuredContent: { mime_type: 'image/png' } } })
+    expect(reads).toBe(2)
+  })
+
   it('fails in the open when Gmail attachment bytes are missing', async () => {
     const server = createMailServer({
       accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],

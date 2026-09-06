@@ -124,6 +124,22 @@ describe('GmailConnectorProvider', () => {
     ])
   })
 
+  it('reads an attachment by id only so duplicate filenames stay unambiguous', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      let raw = ''
+      for await (const chunk of request) raw += chunk
+      bodies.push(JSON.parse(raw) as Record<string, unknown>)
+      response.end(JSON.stringify({ structuredContent: { mime_type: 'image/png', data: 'cG5n' } }))
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    await provider.readAttachment('link-one', 'm1', 'att-long-id', 'image.png')
+    expect(bodies).toEqual([{ linkId: 'link-one', messageId: 'm1', attachmentId: 'att-long-id' }])
+  })
+
   it('names the message and account when no timestamp exists even after reading it', async () => {
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
@@ -385,7 +401,7 @@ describe('GmailConnectorProvider', () => {
     expect(requests).toEqual([
       expect.objectContaining({
         path: '/v1/connectors/gmail/attachment',
-        body: { linkId: 'link-one', messageId: 'gmail-message-1', attachmentId: 'a1', filename: 'arrival.pdf' },
+        body: { linkId: 'link-one', messageId: 'gmail-message-1', attachmentId: 'a1' },
       }),
       expect.objectContaining({
         path: '/v1/connectors/gmail/drafts/create',

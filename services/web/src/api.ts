@@ -81,8 +81,20 @@ export const api = {
   },
   async readAttachment(messageId: string, attachmentId: string, accountId: string, filename: string): Promise<unknown> {
     const params = new URLSearchParams({ account: accountId, filename })
-    const result = await request<{ attachment: unknown }>(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${params}`)
+    const result = await request<{ attachment: unknown }>(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${params}`, { headers: { accept: 'application/json' } })
     return result.attachment
+  },
+  /** URL that streams the cached attachment bytes, for inline images and previews. */
+  attachmentFileUrl(messageId: string, attachmentId: string, accountId: string | undefined, filename: string): string {
+    const params = new URLSearchParams({ filename })
+    if (accountId) params.set('account', accountId)
+    return `${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${params}`
+  },
+  /** Warms the mail cache so a later open or preview does not wait on the connector. */
+  async cacheAttachment(messageId: string, attachmentId: string, accountId: string | undefined, filename: string): Promise<void> {
+    const params = new URLSearchParams({ filename })
+    if (accountId) params.set('account', accountId)
+    await request(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/cache?${params}`, { method: 'POST' })
   },
   async openAttachment(messageId: string, attachmentId: string, accountId: string | undefined, filename: string): Promise<void> {
     const params = new URLSearchParams({ filename })

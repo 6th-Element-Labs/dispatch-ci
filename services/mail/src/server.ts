@@ -5,10 +5,19 @@ import { renderDraftMarkdown } from './draft-markdown.js'
 import { projectDraft } from './draft.js'
 import { GmailConnectorProvider } from './gmail-provider.js'
 import type { DraftAttachment, GmailConversationAction, GmailMailbox, MailStateFilter } from './model.js'
-import { defaultAttachmentCacheDir, defaultOpenPath, openAttachmentFile } from './open-attachment.js'
+import { readFile } from 'node:fs/promises'
+import { defaultAttachmentCacheDir, defaultOpenPath, ensureAttachmentFile, openAttachmentFile } from './open-attachment.js'
 
 const provider = new DemoMailProvider()
 const allowedOrigin = process.env.DISPATCH_ALLOWED_ORIGIN ?? 'http://127.0.0.1:8410'
+
+function writeAttachmentError(response: ServerResponse, fallback: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error)
+  const code = (error as { code?: unknown }).code
+  if (code === 'attachment_not_found') return writeJson(response, 404, { error: 'attachment_not_found', detail })
+  if (code === 'gmail_attachment_unavailable') return writeJson(response, 503, { error: 'gmail_attachment_unavailable', detail })
+  return writeJson(response, 502, { error: fallback, detail })
+}
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, {
@@ -293,34 +302,55 @@ export function createMailServer(
       const messageId = decodeURIComponent(attachmentOpenMatch[1])
       const attachmentId = decodeURIComponent(attachmentOpenMatch[2])
       try {
-        const payload = await attachmentPayload(accountId, messageId, attachmentId, filename)
         const opened = await openAttachmentFile({
           messageId,
           attachmentId,
           filename,
-          payload,
+          loadPayload: () => attachmentPayload(accountId, messageId, attachmentId, filename),
           cacheDir: attachmentCacheDir,
           openPath,
         })
         return writeJson(response, 200, { opened: true, filename: opened.filename, path: opened.path })
       } catch (error) {
-        const code = (error as { code?: unknown }).code
-        if (code === 'attachment_not_found') return writeJson(response, 404, { error: 'attachment_not_found', detail: error instanceof Error ? error.message : String(error) })
-        if (code === 'gmail_attachment_unavailable') return writeJson(response, 503, { error: 'gmail_attachment_unavailable', detail: error instanceof Error ? error.message : String(error) })
-        return writeJson(response, 502, { error: 'gmail_attachment_open_failed', detail: error instanceof Error ? error.message : String(error) })
+        return writeAttachmentError(response, 'gmail_attachment_open_failed', error)
+      }
+    }
+    const attachmentCacheMatch = /^\/v1\/messages\/([^/]+)\/attachments\/([^/]+)\/cache$/.exec(url.pathname)
+    if (request.method === 'POST' && attachmentCacheMatch?.[1] && attachmentCacheMatch[2]) {
+      const accountId = url.searchParams.get('account') ?? ''
+      const filename = url.searchParams.get('filename') ?? ''
+      const messageId = decodeURIComponent(attachmentCacheMatch[1])
+      const attachmentId = decodeURIComponent(attachmentCacheMatch[2])
+      try {
+        const file = await ensureAttachmentFile({ messageId, attachmentId, filename, loadPayload: () => attachmentPayload(accountId, messageId, attachmentId, filename), cacheDir: attachmentCacheDir })
+        return writeJson(response, 200, { cached: true, reused: file.cached, filename: file.filename, mediaType: file.mediaType })
+      } catch (error) {
+        return writeAttachmentError(response, 'gmail_attachment_cache_failed', error)
       }
     }
     const attachmentMatch = /^\/v1\/messages\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && attachmentMatch?.[1] && attachmentMatch[2]) {
+      const accountId = url.searchParams.get('account') ?? ''
+      const filename = url.searchParams.get('filename') ?? ''
+      const messageId = decodeURIComponent(attachmentMatch[1])
+      const attachmentId = decodeURIComponent(attachmentMatch[2])
+      const wantsJson = (request.headers.accept ?? '').includes('application/json')
       try {
-        const accountId = url.searchParams.get('account') ?? ''
-        const filename = url.searchParams.get('filename') ?? ''
-        return writeJson(response, 200, { attachment: await attachmentPayload(accountId, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]), filename) })
+        if (wantsJson) return writeJson(response, 200, { attachment: await attachmentPayload(accountId, messageId, attachmentId, filename) })
+        // Browsers (inline cid: images, previews) get the cached bytes themselves.
+        const file = await ensureAttachmentFile({ messageId, attachmentId, filename, loadPayload: () => attachmentPayload(accountId, messageId, attachmentId, filename), cacheDir: attachmentCacheDir })
+        const bytes = await readFile(file.path)
+        response.writeHead(200, {
+          'content-type': file.mediaType,
+          'content-length': bytes.length,
+          'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+          'cache-control': 'private, max-age=3600',
+          'x-content-type-options': 'nosniff',
+          'access-control-allow-origin': allowedOrigin,
+        })
+        return response.end(bytes)
       } catch (error) {
-        const code = (error as { code?: unknown }).code
-        if (code === 'attachment_not_found') return writeJson(response, 404, { error: 'attachment_not_found', detail: error instanceof Error ? error.message : String(error) })
-        if (code === 'gmail_attachment_unavailable') return writeJson(response, 503, { error: 'gmail_attachment_unavailable', detail: error instanceof Error ? error.message : String(error) })
-        return writeJson(response, 502, { error: 'gmail_attachment_read_failed', detail: error instanceof Error ? error.message : String(error) })
+        return writeAttachmentError(response, 'gmail_attachment_read_failed', error)
       }
     }
     if (request.method === 'POST' && url.pathname === '/v1/drafts/preview') {
