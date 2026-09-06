@@ -84,6 +84,11 @@ export const api = {
     const result = await request<{ attachment: unknown }>(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${params}`)
     return result.attachment
   },
+  async openAttachment(messageId: string, attachmentId: string, accountId: string | undefined, filename: string): Promise<void> {
+    const params = new URLSearchParams({ filename })
+    if (accountId) params.set('account', accountId)
+    await request(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/open?${params}`, { method: 'POST' })
+  },
   async createDraft(messageId: string, fields: Record<string, unknown> = {}): Promise<DraftProjection> {
     const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId, ...draftFields(fields) }),

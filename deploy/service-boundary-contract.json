@@ -11,7 +11,7 @@
       "name": "mail",
       "port": 8411,
       "store": "gmail-index-sqlite",
-      "owns": ["gmail-sync-state", "gmail-message-index", "message-projections", "draft-state"]
+      "owns": ["gmail-sync-state", "gmail-message-index", "message-projections", "draft-state", "attachment-open-cache"]
     },
     {
       "name": "agent",

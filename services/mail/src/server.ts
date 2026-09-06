@@ -5,6 +5,7 @@ import { renderDraftMarkdown } from './draft-markdown.js'
 import { projectDraft } from './draft.js'
 import { GmailConnectorProvider } from './gmail-provider.js'
 import type { DraftAttachment, GmailConversationAction, GmailMailbox, MailStateFilter } from './model.js'
+import { defaultAttachmentCacheDir, defaultOpenPath, openAttachmentFile } from './open-attachment.js'
 
 const provider = new DemoMailProvider()
 const allowedOrigin = process.env.DISPATCH_ALLOWED_ORIGIN ?? 'http://127.0.0.1:8410'
@@ -94,10 +95,31 @@ async function within<T>(operation: Promise<T>, timeoutMs: number, label: string
 
 export function createMailServer(
   gmail: GmailProvider = new GmailConnectorProvider(),
-  options: { demoEnabled?: boolean; readinessTimeoutMs?: number } = { demoEnabled: process.env.DISPATCH_DEMO_MAIL === '1' },
+  options: {
+    demoEnabled?: boolean
+    readinessTimeoutMs?: number
+    attachmentCacheDir?: string
+    openPath?: (path: string) => Promise<void>
+  } = { demoEnabled: process.env.DISPATCH_DEMO_MAIL === '1' },
 ) {
   const demoEnabled = options.demoEnabled === true
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 3_000
+  const attachmentCacheDir = options.attachmentCacheDir ?? defaultAttachmentCacheDir()
+  const openPath = options.openPath ?? defaultOpenPath
+
+  async function attachmentPayload(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<unknown> {
+    if (accountId && gmail.readAttachment) {
+      return gmail.readAttachment(accountId, messageId, attachmentId, filename)
+    }
+    if (demoEnabled) {
+      const attachment = provider.readAttachment(messageId, attachmentId)
+      if (!attachment) {
+        throw Object.assign(new Error('Demo attachment was not found'), { code: 'attachment_not_found' })
+      }
+      return attachment
+    }
+    throw Object.assign(new Error('Gmail attachment read is not available'), { code: 'gmail_attachment_unavailable' })
+  }
   const server = createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return writeJson(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -264,13 +286,42 @@ export function createMailServer(
       const message = provider.readMessage(decodeURIComponent(messageMatch[1]))
       return message ? writeJson(response, 200, { message }) : writeJson(response, 404, { error: 'message_not_found' })
     }
+    const attachmentOpenMatch = /^\/v1\/messages\/([^/]+)\/attachments\/([^/]+)\/open$/.exec(url.pathname)
+    if (request.method === 'POST' && attachmentOpenMatch?.[1] && attachmentOpenMatch[2]) {
+      const accountId = url.searchParams.get('account') ?? ''
+      const filename = url.searchParams.get('filename') ?? ''
+      const messageId = decodeURIComponent(attachmentOpenMatch[1])
+      const attachmentId = decodeURIComponent(attachmentOpenMatch[2])
+      try {
+        const payload = await attachmentPayload(accountId, messageId, attachmentId, filename)
+        const opened = await openAttachmentFile({
+          messageId,
+          attachmentId,
+          filename,
+          payload,
+          cacheDir: attachmentCacheDir,
+          openPath,
+        })
+        return writeJson(response, 200, { opened: true, filename: opened.filename, path: opened.path })
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        if (code === 'attachment_not_found') return writeJson(response, 404, { error: 'attachment_not_found', detail: error instanceof Error ? error.message : String(error) })
+        if (code === 'gmail_attachment_unavailable') return writeJson(response, 503, { error: 'gmail_attachment_unavailable', detail: error instanceof Error ? error.message : String(error) })
+        return writeJson(response, 502, { error: 'gmail_attachment_open_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
+    }
     const attachmentMatch = /^\/v1\/messages\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname)
-    if (request.method === 'GET' && attachmentMatch?.[1] && attachmentMatch[2] && gmail.readAttachment) {
+    if (request.method === 'GET' && attachmentMatch?.[1] && attachmentMatch[2]) {
       try {
         const accountId = url.searchParams.get('account') ?? ''
         const filename = url.searchParams.get('filename') ?? ''
-        return writeJson(response, 200, { attachment: await gmail.readAttachment(accountId, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]), filename) })
-      } catch (error) { return writeJson(response, 502, { error: 'gmail_attachment_read_failed', detail: error instanceof Error ? error.message : String(error) }) }
+        return writeJson(response, 200, { attachment: await attachmentPayload(accountId, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]), filename) })
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        if (code === 'attachment_not_found') return writeJson(response, 404, { error: 'attachment_not_found', detail: error instanceof Error ? error.message : String(error) })
+        if (code === 'gmail_attachment_unavailable') return writeJson(response, 503, { error: 'gmail_attachment_unavailable', detail: error instanceof Error ? error.message : String(error) })
+        return writeJson(response, 502, { error: 'gmail_attachment_read_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
     }
     if (request.method === 'POST' && url.pathname === '/v1/drafts/preview') {
       try {

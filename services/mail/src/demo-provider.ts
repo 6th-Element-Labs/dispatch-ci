@@ -115,4 +115,73 @@ export class DemoMailProvider {
   discardDraft(draftId: string): boolean {
     return this.#drafts.delete(draftId)
   }
+
+  readAttachment(messageId: string, attachmentId: string): { filename: string; mime_type: string; data: string } | undefined {
+    const message = this.readMessage(messageId)
+    const attachment = message?.attachments.find((item) => item.id === attachmentId)
+    if (!attachment) return undefined
+    const bytes = attachment.mediaType === 'application/pdf' ? demoPdf() : demoDocx(attachment.name)
+    return { filename: attachment.name, mime_type: attachment.mediaType, data: bytes.toString('base64') }
+  }
+}
+
+function demoPdf(): Buffer {
+  return Buffer.from('%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n')
+}
+
+function demoDocx(title: string): Buffer {
+  return zipStore([
+    { name: '[Content_Types].xml', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>') },
+    { name: '_rels/.rels', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>') },
+    { name: 'word/document.xml', data: Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${title}</w:t></w:r></w:p></w:body></w:document>`) },
+    { name: 'word/_rels/document.xml.rels', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>') },
+  ])
+}
+
+function zipStore(files: readonly { name: string; data: Buffer }[]): Buffer {
+  const locals: Buffer[] = []
+  const central: Buffer[] = []
+  let offset = 0
+  for (const file of files) {
+    const name = Buffer.from(file.name, 'utf8')
+    const crc = crc32(file.data)
+    const local = Buffer.alloc(30 + name.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(file.data.length, 18)
+    local.writeUInt32LE(file.data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    name.copy(local, 30)
+    locals.push(local, file.data)
+    const header = Buffer.alloc(46 + name.length)
+    header.writeUInt32LE(0x02014b50, 0)
+    header.writeUInt16LE(20, 4)
+    header.writeUInt16LE(20, 6)
+    header.writeUInt32LE(crc, 16)
+    header.writeUInt32LE(file.data.length, 20)
+    header.writeUInt32LE(file.data.length, 24)
+    header.writeUInt16LE(name.length, 28)
+    header.writeUInt32LE(offset, 42)
+    name.copy(header, 46)
+    central.push(header)
+    offset += local.length + file.data.length
+  }
+  const directory = Buffer.concat(central)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(files.length, 8)
+  end.writeUInt16LE(files.length, 10)
+  end.writeUInt32LE(directory.length, 12)
+  end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, directory, end])
+}
+
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of data) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit += 1) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1
+  }
+  return (crc ^ 0xffffffff) >>> 0
 }

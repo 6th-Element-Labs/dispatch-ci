@@ -48,6 +48,28 @@ describe('draft API', () => {
     expect(fetch.mock.calls[2]?.[1]).toEqual(expect.objectContaining({ method: 'POST' }))
   })
 
+  it('asks mail to open an attachment in the default native app', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ opened: true, filename: 'arrival.pdf' }))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(api.openAttachment('msg/1', 'att/9', 'link-one', 'arrival.pdf')).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8411/v1/messages/msg%2F1/attachments/att%2F9/open?filename=arrival.pdf&account=link-one',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('opens a demo attachment without a Gmail account', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ opened: true, filename: 'note.pdf' }))
+    vi.stubGlobal('fetch', fetch)
+
+    await api.openAttachment('demo-message-opua', 'demo-attachment-opua', undefined, 'note.pdf')
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8411/v1/messages/demo-message-opua/attachments/demo-attachment-opua/open?filename=note.pdf',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('sends one Markdown value as both draft body fields', async () => {
     const draft = { id: 'draft-1' }
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ draft }))

@@ -545,7 +545,7 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
       const size = document.createElement('small')
       size.textContent = attachment.sizeLabel
       item.append(badge, attachmentName, size)
-      item.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name, attachment.mediaType) })
+      item.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name) })
       attachmentList.append(item)
     }
     article.append(attachmentList)
@@ -553,19 +553,11 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
   return article
 }
 
-async function openAttachment(message: MessageProjection, attachmentId: string, filename: string, mediaType: string): Promise<void> {
-  if (!message.accountId) return
+async function openAttachment(message: MessageProjection, attachmentId: string, filename: string): Promise<void> {
   selectedAttachmentContext = { messageId: message.id, attachmentId, filename }
   try {
-    const value = await api.readAttachment(message.id, attachmentId, message.accountId, filename) as Record<string, unknown>
-    const content = (value.structuredContent ?? value) as Record<string, unknown>
-    const encoded = String(content.base64_url_content ?? content.data ?? '')
-    if (!encoded) throw new Error('Gmail attachment response did not contain downloadable bytes')
-    const anchor = document.createElement('a')
-    anchor.href = `data:${String(content.mime_type ?? mediaType)};base64,${encoded.replace(/-/g, '+').replace(/_/g, '/')}`
-    anchor.download = filename
-    anchor.click()
-    addAgentMessage('tool', `Opened attachment citation · ${filename}`)
+    await api.openAttachment(message.id, attachmentId, message.accountId, filename)
+    addAgentMessage('tool', `Opened ${filename}`)
   } catch (error) { addAgentMessage('error', error instanceof Error ? error.message : String(error)) }
 }
 

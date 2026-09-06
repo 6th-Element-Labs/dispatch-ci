@@ -32,7 +32,7 @@ Browser or Tauri WebKit
 
 The index bootstraps one page per Gmail stream so the first usable result is bounded. A full paginated synchronization then runs in the background and every five minutes. The API exposes sync state, timestamps, indexed-message count, and exact failures. A repeated page token or pagination beyond the safety limit fails the sync instead of truncating it silently.
 
-On macOS, the Gmail index is stored under `Library/Application Support/Dispatch`, outside the source repository and its Dropbox synchronization. `DISPATCH_MAIL_DB` can set an explicit deployment path. Browser responses are paginated so the client does not render the full indexed mailbox at once.
+On macOS, the Gmail index is stored under `Library/Application Support/Dispatch`, outside the source repository and its Dropbox synchronization. `DISPATCH_MAIL_DB` can set an explicit deployment path. Opened attachments are written under `Library/Caches/Dispatch/attachments`. Mail then calls the OS default app for that file (`open` on macOS). Browser responses are paginated so the client does not render the full indexed mailbox at once.
 
 ### Agent
 

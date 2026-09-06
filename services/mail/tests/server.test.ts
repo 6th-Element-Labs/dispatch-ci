@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { projectDraft } from '../src/draft.js'
 import { createMailServer } from '../src/server.js'
 
@@ -400,5 +403,89 @@ describe('dispatch-mail', () => {
       vi.unstubAllEnvs()
       vi.resetModules()
     }
+  })
+
+  it('opens a Gmail attachment with the default native app', async () => {
+    const opened: string[] = []
+    const cache = await mkdtemp(join(tmpdir(), 'dispatch-mail-open-'))
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      readAttachment: async (accountId, messageId, attachmentId, filename) => {
+        expect({ accountId, messageId, attachmentId, filename }).toEqual({
+          accountId: 'one',
+          messageId: 'msg/1',
+          attachmentId: 'att/9',
+          filename: 'arrival.pdf',
+        })
+        return { data: Buffer.from('%PDF-1.1 gmail').toString('base64') }
+      },
+    }, {
+      demoEnabled: false,
+      attachmentCacheDir: cache,
+      openPath: async (path) => { opened.push(path) },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${base}/v1/messages/msg%2F1/attachments/att%2F9/open?account=one&filename=${encodeURIComponent('arrival.pdf')}`, {
+      method: 'POST',
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json() as { opened: boolean; filename: string; path: string }
+    expect(body).toMatchObject({ opened: true, filename: 'arrival.pdf' })
+    expect(opened).toEqual([body.path])
+    await expect(readFile(body.path, 'utf8')).resolves.toBe('%PDF-1.1 gmail')
+  })
+
+  it('fails in the open when Gmail attachment bytes are missing', async () => {
+    const server = createMailServer({
+      accounts: async () => [{ id: 'one', connectorId: 'gmail', name: 'One', email: 'one@example.com' }],
+      listMessages: async () => [], listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [], listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+      readAttachment: async () => ({}),
+    }, { demoEnabled: false, openPath: async () => undefined })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/messages/m1/attachments/a1/open?account=one&filename=note.pdf`, {
+      method: 'POST',
+    })
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toMatchObject({ error: 'gmail_attachment_open_failed' })
+  })
+
+  it('opens a demo attachment with the default native app', async () => {
+    const opened: string[] = []
+    const cache = await mkdtemp(join(tmpdir(), 'dispatch-demo-open-'))
+    const server = createMailServer({
+      accounts: async () => [],
+      listMessages: async () => [],
+      listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [],
+      listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+    }, {
+      demoEnabled: true,
+      attachmentCacheDir: cache,
+      openPath: async (path) => { opened.push(path) },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${base}/v1/messages/demo-message-opua/attachments/demo-attachment-opua/open?filename=${encodeURIComponent('Opua arrival instructions.pdf')}`, {
+      method: 'POST',
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json() as { opened: boolean; filename: string; path: string }
+    expect(body).toMatchObject({ opened: true, filename: 'Opua arrival instructions.pdf' })
+    expect(opened).toEqual([body.path])
+    const bytes = await readFile(body.path)
+    expect(bytes.subarray(0, 5).toString()).toBe('%PDF-')
   })
 })

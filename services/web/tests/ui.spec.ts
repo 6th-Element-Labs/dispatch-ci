@@ -789,6 +789,34 @@ test('adds a recipient chip from mail autocomplete', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Remove ana@example.com' })).toBeVisible()
 })
 
+test('opens a desktop attachment through mail instead of downloading it', async ({ page }) => {
+  let opened: { method: string; url: string } | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1/, (route) => {
+    if (route.request().url().includes('/actions') || route.request().url().includes('/read-state')) return route.fallback()
+    return route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{
+      ...messages[0]!,
+      accountId: 'link-one',
+      source: 'gmail',
+      body: { kind: 'plain-text', content: 'Body' },
+      attachments: [{ id: 'att-9', name: 'arrival.pdf', mediaType: 'application/pdf', sizeLabel: '12 KB' }],
+    }] } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/m1\/attachments\/att-9\/open/, async (route) => {
+    opened = { method: route.request().method(), url: route.request().url() }
+    await route.fulfill({ json: { opened: true, filename: 'arrival.pdf', path: '/tmp/arrival.pdf' } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: /arrival\.pdf/ }).click()
+  await expect.poll(() => opened).toEqual({
+    method: 'POST',
+    url: 'http://127.0.0.1:8411/v1/messages/m1/attachments/att-9/open?filename=arrival.pdf&account=link-one',
+  })
+  await expect(page.getByText('Opened arrival.pdf')).toBeVisible()
+})
+
 test('renders rewritten CID images in the thread reader', async ({ page }) => {
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))

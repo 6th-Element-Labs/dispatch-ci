@@ -41,7 +41,7 @@ The first useful version lets a user:
 
 The middle panel owns the visible Gmail draft. Recipient, subject, and Markdown body remain editable. Codex revises that same draft through mail create/update. Sending occurs only after the Send confirm and displays the connector result.
 
-Codex restores stored thread turns after reload, shows plans and tool activity, accepts same-turn steering, and exposes interruption. Gmail attachments use their exact parent message and attachment identities for preview or download and are included as explicit Codex citation context.
+Codex restores stored thread turns after reload, shows plans and tool activity, accepts same-turn steering, and exposes interruption. Gmail attachments use their exact parent message and attachment identities. A click on the desktop client asks mail to write the file and open it with the default native app for that extension. The same identities stay in Codex citation context. Inline CID images still load through the existing attachment GET.
 
 ## Current foundation
 
