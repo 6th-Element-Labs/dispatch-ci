@@ -939,6 +939,21 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   }
 })
 
+test('keeps a replaced Codex thread out of the chat and writes it to the log', async ({ page }) => {
+  const logs: string[] = []
+  page.on('console', (message) => logs.push(message.text()))
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-fresh', created: true, replaced: true, detail: 'no rollout found for thread id dead-id' } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.goto('/')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dispatch.codex.threadId'))).toBe('thread-fresh')
+  await expect(page.getByText(/Codex thread replaced/)).toHaveCount(0)
+  await expect(page.getByText(/no rollout found/)).toHaveCount(0)
+  await expect.poll(() => logs.some((line) => line.includes('no rollout found for thread id dead-id'))).toBe(true)
+})
+
 test('does not read history for a brand-new Codex task', async ({ page }) => {
   let historyReads = 0
   await page.unroute('http://127.0.0.1:8412/ready')

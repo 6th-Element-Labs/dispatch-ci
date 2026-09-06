@@ -451,7 +451,9 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
             if (bindings.get(key) !== existing) throw error
             const threadId = threadIdFrom(await runtime.request('thread/start', startThreadParams()))
             await bindings.replace(key, threadId)
-            return json(response, 200, { binding: { key, threadId, created: true, replaced: true, detail: errorMessage(error) } })
+            const detail = errorMessage(error)
+            console.info(`Codex thread replaced · ${detail}`)
+            return json(response, 200, { binding: { key, threadId, created: true, replaced: true, detail } })
           }
         }
         const threadId = threadIdFrom(await runtime.request('thread/start', startThreadParams()))

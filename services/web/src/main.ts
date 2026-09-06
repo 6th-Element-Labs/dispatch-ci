@@ -1777,7 +1777,7 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   activeAgentText = ''
   activeTurnId = undefined
   elements.stop.hidden = true
-  if (replaced) addAgentMessage('tool', detail ? `Codex thread replaced · ${detail}` : 'Codex thread replaced')
+  if (replaced) console.info(detail ? `Codex thread replaced · ${detail}` : 'Codex thread replaced')
   if (!created) {
     try {
       const history = await api.readThread(nextThreadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
