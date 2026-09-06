@@ -255,6 +255,74 @@ test('saves a new draft before asking Codex to revise its real Gmail draft ID', 
   await expect.poll(() => operationOrder).toEqual(['update', 'turn'])
 })
 
+test('picks Luna Reserve when Sol has hit its usage limit and sends it with the next turn', async ({ page }) => {
+  const turns: Record<string, unknown>[] = []
+  let catalogReads = 0
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-model' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-model/turns', async (route) => {
+    turns.push(await route.request().postDataJSON() as Record<string, unknown>)
+    await route.fulfill({ status: 202, json: { turn: { id: `turn-${turns.length}` } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.route('http://127.0.0.1:8412/v1/models', (route) => {
+    catalogReads += 1
+    return route.fulfill({ json: {
+      defaults: { model: 'gpt-5.6-sol', effort: 'medium' },
+      rateLimitsError: null,
+      models: [
+        { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], exhausted: true, resetsAt: 1788754468 },
+        { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], exhausted: true, resetsAt: 1788754468 },
+        { id: 'gpt-reserve', label: 'Luna Reserve', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], exhausted: false, resetsAt: 1789252467 },
+      ],
+    } })
+  })
+  await page.goto('/')
+  await expect(page.locator('[data-connector]')).toHaveText('No Gmail connector')
+  const toggle = page.locator('[data-model-toggle]')
+  await expect(toggle).toHaveText('GPT-5.6 Sol · Medium')
+  await expect(toggle).toHaveClass(/bg-yellow-lt/)
+  await expect(page.locator('[data-model-menu]')).toBeHidden()
+
+  await toggle.click()
+  const menu = page.locator('[data-model-menu]')
+  await expect(menu).toBeVisible()
+  await expect(menu.locator('[data-model-summary]')).toContainText('GPT-5.6 Sol has reached its usage limit')
+  await expect(menu.locator('[data-model-id="gpt-5.6-sol"]')).toBeDisabled()
+  await expect(menu.locator('[data-model-id="gpt-5.6-sol"]')).toContainText('Limit reached · resets')
+  await expect(menu.locator('[data-model-id="gpt-reserve"]')).toBeEnabled()
+  await expect(menu.locator('[data-effort="ultra"]')).toBeVisible()
+  expect(page.getByText('Full reset')).toHaveCount(0)
+
+  await menu.locator('[data-model-id="gpt-reserve"]').click()
+  await expect(menu.locator('[data-model-id="gpt-reserve"]')).toHaveAttribute('aria-checked', 'true')
+  await expect(menu.locator('[data-effort="ultra"]')).toHaveCount(0)
+  await menu.locator('[data-effort="max"]').click()
+  await expect(toggle).toHaveText('Luna Reserve · Max')
+  await expect(toggle).toHaveClass(/bg-blue-lt/)
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Summarize this thread.')
+  await page.keyboard.press('Enter')
+  await expect.poll(() => turns.length).toBe(1)
+  expect(turns[0]).toMatchObject({ text: 'Summarize this thread.', model: 'gpt-reserve', effort: 'max' })
+
+  await page.reload()
+  await expect(page.locator('[data-model-toggle]')).toHaveText('Luna Reserve · Max')
+  expect(catalogReads).toBeGreaterThan(0)
+})
+
+test('tells the user the model list needs Codex when the agent is down', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('[data-agent-status]')).toHaveText('Reconnecting')
+  await page.locator('[data-model-toggle]').click()
+  await expect(page.locator('[data-model-summary]')).toHaveText('Codex not connected')
+  await expect(page.locator('[data-model-id="gpt-5.6-sol"]')).toBeEnabled()
+})
+
 test('does not ask Codex to revise when Gmail does not return a draft ID', async ({ page }) => {
   let turnCount = 0
   await page.unroute('http://127.0.0.1:8411/v1/accounts')

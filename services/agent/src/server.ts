@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { CodexProcess } from './codex-process.js'
 import type { RpcMessage } from './json-line-rpc.js'
 import { readGmailInventory, type GmailInventory } from './gmail-inventory.js'
+import { DISPATCH_DEFAULTS, readModelCatalog } from './model-catalog.js'
 
 interface AgentRuntime {
   ready(): Promise<void>
@@ -58,8 +59,15 @@ const dispatchInstructions = [
   'Require the normal user approval flow for external actions, file changes, commands, and requested permissions.',
   'Keep the user informed while work is in progress and provide a clear final answer when the turn completes.',
 ].join(' ')
-const dispatchModel = 'gpt-5.6-sol'
-const dispatchEffort = 'medium'
+const dispatchModel = DISPATCH_DEFAULTS.model
+const dispatchEffort = DISPATCH_DEFAULTS.effort
+
+/** The client's chosen model and effort, or the Dispatch defaults when it sent none. */
+function turnSelection(payload: Record<string, unknown>): { model: string; effort: string } {
+  const model = typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim() : dispatchModel
+  const effort = typeof payload.effort === 'string' && payload.effort.trim() ? payload.effort.trim() : dispatchEffort
+  return { model, effort }
+}
 
 async function readApps(runtime: AgentRuntime): Promise<unknown> {
   try {
@@ -130,6 +138,17 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 200, await runtime.request('account/read', { refreshToken: false }))
       } catch (error) {
         return json(response, 502, { error: 'app_server_request_failed', detail: errorMessage(error) })
+      }
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/models') {
+      try {
+        const [catalog, limits] = await Promise.all([
+          runtime.request('model/list', { cursor: null, limit: 100, includeHidden: true }),
+          runtime.request('account/rateLimits/read', {}).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error)))),
+        ])
+        return json(response, 200, readModelCatalog(catalog, limits))
+      } catch (error) {
+        return json(response, 502, { error: 'model_catalog_unavailable', detail: errorMessage(error) })
       }
     }
     if (request.method === 'GET' && url.pathname === '/v1/apps') {
@@ -461,8 +480,7 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 202, await runtime.request('turn/start', {
           threadId: decodeURIComponent(turnMatch[1]),
           input,
-          model: dispatchModel,
-          effort: dispatchEffort,
+          ...turnSelection(payload),
           approvalPolicy: 'on-request',
         }))
       } catch (error) {

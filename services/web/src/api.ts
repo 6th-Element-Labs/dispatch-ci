@@ -1,4 +1,4 @@
-import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
+import type { AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -135,6 +135,9 @@ export const api = {
   },
   async agentReady(): Promise<boolean> {
     try { return (await fetch(`${AGENT}/ready`, { signal: AbortSignal.timeout(3_000) })).ok } catch { return false }
+  },
+  async listModels(): Promise<DispatchModelCatalog> {
+    return request(`${AGENT}/v1/models`)
   },
   async listApps(): Promise<AppSummary[]> {
     const result = await request<{ data?: AppSummary[] }>(`${AGENT}/v1/apps`)

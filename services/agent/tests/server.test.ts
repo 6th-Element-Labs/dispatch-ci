@@ -64,11 +64,65 @@ describe('dispatch-agent', () => {
     }))
   })
 
-  it('pins Dispatch turns to GPT-5.6 Sol with medium effort', async () => {
+  it('defaults Dispatch turns to GPT-5.6 Sol with medium effort', async () => {
     const { base, fake } = await start()
-    const response = await fetch(`${base}/v1/threads/thread-1/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Summarize this email.' }) })
+    const response = await fetch(`${base}/v1/threads/thread-1/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Summarize this email.', model: '', effort: '  ' }) })
     expect(response.status).toBe(202)
     expect(fake.request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ threadId: 'thread-1', model: 'gpt-5.6-sol', effort: 'medium' }))
+  })
+
+  it('forwards the model and effort the client chose for a turn', async () => {
+    const { base, fake } = await start()
+    const response = await fetch(`${base}/v1/threads/thread-1/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Summarize this email.', model: 'gpt-reserve', effort: 'max' }) })
+    expect(response.status).toBe(202)
+    expect(fake.request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ threadId: 'thread-1', model: 'gpt-reserve', effort: 'max' }))
+  })
+
+  it('serves the model catalog joined with usage buckets', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'model/list') return { data: [
+        { id: 'gpt-reserve', displayName: 'GPT-Reserve', hidden: true, supportedReasoningEfforts: [{ reasoningEffort: 'max' }] },
+        { id: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol', hidden: false, supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] },
+      ] }
+      if (method === 'account/rateLimits/read') return { rateLimitsByLimitId: {
+        codex: { primary: { usedPercent: 100, resetsAt: 1788754468 }, rateLimitReachedType: 'rate_limit_reached' },
+        base_model_inference: { primary: { usedPercent: 0, resetsAt: 1789252467 }, rateLimitReachedType: null },
+      } }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/models`)
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('model/list', expect.objectContaining({ includeHidden: true }))
+    await expect(response.json()).resolves.toEqual({
+      defaults: { model: 'gpt-5.6-sol', effort: 'medium' },
+      rateLimitsError: null,
+      models: [
+        { id: 'gpt-reserve', label: 'Luna Reserve', efforts: ['max'], exhausted: false, resetsAt: 1789252467 },
+        { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['medium'], exhausted: true, resetsAt: 1788754468 },
+      ],
+    })
+    expect(fake.request.mock.calls.map(([method]) => method)).not.toContain('account/rateLimitResetCredit/consume')
+  })
+
+  it('reports a failed rate-limit read without hiding the catalog', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'model/list') return { data: [{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol', hidden: false, supportedReasoningEfforts: [] }] }
+      if (method === 'account/rateLimits/read') throw new Error('limits offline')
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/models`)
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ rateLimitsError: 'limits offline', models: [{ id: 'gpt-5.6-sol', exhausted: null }] })
+  })
+
+  it('fails visibly when the catalog is unavailable', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => { if (method === 'model/list') throw new Error('app-server gone'); return {} })
+    const response = await fetch(`${base}/v1/models`)
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: 'model_catalog_unavailable', detail: 'app-server gone' })
   })
 
   it('normalizes installed connector state for the thin client', async () => {

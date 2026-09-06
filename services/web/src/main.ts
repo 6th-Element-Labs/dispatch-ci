@@ -5,7 +5,7 @@ import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
-import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { contextLabel, gmailAppId, isNativeShell } from './model.js'
 import { arrivedUnreadIds, playNewMailTone } from './new-mail-tone.js'
 
@@ -110,7 +110,7 @@ app.innerHTML = `
       </main>
       <div class="dispatch-divider" data-divider="agent" role="separator" tabindex="0" aria-label="Resize Codex panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <aside class="card rounded-0 border-0 dispatch-agent" aria-label="Codex">
-        <header class="card-header"><div class="d-flex align-items-center w-100"><span class="avatar avatar-sm bg-dark text-white me-2">✦</span><strong>Codex</strong><span class="badge bg-blue-lt text-blue ms-2" title="Pinned Dispatch model">GPT-5.6 Sol · Medium</span><span class="badge bg-secondary-lt ms-auto" aria-live="polite" data-agent-status>Connecting</span></div><div class="alert alert-info mt-3 mb-0 py-2 px-3 dispatch-context" data-context>No email selected</div><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div></header>
+        <header class="card-header"><div class="d-flex align-items-center w-100"><span class="avatar avatar-sm bg-dark text-white me-2">✦</span><strong>Codex</strong><span class="dispatch-model"><button class="badge bg-blue-lt text-blue ms-2 border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span><span class="badge bg-secondary-lt ms-auto" aria-live="polite" data-agent-status>Connecting</span></div><div class="alert alert-info mt-3 mb-0 py-2 px-3 dispatch-context" data-context>No email selected</div><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div></header>
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
           <div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
@@ -171,6 +171,12 @@ const elements = {
   toolbarAgent: app.querySelector<HTMLElement>('[data-toolbar-agent]')!,
   folderToggle: app.querySelector<HTMLButtonElement>('[data-folder-toggle]')!,
   folderMenu: app.querySelector<HTMLElement>('[data-folder-menu]')!,
+  modelToggle: app.querySelector<HTMLButtonElement>('[data-model-toggle]')!,
+  modelLabel: app.querySelector<HTMLElement>('[data-model-label]')!,
+  modelMenu: app.querySelector<HTMLElement>('[data-model-menu]')!,
+  modelSummary: app.querySelector<HTMLElement>('[data-model-summary]')!,
+  modelList: app.querySelector<HTMLElement>('[data-model-list]')!,
+  modelEfforts: app.querySelector<HTMLElement>('[data-model-efforts]')!,
   sync: app.querySelector<HTMLElement>('.dispatch-sync')!,
   stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
@@ -224,6 +230,11 @@ let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
 let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
 let apps: AppSummary[] = []
+const DEFAULT_MODEL: DispatchModel = { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], exhausted: null, resetsAt: null }
+let modelCatalog: DispatchModelCatalog | undefined
+let modelCatalogError: string | undefined
+let selectedModelId = localStorage.getItem('dispatch.codex.model') || DEFAULT_MODEL.id
+let selectedEffort = localStorage.getItem('dispatch.codex.effort') || 'medium'
 let activeAgentMessage: HTMLElement | undefined
 let activeAgentText = ''
 let agentEvents: EventSource | undefined
@@ -1500,6 +1511,10 @@ function handleAgentEvent(message: AgentEvent): void {
     }
     requestIds.delete(requestId)
   }
+  if (message.method === 'account/rateLimits/updated') {
+    void refreshModelCatalog()
+    return
+  }
   if (message.method === 'turn/started') {
     const turn = params?.turn as Record<string, unknown> | undefined
     activeTurnId = typeof turn?.id === 'string' ? turn.id : undefined
@@ -1513,6 +1528,7 @@ function handleAgentEvent(message: AgentEvent): void {
       const error = turn?.error as Record<string, unknown> | undefined
       elements.agentStatus.textContent = 'Failed'
       addAgentMessage('error', String(error?.message ?? 'The Codex turn failed.'))
+      if (error?.codexErrorInfo === 'usageLimitExceeded') void refreshModelCatalog()
     } else {
       elements.agentStatus.textContent = status === 'interrupted' ? 'Interrupted' : 'Connected'
     }
@@ -1624,6 +1640,7 @@ async function connectAgent(): Promise<void> {
     agentEvents?.close()
     agentEvents = api.events(threadId)
     agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
+    void refreshModelCatalog()
     agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as AgentEvent)
     agentEvents.onerror = () => {
       agentEvents?.close()
@@ -1652,6 +1669,8 @@ async function sendPrompt(): Promise<void> {
     }
     await api.startTurn(threadId, {
       text,
+      model: selectedModelId,
+      effort: selectedEffort,
       appId: gmailAppId(apps),
       mailContext: selected ? { messageId: selected.latestMessageId, threadId: selected.threadId, subject: selected.subject, sender: selected.sender.address, attachment: selectedAttachmentContext } : undefined,
     })
@@ -2013,6 +2032,119 @@ elements.prompt.addEventListener('keydown', (event) => {
     void sendPrompt()
   }
 })
+const EFFORT_LABELS: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' }
+function effortLabel(effort: string): string {
+  return EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1)
+}
+function currentModel(): DispatchModel {
+  return modelCatalog?.models.find((model) => model.id === selectedModelId)
+    ?? (selectedModelId === DEFAULT_MODEL.id ? DEFAULT_MODEL : { ...DEFAULT_MODEL, id: selectedModelId, label: selectedModelId })
+}
+function resetLabel(resetsAt: number | null): string {
+  if (!resetsAt) return ''
+  return ` · resets ${new Date(resetsAt * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+}
+function renderModelPicker(): void {
+  const model = currentModel()
+  elements.modelLabel.textContent = `${model.label} · ${effortLabel(selectedEffort)}`
+  elements.modelToggle.classList.toggle('bg-blue-lt', model.exhausted !== true)
+  elements.modelToggle.classList.toggle('text-blue', model.exhausted !== true)
+  elements.modelToggle.classList.toggle('bg-yellow-lt', model.exhausted === true)
+  elements.modelToggle.classList.toggle('text-yellow', model.exhausted === true)
+  if (modelCatalogError) elements.modelSummary.textContent = modelCatalogError
+  else if (!modelCatalog) elements.modelSummary.textContent = 'Loading models'
+  else if (model.exhausted === true) elements.modelSummary.textContent = `${model.label} has reached its usage limit. Pick another model.`
+  else if (modelCatalog.rateLimitsError) elements.modelSummary.textContent = `Usage limits unavailable: ${modelCatalog.rateLimitsError}`
+  else elements.modelSummary.textContent = 'Model'
+  elements.modelList.replaceChildren()
+  for (const candidate of modelCatalog?.models ?? [model]) {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'dropdown-item dispatch-model-option'
+    row.setAttribute('role', 'menuitemradio')
+    row.setAttribute('aria-checked', String(candidate.id === selectedModelId))
+    row.dataset.modelId = candidate.id
+    row.disabled = candidate.exhausted === true
+    const name = document.createElement('span')
+    name.className = 'dispatch-model-name'
+    name.textContent = candidate.label
+    row.append(name)
+    if (candidate.id === selectedModelId && candidate.exhausted !== true) {
+      const check = document.createElement('i')
+      check.className = 'ti ti-check ms-auto'
+      check.setAttribute('aria-hidden', 'true')
+      row.append(check)
+    }
+    if (candidate.exhausted === true) {
+      const note = document.createElement('span')
+      note.className = 'text-secondary small dispatch-model-note'
+      note.textContent = `Limit reached${resetLabel(candidate.resetsAt)}`
+      row.append(note)
+    }
+    row.addEventListener('click', (event) => {
+      event.stopPropagation()
+      selectModel(candidate.id)
+    })
+    elements.modelList.append(row)
+  }
+  elements.modelEfforts.replaceChildren()
+  for (const effort of model.efforts) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = `btn btn-sm ${effort === selectedEffort ? 'btn-primary' : 'btn-outline-secondary'}`
+    button.setAttribute('aria-pressed', String(effort === selectedEffort))
+    button.dataset.effort = effort
+    button.textContent = effortLabel(effort)
+    button.addEventListener('click', (event) => {
+      event.stopPropagation()
+      selectedEffort = effort
+      localStorage.setItem('dispatch.codex.effort', effort)
+      renderModelPicker()
+    })
+    elements.modelEfforts.append(button)
+  }
+}
+function selectModel(id: string): void {
+  selectedModelId = id
+  localStorage.setItem('dispatch.codex.model', id)
+  const efforts = currentModel().efforts
+  if (efforts.length > 0 && !efforts.includes(selectedEffort)) {
+    selectedEffort = efforts.includes('medium') ? 'medium' : efforts[efforts.length - 1]!
+    localStorage.setItem('dispatch.codex.effort', selectedEffort)
+  }
+  renderModelPicker()
+}
+let modelCatalogRequest: Promise<void> | undefined
+async function refreshModelCatalog(): Promise<void> {
+  if (modelCatalogRequest) return modelCatalogRequest
+  modelCatalogRequest = (async () => {
+    try {
+      if (!await api.agentReady()) {
+        modelCatalogError = 'Codex not connected'
+        return
+      }
+      modelCatalog = await api.listModels()
+      modelCatalogError = undefined
+    } catch (error) {
+      modelCatalogError = error instanceof Error ? error.message : String(error)
+    } finally {
+      modelCatalogRequest = undefined
+      renderModelPicker()
+    }
+  })()
+  return modelCatalogRequest
+}
+function setModelMenu(open: boolean): void {
+  elements.modelMenu.hidden = !open
+  elements.modelMenu.classList.toggle('show', open)
+  elements.modelToggle.setAttribute('aria-expanded', String(open))
+  if (open) void refreshModelCatalog()
+}
+elements.modelToggle.addEventListener('click', (event) => {
+  event.stopPropagation()
+  setModelMenu(elements.modelMenu.hidden)
+})
+renderModelPicker()
 function setFolderMenu(open: boolean): void {
   elements.folderMenu.hidden = !open
   elements.folderMenu.classList.toggle('show', open)
@@ -2036,11 +2168,13 @@ elements.readerMenu.addEventListener('click', () => setReaderMenu(false))
 document.addEventListener('click', (event) => {
   if (!elements.folderMenu.hidden && !elements.folderMenu.contains(event.target as Node)) setFolderMenu(false)
   if (!elements.readerMenu.hidden && !elements.readerMenu.contains(event.target as Node)) setReaderMenu(false)
+  if (!elements.modelMenu.hidden && !elements.modelMenu.contains(event.target as Node)) setModelMenu(false)
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
   setFolderMenu(false)
   setReaderMenu(false)
+  setModelMenu(false)
 })
 window.addEventListener('resize', renderPanels)
 window.addEventListener('keydown', (event) => {

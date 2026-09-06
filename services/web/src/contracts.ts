@@ -49,6 +49,20 @@ export interface DraftProjection {
   readonly accountId?: string
 }
 
+export interface DispatchModel {
+  readonly id: string
+  readonly label: string
+  readonly efforts: readonly string[]
+  readonly exhausted: boolean | null
+  readonly resetsAt: number | null
+}
+
+export interface DispatchModelCatalog {
+  readonly models: readonly DispatchModel[]
+  readonly defaults: { readonly model: string; readonly effort: string }
+  readonly rateLimitsError: string | null
+}
+
 export interface AppSummary {
   readonly id: string
   readonly name: string
