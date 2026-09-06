@@ -466,6 +466,120 @@ test('updates read state only after the Gmail command is accepted', async ({ pag
   await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
 })
 
+test('marks an unread Gmail conversation read after a 5 second selection dwell', async ({ page }) => {
+  let command: unknown
+  await page.clock.install()
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const first = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  let listed = [first, second]
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: listed, nextCursor: null, total: listed.length } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...first, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...second, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Other' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    command = await route.request().postDataJSON()
+    listed = [{ ...first, unread: false }, second]
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(4999)
+  expect(command).toBeUndefined()
+  await page.clock.fastForward(1)
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
+  await page.getByRole('button', { name: 'More actions' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
+})
+
+test('does not mark read when the user leaves before 5 seconds', async ({ page }) => {
+  let command: unknown
+  await page.clock.install()
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const first = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [first, second], nextCursor: null, total: 2 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...first, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...second, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Other' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/.+\/read-state/, async (route) => {
+    command = await route.request().postDataJSON()
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(2000)
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await page.clock.fastForward(5000)
+  await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m2'], unread: false })
+})
+
+test('keeps the conversation unread when the dwell mark-read command fails', async ({ page }) => {
+  await page.clock.install()
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', (route) => route.fulfill({ status: 502, json: { error: 'gmail_read_state_failed' } }))
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(5000)
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await page.getByRole('button', { name: 'More actions' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Mark read' })).toBeVisible()
+  await expect(page.locator('[data-mail-error]')).toBeVisible()
+})
+
+test('removes a dwell-marked conversation from Unread and keeps the reader open', async ({ page }) => {
+  await page.clock.install()
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const first = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: true }
+  let unreadConversations = [first, second]
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=unread/, (route) => route.fulfill({ json: { source: 'gmail', conversations: unreadConversations, nextCursor: null, total: unreadConversations.length } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...first, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...second, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Other' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    unreadConversations = [second]
+    await route.fulfill({ json: { accepted: true, result: { unread: false } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Unread', exact: true }).click()
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await page.clock.fastForward(5000)
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveCount(0)
+  await expect(page.locator('[data-conversation-id="demo:t2"]')).toHaveCount(1)
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await page.getByRole('button', { name: 'More actions' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+})
+
+test('makes unread conversation rows bolder and tinted', async ({ page }) => {
+  const read = {
+    ...conversations[1]!,
+    unread: false,
+    subject: 'Invoice status update',
+    sender: { name: 'OpenInvoice', address: 'notifications@openinvoice.example', initials: 'OP' },
+  }
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'demo', conversations: [conversations[0], read], nextCursor: null, total: 2 } }))
+  await page.goto('/')
+  const unread = page.locator('[data-conversation-id="demo:t1"]')
+  const readRow = page.locator('[data-conversation-id="demo:t2"]')
+  await expect(unread).toHaveClass(/dispatch-message-unread/)
+  await expect(readRow).not.toHaveClass(/dispatch-message-unread/)
+  await expect(unread.locator('strong')).toHaveCSS('font-weight', '700')
+  await expect(readRow.locator('strong')).toHaveCSS('font-weight', /^(400|500)$/)
+  const unreadBg = await unread.evaluate((node) => getComputedStyle(node).backgroundColor)
+  const readBg = await readRow.evaluate((node) => getComputedStyle(node).backgroundColor)
+  expect(unreadBg).not.toBe(readBg)
+})
+
 test('edits, saves, and sends a Gmail draft from the middle panel', async ({ page }) => {
   let sendCount = 0
   await page.unroute('http://127.0.0.1:8411/v1/accounts')

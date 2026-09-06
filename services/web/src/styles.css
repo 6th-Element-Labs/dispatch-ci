@@ -58,7 +58,12 @@ button { cursor: pointer; }
 .dispatch-message b, .dispatch-message small { overflow: hidden; overflow-wrap: anywhere; }
 .dispatch-message b { margin-top: .18rem; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: .76rem; font-weight: 500; line-height: 1.35; }
 .dispatch-message small { margin-top: .25rem; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: .7rem; line-height: 1.35; opacity: .76; }
+.dispatch-message:not(.dispatch-message-unread) { color: var(--tblr-secondary-color); }
+.dispatch-message:not(.dispatch-message-unread) .dispatch-message-top strong,
+.dispatch-message:not(.dispatch-message-unread) b { font-weight: 400; }
+.dispatch-message-unread { background: var(--tblr-primary-lt); }
 .dispatch-message-unread .dispatch-message-top strong, .dispatch-message-unread b { font-weight: 700; }
+.dispatch-message.dispatch-message-unread.active { background: color-mix(in srgb, var(--tblr-primary-lt) 70%, var(--tblr-primary) 30%); }
 .dispatch-message-account { display: block; margin-top: .35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tblr-primary); font-size: .65rem; }
 .dispatch-message-list-empty { min-height: 180px; display: grid; place-items: center; text-align: center; }
 .dispatch-load-more { width: calc(100% - 2rem); }

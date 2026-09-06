@@ -6,6 +6,7 @@ import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import { createMarkReadDwell } from './mark-read-dwell.js'
 import { contextLabel, gmailAppId, isNativeShell } from './model.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 
@@ -226,6 +227,7 @@ let mailbox: GmailMailbox = 'inbox'
 let selected: ConversationProjection | undefined
 let selectedConversationId: string | undefined
 let selectionSequence = 0
+const markReadDwell = createMarkReadDwell()
 let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
 let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
@@ -466,7 +468,7 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     content.append(top, subject, preview)
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
-    button.addEventListener('click', () => { void selectConversation(conversation.id, true) })
+    button.addEventListener('click', () => { void selectConversation(conversation.id, { revealOnMobile: true, startReadDwell: true }) })
     elements.list.append(button)
   }
   if (nextConversationCursor) {
@@ -651,7 +653,8 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
   } catch (error) { addAgentMessage('error', error instanceof Error ? error.message : String(error)) }
 }
 
-async function selectConversation(id: string, revealOnMobile = false): Promise<void> {
+async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean } = {}): Promise<void> {
+  markReadDwell.cancel()
   const summary = conversations.find((conversation) => conversation.id === id)
   if (!summary) return
   const sequence = ++selectionSequence
@@ -662,7 +665,7 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
     return
   }
   if (sequence !== selectionSequence) return
-  if (revealOnMobile && usesMobilePanels()) {
+  if (options.revealOnMobile && usesMobilePanels()) {
     mobilePanel = 'reader'
     mobileReturnPanel = 'reader'
     renderPanels()
@@ -691,6 +694,10 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   loading.textContent = 'Loading conversation…'
   elements.body.replaceChildren(loading)
   elements.attachments.replaceChildren()
+  if (options.startReadDwell && summary.unread && summary.accountId) {
+    const conversationId = summary.id
+    markReadDwell.schedule(conversationId, () => { void completeReadDwell(conversationId) })
+  }
 
   if (mailbox === 'drafts' && summary.accountId) {
     try {
@@ -739,17 +746,42 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   }
 }
 
+async function completeReadDwell(conversationId: string): Promise<void> {
+  if (selectedConversationId !== conversationId) return
+  const summary = conversations.find((conversation) => conversation.id === conversationId)
+  if (!summary?.accountId || !summary.unread) return
+  const messageIds = selected?.id === conversationId ? selected.messages.map((message) => message.id) : []
+  try {
+    await api.setConversationUnread(summary.threadId, summary.accountId, false, messageIds)
+    if (selectedConversationId !== conversationId) return
+    applyLocalReadState(conversationId, false)
+    void loadConversations(true)
+  } catch (error) {
+    if (selectedConversationId !== conversationId) return
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+  }
+}
+
+function applyLocalReadState(conversationId: string, unread: boolean): void {
+  if (selected?.id === conversationId) selected = { ...selected, unread }
+  conversations = conversations
+    .map((conversation) => conversation.id === conversationId ? { ...conversation, unread } : conversation)
+    .filter((conversation) => mailState !== 'unread' || conversation.unread)
+  if (selected?.id === conversationId) elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
+  renderList()
+}
+
 async function toggleReadState(): Promise<void> {
   if (!selected?.accountId) return
   const nextUnread = !selected.unread
+  const conversationId = selected.id
   elements.readState.disabled = true
   elements.readState.textContent = nextUnread ? 'Marking unread…' : 'Marking read…'
   try {
     await api.setConversationUnread(selected.threadId, selected.accountId, nextUnread, selected.messages.map((message) => message.id))
-    selected = { ...selected, unread: nextUnread }
-    conversations = conversations.map((conversation) => conversation.id === selected?.id ? { ...conversation, unread: nextUnread } : conversation)
-    elements.readState.textContent = nextUnread ? 'Mark read' : 'Mark unread'
-    renderList()
+    if (selectedConversationId !== conversationId) return
+    applyLocalReadState(conversationId, nextUnread)
     void loadConversations(true)
   } catch (error) {
     elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
@@ -1718,6 +1750,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   elements.mailSource.textContent = usedCache ? `Refreshing · cached ${cacheLabel}` : 'Loading'
   elements.mailError.hidden = true
   if (!preserveSelection) {
+    markReadDwell.cancel()
     selected = undefined
     selectedConversationId = undefined
     selectionSequence += 1
@@ -1750,8 +1783,9 @@ async function loadConversations(preserveSelection = false): Promise<void> {
         : `${!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected'} · ${refreshedLabel}`
     renderList()
     if (conversations[0]) {
-      if (!selectedConversationId || !conversations.some((conversation) => conversation.id === selectedConversationId)) await selectConversation(conversations[0].id)
-    } else {
+      const selectedStillListed = Boolean(selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId))
+      if (!preserveSelection && !selectedStillListed) await selectConversation(conversations[0].id)
+    } else if (!preserveSelection) {
       selected = undefined
       selectedConversationId = undefined
       elements.reader.hidden = true

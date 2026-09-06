@@ -22,6 +22,10 @@ The queue contains conversations, not duplicate individual messages. A conversat
 
 Selecting a conversation loads the complete Gmail thread with the newest message first. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
 
+Selecting an unread Gmail conversation starts a 5-second dwell. If that conversation stays selected, Dispatch marks it read through mail. The row stays unread until mail accepts the command. Demo conversations do not auto-mark. On the Unread filter, the row leaves the list and the reader stays on that conversation.
+
+Unread rows show a blue avatar mark, bold sender and subject, and a light blue background. Read rows use normal weight and dimmer text.
+
 The user can keep one, two, or three panels open. Each panel has an explicit visibility control. At least one panel remains visible. The messages and Codex panel widths are adjustable and persist locally.
 
 ## Version-one acceptance
