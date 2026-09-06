@@ -485,6 +485,21 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await expect(messagesPanel).toBeVisible()
 })
 
+test('waits for the mail service at startup instead of flashing a request failure', async ({ page }) => {
+  let attempts = 0
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => {
+    attempts += 1
+    if (attempts <= 2) return route.abort('connectionrefused')
+    return route.fulfill({ json: { accounts: [] } })
+  })
+  await page.goto('/')
+  await expect(page.locator('[data-mail-source]')).toHaveText('Starting mail service…')
+  await expect(page.locator('[data-mail-error]')).toBeHidden()
+  await expect(page.locator('[data-conversation-id]').first()).toBeVisible()
+  await expect(page.locator('[data-mail-error]')).toBeHidden()
+  expect(attempts).toBeGreaterThanOrEqual(3)
+})
+
 test('toolbar icon buttons are large enough to hit and the bar drags the native window', async ({ page }) => {
   await page.goto('/')
   const buttons = page.locator('.dispatch-toolbar .btn-icon:visible')

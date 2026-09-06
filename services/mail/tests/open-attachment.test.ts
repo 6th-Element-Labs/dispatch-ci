@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { nativeOpenCommand, openAttachmentFile } from '../src/open-attachment.js'
+import { attachmentDownloadUrl, nativeOpenCommand, openAttachmentFile, safeId } from '../src/open-attachment.js'
 
 async function cacheDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'dispatch-attachment-'))
@@ -48,6 +48,55 @@ describe('openAttachmentFile', () => {
       openPath: async () => undefined,
     })
     await expect(readFile(result.path)).resolves.toEqual(bytes)
+  })
+
+  it('downloads the bytes from the connector file URL when nothing is inline', async () => {
+    const cache = await cacheDir()
+    const requested: string[] = []
+    const url = 'https://files.example.com/att/9?sig=abc'
+    const result = await openAttachmentFile({
+      messageId: 'm1',
+      attachmentId: 'a1',
+      filename: '1670281874.pdf',
+      payload: { content: [{ type: 'text', text: 'Action completed.' }], structuredContent: { message_id: 'm1', filename: '1670281874.pdf', mime_type: 'application/pdf', size_bytes: 13, file_uri: { download_url: url, file_id: 'file_1' }, content: [{ type: 'text', text: 'extracted text' }], content_truncated: true } },
+      cacheDir: cache,
+      openPath: async () => undefined,
+      download: async (target) => { requested.push(target); return Buffer.from('%PDF-1.1 demo') },
+    })
+    expect(requested).toEqual([url])
+    await expect(readFile(result.path, 'utf8')).resolves.toBe('%PDF-1.1 demo')
+  })
+
+  it('refuses a download URL that is not https and a body of the wrong size', async () => {
+    expect(() => attachmentDownloadUrl({ structuredContent: { download_url: 'http://files.example.com/x' } })).toThrow('must use https')
+    expect(attachmentDownloadUrl({ structuredContent: { structuredContent: { file_uri: { download_url: 'https://files.example.com/nested' } } } })).toBe('https://files.example.com/nested')
+    await expect(openAttachmentFile({
+      messageId: 'm1',
+      attachmentId: 'a1',
+      filename: 'note.pdf',
+      payload: { structuredContent: { size_bytes: 99, download_url: 'https://files.example.com/x' } },
+      cacheDir: await cacheDir(),
+      openPath: async () => undefined,
+      download: async () => Buffer.from('short'),
+    })).rejects.toThrow('returned 5 bytes, expected 99')
+  })
+
+  it('keeps a 400-character Gmail attachment id inside one path segment', async () => {
+    const longId = 'ANGjdJ' + 'x'.repeat(420)
+    const segment = safeId(longId)
+    expect(segment.length).toBeLessThanOrEqual(80)
+    expect(segment).not.toBe(safeId(longId + 'y'))
+    expect(safeId('att/9')).toBe('att-9')
+    const cache = await cacheDir()
+    const result = await openAttachmentFile({
+      messageId: '1a073fd8fd45e872',
+      attachmentId: longId,
+      filename: '1670281874.pdf',
+      payload: { data: Buffer.from('%PDF').toString('base64') },
+      cacheDir: cache,
+      openPath: async () => undefined,
+    })
+    expect(result.path).toBe(join(cache, '1a073fd8fd45e872', segment, '1670281874.pdf'))
   })
 
   it('rejects a missing attachment payload', async () => {

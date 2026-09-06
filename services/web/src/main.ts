@@ -236,6 +236,10 @@ let liveInboxBaseline: { scope: string; ids: Set<string> } | undefined
 let toneContext: AudioContext | undefined
 let syncErrorVisible = false
 let mailReconnectTimer: number | undefined
+/** How long after page load an unreachable mail service still counts as "starting" rather than failed. */
+const MAIL_STARTUP_GRACE_MS = 20_000
+const MAIL_STARTUP_RETRY_MS = 500
+const mailStartupGraceUntil = performance.now() + MAIL_STARTUP_GRACE_MS
 let searchQuery = ''
 let searchTimer: number | undefined
 let activeTurnId: string | undefined
@@ -1771,12 +1775,12 @@ function startSyncStatusWatch(): void {
   syncStatusTimer = window.setInterval(() => { void refreshSyncStatus() }, 5_000)
 }
 
-function scheduleMailReconnect(): void {
+function scheduleMailReconnect(delayMs = 1_500): void {
   if (mailReconnectTimer !== undefined) return
   mailReconnectTimer = window.setTimeout(() => {
     mailReconnectTimer = undefined
     void connectMail()
-  }, 1_500)
+  }, delayMs)
 }
 
 async function connectMail(): Promise<void> {
@@ -1798,11 +1802,22 @@ async function connectMail(): Promise<void> {
     await loadConversations()
     if (accounts.length > 0) startSyncStatusWatch()
   } catch (error) {
+    if (isServiceUnreachable(error) && performance.now() < mailStartupGraceUntil) {
+      // The native shell starts the mail sidecar alongside the window, so the
+      // first requests can race its listener. That is startup, not a failure.
+      elements.mailSource.textContent = 'Starting mail service…'
+      scheduleMailReconnect(MAIL_STARTUP_RETRY_MS)
+      return
+    }
     elements.mailSource.textContent = 'Unavailable'
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
     scheduleMailReconnect()
   }
+}
+
+function isServiceUnreachable(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Service request failed at ')
 }
 
 async function start(): Promise<void> {

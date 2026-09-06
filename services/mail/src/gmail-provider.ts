@@ -1,6 +1,7 @@
 import { groupConversations, projectConversation } from './conversation.js'
 import { plainBodyFromMessage, projectDraft } from './draft.js'
 import { randomUUID } from 'node:crypto'
+import { resolveAttachmentBytes } from './open-attachment.js'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage } from './gmail-index.js'
@@ -128,11 +129,12 @@ function missingAttachmentBytes(): Error {
   return Object.assign(new Error('Gmail draft attachment is missing file bytes'), { code: 'gmail_attachment_bytes_required' })
 }
 
-function attachmentBytes(value: unknown): string {
-  const content = structured(value)
-  const raw = text(content.base64_url_content) || text(content.data) || text(record(content.attachment)?.data)
-  if (!raw) throw missingAttachmentBytes()
-  return raw.replace(/-/g, '+').replace(/_/g, '/')
+async function attachmentBytes(value: unknown): Promise<string> {
+  try {
+    return (await resolveAttachmentBytes(value)).toString('base64')
+  } catch (error) {
+    throw Object.assign(missingAttachmentBytes(), { cause: error })
+  }
 }
 
 function connectorAttachments(items: readonly DraftAttachment[]): Array<{ filename: string; mime_type: string; data: string }> {
@@ -761,7 +763,7 @@ export class GmailConnectorProvider {
       const cached = stored.find((candidate) => candidate.contentBase64 && candidate.name === item.name && (candidate.id === item.id || !item.id))
       if (cached?.contentBase64) return { ...item, contentBase64: cached.contentBase64 }
       if (item.sourceMessageId && item.id) {
-        return { ...item, contentBase64: attachmentBytes(await this.readAttachment(accountId, item.sourceMessageId, item.id, item.name)) }
+        return { ...item, contentBase64: await attachmentBytes(await this.readAttachment(accountId, item.sourceMessageId, item.id, item.name)) }
       }
       throw missingAttachmentBytes()
     }))
