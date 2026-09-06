@@ -485,6 +485,76 @@ test('allows one, two, or three adjustable panels while keeping one visible', as
   await expect(messagesPanel).toBeVisible()
 })
 
+test('toolbar icon buttons are large enough to hit and the bar drags the native window', async ({ page }) => {
+  await page.goto('/')
+  const buttons = page.locator('.dispatch-toolbar .btn-icon:visible')
+  expect(await buttons.count()).toBeGreaterThanOrEqual(6)
+  for (const box of await buttons.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(36)
+    expect(box.height).toBeGreaterThanOrEqual(36)
+  }
+  const readerButtons = page.locator('.dispatch-reader-toolbar .btn-icon')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  for (const box of await readerButtons.evaluateAll((nodes) => nodes.filter((node) => getComputedStyle(node).display !== 'none').map((node) => node.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(36)
+    expect(box.height).toBeGreaterThanOrEqual(36)
+  }
+  const dragRegions = page.locator('.dispatch-toolbar [data-tauri-drag-region]')
+  await expect(page.locator('.dispatch-toolbar-cluster:not([data-tauri-drag-region])')).toHaveCount(0)
+  await expect(page.locator('.dispatch-toolbar-spacer:not([data-tauri-drag-region])')).toHaveCount(0)
+  expect(await dragRegions.count()).toBeGreaterThanOrEqual(5)
+  await expect(page.locator('.dispatch-toolbar button[data-tauri-drag-region], .dispatch-toolbar input[data-tauri-drag-region], .dispatch-toolbar select[data-tauri-drag-region]')).toHaveCount(0)
+})
+
+test('a long sync label never widens the page past the window', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await expect(page.locator('.dispatch-thread-message').first()).toBeVisible()
+  await page.evaluate(() => { document.querySelector('[data-mail-source]')!.textContent = 'Syncing Gmail · account 1/3 · 2449 fetched, still indexing older conversations' })
+  const layout = await page.evaluate(() => ({
+    inner: window.innerWidth,
+    page: document.documentElement.scrollWidth,
+    header: document.querySelector('.dispatch-toolbar')!.getBoundingClientRect().right,
+    controls: document.querySelector('.dispatch-panel-controls')!.getBoundingClientRect().right,
+    agent: document.querySelector('.dispatch-agent')!.getBoundingClientRect().right,
+  }))
+  expect(layout.page).toBeLessThanOrEqual(layout.inner)
+  expect(layout.header).toBeLessThanOrEqual(layout.inner)
+  expect(layout.controls).toBeLessThanOrEqual(layout.inner - 4)
+  expect(layout.agent).toBeLessThanOrEqual(layout.inner)
+  for (const name of ['Messages', 'Email', 'Codex']) await expect(page.getByRole('button', { name, exact: true })).toBeInViewport()
+  const compose = await page.getByRole('button', { name: 'Compose' }).boundingBox()
+  const folder = await page.locator('[data-folder-toggle]').boundingBox()
+  expect(compose!.x + compose!.width).toBeLessThanOrEqual(folder!.x)
+})
+
+test('dragging a divider past its minimum closes that panel', async ({ page }) => {
+  await page.goto('/')
+  const messagesPanel = page.getByRole('complementary', { name: 'Messages' })
+  const agentPanel = page.getByRole('complementary', { name: 'Codex' })
+  const divider = await page.locator('[data-divider="messages"]').boundingBox()
+  expect(divider).not.toBeNull()
+  await page.mouse.move(divider!.x + 4, divider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(divider!.x - 320, divider!.y + 100, { steps: 12 })
+  await page.mouse.up()
+  await expect(messagesPanel).toBeHidden()
+  await page.getByRole('button', { name: 'Messages', exact: true }).click()
+  await expect(messagesPanel).toBeVisible()
+  expect((await messagesPanel.boundingBox())!.width).toBeGreaterThanOrEqual(220)
+  const agentDivider = await page.locator('[data-divider="agent"]').boundingBox()
+  expect(agentDivider).not.toBeNull()
+  await page.mouse.move(agentDivider!.x + 4, agentDivider!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(agentDivider!.x + 420, agentDivider!.y + 100, { steps: 12 })
+  await page.mouse.up()
+  await expect(agentPanel).toBeHidden()
+  await page.getByRole('button', { name: 'Codex', exact: true }).click()
+  await expect(agentPanel).toBeVisible()
+  expect((await agentPanel.boundingBox())!.width).toBeGreaterThanOrEqual(280)
+})
+
 test('reflows pane content instead of overflowing when a divider narrows it', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-conversation-id]').first()).toBeVisible()
