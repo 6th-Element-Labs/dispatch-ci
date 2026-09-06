@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { arrivedUnreadIds, playNewMailTone, triadNotes } from './new-mail-tone.js'
+import { arrivedUnreadIds, liveListBaseline, playNewMailTone, triadNotes } from './new-mail-tone.js'
 import type { ConversationSummary } from './contracts.js'
 
-function conversation(id: string, unread: boolean): ConversationSummary {
+function conversation(id: string, unread: boolean, receivedAt = '2026-09-04T09:42:00+12:00'): ConversationSummary {
   return {
     id, threadId: id, latestMessageId: `${id}-m`, sender: { name: 'Ana', address: 'ana@example.com', initials: 'A' },
-    subject: 'Berth', receivedAt: 'now', receivedLabel: 'Sep 4', receivedFullLabel: 'September 4', preview: '', unread, messageCount: 1,
+    subject: 'Berth', receivedAt, receivedLabel: 'Sep 4', receivedFullLabel: 'September 4', preview: '', unread, messageCount: 1,
   }
 }
+
+const T = (minute: number) => `2026-09-04T09:${String(minute).padStart(2, '0')}:00+12:00`
 
 describe('new mail tone', () => {
   it('is an ascending C-E-G triad spaced 90ms apart', () => {
@@ -18,12 +20,33 @@ describe('new mail tone', () => {
   })
 
   it('reports only unread conversations missing from the previous live list', () => {
-    const previous = new Set(['a', 'b'])
-    expect(arrivedUnreadIds(previous, [conversation('c', true), conversation('a', true), conversation('d', false)])).toEqual(['c'])
+    const previous = liveListBaseline([conversation('a', true, T(30)), conversation('b', false, T(20))])
+    expect(arrivedUnreadIds(previous, [conversation('c', true, T(40)), conversation('a', true, T(30)), conversation('d', false, T(35))])).toEqual(['c'])
   })
 
   it('never chimes without a confirmed live baseline', () => {
     expect(arrivedUnreadIds(undefined, [conversation('c', true)])).toEqual([])
+  })
+
+  it('ignores older unread threads that scroll onto the page after an archive or delete', () => {
+    // Page of two: archiving `a` makes the next refresh return `b` plus the older `c`. That is not new mail.
+    const previous = liveListBaseline([conversation('a', false, T(30)), conversation('b', false, T(20))])
+    expect(arrivedUnreadIds(previous, [conversation('b', false, T(20)), conversation('c', true, T(10))])).toEqual([])
+    expect(arrivedUnreadIds(previous, [conversation('b', false, T(20)), conversation('c', true, T(20))])).toEqual([])
+  })
+
+  it('still chimes for mail newer than the oldest thread already shown', () => {
+    const previous = liveListBaseline([conversation('a', false, T(30)), conversation('b', false, T(20))])
+    expect(arrivedUnreadIds(previous, [conversation('a', false, T(30)), conversation('c', true, T(25)), conversation('b', false, T(20))])).toEqual(['c'])
+  })
+
+  it('chimes for any unread arrival when the confirmed inbox was empty', () => {
+    expect(arrivedUnreadIds(liveListBaseline([]), [conversation('c', true, T(5))])).toEqual(['c'])
+  })
+
+  it('never chimes for a thread whose timestamp cannot be parsed', () => {
+    const previous = liveListBaseline([conversation('a', false, T(30))])
+    expect(arrivedUnreadIds(previous, [conversation('a', false, T(30)), conversation('c', true, 'not a date')])).toEqual([])
   })
 
   it('schedules three bells per note and reports when audio is blocked', async () => {

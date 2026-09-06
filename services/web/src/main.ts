@@ -7,7 +7,7 @@ import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { contextLabel, gmailAppId, isNativeShell } from './model.js'
-import { arrivedUnreadIds, playNewMailTone } from './new-mail-tone.js'
+import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
 if (!appElement) throw new Error('Dispatch app root is missing')
@@ -243,7 +243,7 @@ let agentConnecting = false
 let syncStatusTimer: number | undefined
 let observedSyncCompletedAt: string | null | undefined
 /** Ids from the last confirmed live inbox load, keyed by account and state filter so a scope change never chimes. */
-let liveInboxBaseline: { scope: string; ids: Set<string> } | undefined
+let liveInboxBaseline: { scope: string; baseline: LiveListBaseline } | undefined
 let toneContext: AudioContext | undefined
 let syncErrorVisible = false
 let mailReconnectTimer: number | undefined
@@ -1776,16 +1776,16 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   }
 }
 
-/** Compares a confirmed live inbox list against the previous one for the same scope and chimes for newly arrived unread mail. */
+/** Compares a confirmed live inbox list against the previous one for the same scope and chimes only for newly arrived unread mail, never for older threads that an archive or delete scrolled onto the page. */
 function noteArrivals(): void {
   if (mailbox !== 'inbox' || searchQuery || mailState === 'read') {
     liveInboxBaseline = undefined
     return
   }
   const scope = `${selectedAccountId ?? 'all'}:${mailState}`
-  const previous = liveInboxBaseline?.scope === scope ? liveInboxBaseline.ids : undefined
+  const previous = liveInboxBaseline?.scope === scope ? liveInboxBaseline.baseline : undefined
   const arrived = arrivedUnreadIds(previous, conversations)
-  liveInboxBaseline = { scope, ids: new Set(conversations.map((conversation) => conversation.id)) }
+  liveInboxBaseline = { scope, baseline: liveListBaseline(conversations) }
   if (arrived.length > 0) void chimeNewMail()
 }
 

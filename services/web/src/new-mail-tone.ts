@@ -17,14 +17,37 @@ export function triadNotes(): readonly ToneNote[] {
   return [C6, E6, G6].map((frequency, index) => ({ frequency, startOffset: index * 0.09, duration: 0.45, gain: 0.35 }))
 }
 
+/** What a confirmed live list showed: its thread ids and the timestamp of the oldest thread on the page. */
+export interface LiveListBaseline {
+  readonly ids: ReadonlySet<string>
+  /** Epoch ms of the oldest thread shown, or undefined when the confirmed list was empty. */
+  readonly oldestReceivedAt: number | undefined
+}
+
+export function liveListBaseline(conversations: readonly ConversationSummary[]): LiveListBaseline {
+  const times = conversations.map((conversation) => Date.parse(conversation.receivedAt)).filter((time) => !Number.isNaN(time))
+  return { ids: new Set(conversations.map((conversation) => conversation.id)), oldestReceivedAt: times.length > 0 ? Math.min(...times) : undefined }
+}
+
 /**
- * Ids of unread conversations that appear in the live list but not in the previous one.
+ * Ids of unread conversations that are new mail relative to the previous confirmed live list:
+ * absent from it and newer than the oldest thread it showed.
+ *
  * The previous list must come from a confirmed live load; a cached or empty baseline
  * would chime for every message that arrived while the app was closed.
+ * The age check keeps archive, trash, and mark-read silent: each of those refreshes the
+ * page, and the next older thread that scrolls onto it is not new mail even when unread.
  */
-export function arrivedUnreadIds(previous: ReadonlySet<string> | undefined, next: readonly ConversationSummary[]): string[] {
+export function arrivedUnreadIds(previous: LiveListBaseline | undefined, next: readonly ConversationSummary[]): string[] {
   if (!previous) return []
-  return next.filter((conversation) => conversation.unread && !previous.has(conversation.id)).map((conversation) => conversation.id)
+  return next
+    .filter((conversation) => {
+      if (!conversation.unread || previous.ids.has(conversation.id)) return false
+      const receivedAt = Date.parse(conversation.receivedAt)
+      if (Number.isNaN(receivedAt)) return false
+      return previous.oldestReceivedAt === undefined || receivedAt > previous.oldestReceivedAt
+    })
+    .map((conversation) => conversation.id)
 }
 
 interface AudioLike {
