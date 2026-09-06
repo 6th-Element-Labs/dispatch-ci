@@ -60,9 +60,31 @@ app.innerHTML = `
       <main class="card rounded-0 border-0 dispatch-reader" aria-label="Selected email">
         <div class="empty dispatch-reader-empty" data-reader-empty><div class="empty-icon"><i class="ti ti-mail-opened"></i></div><p class="empty-title">Select a message</p></div>
         <div data-reader hidden>
-          <header class="card-header dispatch-reader-header">
-            <div class="w-100"><div class="d-flex align-items-start gap-2"><button class="btn btn-icon btn-ghost-secondary dispatch-mobile-back" type="button" data-mobile-back aria-label="Back to Inbox"><i class="ti ti-arrow-left" aria-hidden="true"></i></button><div class="flex-grow-1"><span class="subheader">Selected thread</span><h2 class="card-title mt-1 mb-3" data-subject></h2></div><div class="btn-list flex-nowrap dispatch-message-actions"><button class="btn btn-icon btn-ghost-secondary dispatch-pane-collapse" type="button" data-collapse-reader aria-label="Collapse email panel"><i class="ti ti-layout-sidebar-right-collapse" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-move-inbox aria-label="Move to Inbox" hidden><i class="ti ti-inbox" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-archive aria-label="Archive"><i class="ti ti-archive" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-secondary" type="button" data-spam aria-label="Mark as spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i></button><button class="btn btn-icon btn-ghost-danger" type="button" data-trash aria-label="Move to Trash"><i class="ti ti-trash" aria-hidden="true"></i></button></div></div>
-            <div class="dispatch-sender"><span class="avatar avatar-sm bg-blue-lt text-blue" data-avatar></span><span><strong data-sender></strong><small class="text-secondary" data-address></small></span><time class="text-secondary ms-auto" data-time></time></div></div>
+          <header class="dispatch-reader-header">
+            <div class="dispatch-reader-toolbar">
+              <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-mobile-back" type="button" data-mobile-back aria-label="Back to Inbox"><i class="ti ti-arrow-left" aria-hidden="true"></i></button>
+              <h2 class="dispatch-reader-subject" data-subject></h2>
+              <button class="btn btn-primary btn-sm" type="button" data-reply><i class="ti ti-arrow-back-up me-1" aria-hidden="true"></i>Reply</button>
+              <div class="btn-group" role="group" aria-label="Reply options">
+                <button class="btn btn-icon btn-sm" type="button" data-reply-all aria-label="Reply all" title="Reply all"><i class="ti ti-arrow-back-up-double" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" data-forward aria-label="Forward" title="Forward"><i class="ti ti-arrow-forward-up" aria-hidden="true"></i></button>
+              </div>
+              <span class="dispatch-reader-divider" aria-hidden="true"></span>
+              <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-move-inbox aria-label="Move to Inbox" title="Move to Inbox" hidden><i class="ti ti-inbox" aria-hidden="true"></i></button>
+              <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-archive aria-label="Archive" title="Archive"><i class="ti ti-archive" aria-hidden="true"></i></button>
+              <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-spam aria-label="Mark as spam" title="Mark as spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i></button>
+              <button class="btn btn-icon btn-ghost-danger btn-sm" type="button" data-trash aria-label="Move to Trash" title="Move to Trash"><i class="ti ti-trash" aria-hidden="true"></i></button>
+              <div class="dispatch-reader-more">
+                <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-reader-more aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><i class="ti ti-dots" aria-hidden="true"></i></button>
+                <div class="dropdown-menu dropdown-menu-end dispatch-reader-menu" data-reader-menu role="menu" hidden>
+                  <button class="dropdown-item" type="button" role="menuitem" data-read-state>Mark unread</button>
+                  <button class="dropdown-item" type="button" role="menuitem" data-ask><i class="ti ti-sparkles dropdown-item-icon" aria-hidden="true"></i>Ask Codex</button>
+                  <div class="dropdown-divider"></div>
+                  <button class="dropdown-item dispatch-pane-collapse" type="button" role="menuitem" data-collapse-reader>Hide email panel</button>
+                </div>
+              </div>
+            </div>
+            <div class="dispatch-thread-meta" data-thread-meta><span data-message-count></span><span class="dispatch-meta-sep">·</span><span data-thread-mailbox></span><span class="dispatch-meta-sep" data-account-sep hidden>·</span><span class="dispatch-account-dot" data-account-dot hidden aria-hidden="true"></span><span data-address hidden></span></div>
           </header>
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
@@ -83,7 +105,6 @@ app.innerHTML = `
             </div>
             </div><footer class="card-footer d-flex flex-wrap gap-2"><button class="btn btn-outline-danger" type="button" data-discard-draft>Discard</button><button class="btn btn-outline-secondary" type="button" data-attach-draft>Attach</button><input type="file" data-draft-files multiple hidden><button class="btn btn-outline-secondary" type="button" data-save-draft>Save draft</button><button class="btn btn-outline-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-primary ms-auto" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send draft</button></footer></div>
           </section>
-          <footer class="card-footer dispatch-reader-actions"><button class="btn btn-primary" type="button" data-reply><i class="ti ti-reply me-1" aria-hidden="true"></i>Reply</button><button class="btn btn-outline-secondary" type="button" data-reply-all><i class="ti ti-arrow-back-up-double me-1" aria-hidden="true"></i>Reply all</button><button class="btn btn-outline-secondary" type="button" data-forward><i class="ti ti-arrow-forward-up me-1" aria-hidden="true"></i>Forward</button><button class="btn btn-outline-secondary" type="button" data-read-state>Mark unread</button><button class="btn btn-outline-secondary" type="button" data-ask><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex</button></footer>
         </div>
       </main>
       <div class="dispatch-divider" data-divider="agent" role="separator" tabindex="0" aria-label="Resize Codex panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
@@ -113,10 +134,13 @@ const elements = {
   reader: app.querySelector<HTMLElement>('[data-reader]')!,
   readerEmpty: app.querySelector<HTMLElement>('[data-reader-empty]')!,
   subject: app.querySelector<HTMLElement>('[data-subject]')!,
-  avatar: app.querySelector<HTMLElement>('[data-avatar]')!,
-  sender: app.querySelector<HTMLElement>('[data-sender]')!,
   address: app.querySelector<HTMLElement>('[data-address]')!,
-  time: app.querySelector<HTMLTimeElement>('[data-time]')!,
+  messageCount: app.querySelector<HTMLElement>('[data-message-count]')!,
+  threadMailbox: app.querySelector<HTMLElement>('[data-thread-mailbox]')!,
+  accountDot: app.querySelector<HTMLElement>('[data-account-dot]')!,
+  accountSep: app.querySelector<HTMLElement>('[data-account-sep]')!,
+  readerMore: app.querySelector<HTMLButtonElement>('[data-reader-more]')!,
+  readerMenu: app.querySelector<HTMLElement>('[data-reader-menu]')!,
   body: app.querySelector<HTMLElement>('[data-body]')!,
   attachments: app.querySelector<HTMLElement>('[data-attachments]')!,
   draft: app.querySelector<HTMLElement>('[data-draft]')!,
@@ -444,39 +468,88 @@ async function loadMoreConversations(): Promise<void> {
   }
 }
 
-function renderThreadMessage(message: MessageProjection): HTMLElement {
+const accountPalette = ['var(--tblr-blue)', 'var(--tblr-green)', 'var(--tblr-yellow)', 'var(--tblr-purple)', 'var(--tblr-teal)']
+function accountColor(accountId: string | undefined): string {
+  const index = accounts.findIndex((account) => account.id === accountId)
+  return accountPalette[index < 0 ? 0 : index % accountPalette.length]!
+}
+
+function renderThreadMeta(summary: Pick<ConversationSummary, 'messageCount' | 'accountId' | 'accountLabel'>): void {
+  elements.messageCount.textContent = summary.messageCount === 1 ? '1 message' : `${summary.messageCount} messages`
+  elements.threadMailbox.textContent = mailboxLabels[mailbox]
+  const showAccount = Boolean(summary.accountLabel) && accounts.length > 1
+  elements.address.hidden = !showAccount
+  elements.accountDot.hidden = !showAccount
+  elements.accountSep.hidden = !showAccount
+  elements.address.textContent = summary.accountLabel ?? ''
+  elements.accountDot.style.background = accountColor(summary.accountId)
+}
+
+function renderThreadMessage(message: MessageProjection, expanded: boolean): HTMLElement {
   const article = document.createElement('article')
   article.className = 'card dispatch-thread-message'
+  article.classList.toggle('dispatch-thread-collapsed', !expanded)
   const header = document.createElement('header')
-  header.className = 'card-header'
+  const avatar = document.createElement('span')
+  avatar.className = 'avatar avatar-sm bg-blue-lt text-blue'
+  avatar.textContent = message.sender.initials
   const identity = document.createElement('div')
   const name = document.createElement('strong')
   name.textContent = message.sender.name
-  const address = document.createElement('small')
-  address.textContent = message.sender.address
-  identity.append(name, address)
+  identity.append(name)
+  if (expanded) {
+    const address = document.createElement('small')
+    const to = (message.to ?? []).map((item) => item.address).filter(Boolean).join(', ')
+    address.textContent = to ? `${message.sender.address} · to ${to}` : message.sender.address
+    identity.append(address)
+  } else {
+    const snippet = document.createElement('small')
+    snippet.className = 'dispatch-thread-snippet'
+    snippet.textContent = message.preview
+    identity.append(snippet)
+  }
   const time = document.createElement('time')
   time.dateTime = message.receivedAt
-  time.textContent = message.receivedFullLabel
-  header.append(identity, time)
-  const content = renderEmailContent(message.body.kind, message.body.content)
-  content.classList.add('card-body')
-  const attachmentList = document.createElement('div')
-  attachmentList.className = 'card-footer d-grid gap-2 dispatch-thread-attachments'
-  for (const attachment of message.attachments) {
-    const item = document.createElement('button')
-    item.type = 'button'
-    item.className = 'btn btn-outline-secondary text-start'
-    const attachmentName = document.createElement('strong')
-    attachmentName.textContent = attachment.name
-    const size = document.createElement('small')
-    size.textContent = attachment.sizeLabel
-    item.append(attachmentName, size)
-    item.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name, attachment.mediaType) })
-    attachmentList.append(item)
+  time.textContent = expanded ? message.receivedFullLabel : message.receivedLabel
+  header.append(avatar, identity, time)
+  article.append(header)
+  if (!expanded) {
+    article.tabIndex = 0
+    article.setAttribute('role', 'button')
+    article.setAttribute('aria-label', `Expand message from ${message.sender.name}`)
+    const expand = () => { article.replaceWith(renderThreadMessage(message, true)) }
+    article.addEventListener('click', expand)
+    article.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        expand()
+      }
+    })
+    return article
   }
-  article.append(header, content)
-  if (message.attachments.length > 0) article.append(attachmentList)
+  const content = renderEmailContent(message.body.kind, message.body.content)
+  content.classList.add('dispatch-thread-content')
+  article.append(content)
+  if (message.attachments.length > 0) {
+    const attachmentList = document.createElement('div')
+    attachmentList.className = 'dispatch-thread-attachments'
+    for (const attachment of message.attachments) {
+      const item = document.createElement('button')
+      item.type = 'button'
+      item.className = 'btn btn-sm dispatch-thread-attachment'
+      const badge = document.createElement('span')
+      badge.className = 'badge bg-blue-lt text-blue'
+      badge.textContent = attachment.name.split('.').pop()?.toUpperCase().slice(0, 4) || 'FILE'
+      const attachmentName = document.createElement('strong')
+      attachmentName.textContent = attachment.name
+      const size = document.createElement('small')
+      size.textContent = attachment.sizeLabel
+      item.append(badge, attachmentName, size)
+      item.addEventListener('click', () => { void openAttachment(message, attachment.id, attachment.name, attachment.mediaType) })
+      attachmentList.append(item)
+    }
+    article.append(attachmentList)
+  }
   return article
 }
 
@@ -529,11 +602,7 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
   elements.body.hidden = false
   elements.attachments.hidden = false
   elements.subject.textContent = summary.subject
-  elements.avatar.textContent = summary.sender.initials
-  elements.sender.textContent = summary.sender.name
-  elements.address.textContent = summary.sender.address
-  elements.time.textContent = summary.receivedLabel
-  elements.time.dateTime = summary.receivedAt
+  renderThreadMeta(summary)
   elements.context.textContent = `Loading · ${summary.subject} · ${summary.sender.name}`
   const loading = document.createElement('div')
   loading.className = 'empty text-secondary dispatch-reader-loading'
@@ -571,14 +640,10 @@ async function selectConversation(id: string, revealOnMobile = false): Promise<v
     elements.readState.hidden = !conversation.accountId
     elements.readState.textContent = conversation.unread ? 'Mark read' : 'Mark unread'
     elements.subject.textContent = conversation.subject
-    elements.avatar.textContent = conversation.sender.initials
-    elements.sender.textContent = conversation.sender.name
-    elements.address.textContent = conversation.sender.address
-    elements.time.textContent = conversation.receivedFullLabel
-    elements.time.dateTime = conversation.receivedAt
+    renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
     elements.context.textContent = `Working with · ${contextLabel(conversation)}`
     const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
-    elements.body.replaceChildren(...newestFirst.map(renderThreadMessage))
+    elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0)))
     prefetchConversations(id)
   } catch (error) {
     if (sequence !== selectionSequence) return
@@ -936,9 +1001,11 @@ function openCompose(): void {
     renderPanels()
   }
   elements.subject.textContent = 'New message'
-  elements.sender.textContent = 'Compose'
-  elements.address.textContent = 'Draft preview'
-  elements.time.textContent = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
+  elements.messageCount.textContent = 'Draft'
+  elements.threadMailbox.textContent = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
+  elements.address.hidden = true
+  elements.accountDot.hidden = true
+  elements.accountSep.hidden = true
   const draft: DraftProjection = { id: '', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '', bodyText: '', attachments: [], state: 'draft', accountId }
   showDraft(draft, true)
 }
@@ -1842,10 +1909,25 @@ elements.folderToggle.addEventListener('click', (event) => {
   setFolderMenu(elements.folderMenu.hidden)
 })
 elements.folderMenu.addEventListener('click', () => setFolderMenu(false))
+function setReaderMenu(open: boolean): void {
+  elements.readerMenu.hidden = !open
+  elements.readerMenu.classList.toggle('show', open)
+  elements.readerMore.setAttribute('aria-expanded', String(open))
+}
+elements.readerMore.addEventListener('click', (event) => {
+  event.stopPropagation()
+  setReaderMenu(elements.readerMenu.hidden)
+})
+elements.readerMenu.addEventListener('click', () => setReaderMenu(false))
 document.addEventListener('click', (event) => {
   if (!elements.folderMenu.hidden && !elements.folderMenu.contains(event.target as Node)) setFolderMenu(false)
+  if (!elements.readerMenu.hidden && !elements.readerMenu.contains(event.target as Node)) setReaderMenu(false)
 })
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setFolderMenu(false) })
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return
+  setFolderMenu(false)
+  setReaderMenu(false)
+})
 window.addEventListener('resize', renderPanels)
 window.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
