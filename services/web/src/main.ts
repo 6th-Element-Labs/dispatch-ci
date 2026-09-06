@@ -7,6 +7,7 @@ import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { contextLabel, gmailAppId, isNativeShell } from './model.js'
+import { arrivedUnreadIds, playNewMailTone } from './new-mail-tone.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
 if (!appElement) throw new Error('Dispatch app root is missing')
@@ -230,6 +231,9 @@ let reconnectTimer: number | undefined
 let agentConnecting = false
 let syncStatusTimer: number | undefined
 let observedSyncCompletedAt: string | null | undefined
+/** Ids from the last confirmed live inbox load, keyed by account and state filter so a scope change never chimes. */
+let liveInboxBaseline: { scope: string; ids: Set<string> } | undefined
+let toneContext: AudioContext | undefined
 let syncErrorVisible = false
 let mailReconnectTimer: number | undefined
 let searchQuery = ''
@@ -1653,6 +1657,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery, mailbox)
     if (loadSequence !== conversationLoadSequence) return
     conversations = result.conversations
+    noteArrivals()
     if (mailReconnectTimer !== undefined) window.clearTimeout(mailReconnectTimer)
     mailReconnectTimer = undefined
     nextConversationCursor = result.nextCursor ?? null
@@ -1689,6 +1694,34 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
     scheduleMailReconnect()
+  }
+}
+
+/** Compares a confirmed live inbox list against the previous one for the same scope and chimes for newly arrived unread mail. */
+function noteArrivals(): void {
+  if (mailbox !== 'inbox' || searchQuery || mailState === 'read') {
+    liveInboxBaseline = undefined
+    return
+  }
+  const scope = `${selectedAccountId ?? 'all'}:${mailState}`
+  const previous = liveInboxBaseline?.scope === scope ? liveInboxBaseline.ids : undefined
+  const arrived = arrivedUnreadIds(previous, conversations)
+  liveInboxBaseline = { scope, ids: new Set(conversations.map((conversation) => conversation.id)) }
+  if (arrived.length > 0) void chimeNewMail()
+}
+
+function unlockTone(): void {
+  toneContext ??= new AudioContext()
+  if (toneContext.state === 'suspended') void toneContext.resume()
+}
+
+async function chimeNewMail(): Promise<void> {
+  try {
+    toneContext ??= new AudioContext()
+    const played = await playNewMailTone(toneContext)
+    if (!played) console.warn('New mail arrived but the audio context is suspended until the first click or keypress.')
+  } catch (error) {
+    console.warn('New mail tone failed', error)
   }
 }
 
@@ -1776,6 +1809,8 @@ async function start(): Promise<void> {
   await Promise.all([connectMail(), connectAgent()])
 }
 
+window.addEventListener('pointerdown', unlockTone, { once: true })
+window.addEventListener('keydown', unlockTone, { once: true })
 app.querySelector<HTMLButtonElement>('[data-refresh]')?.addEventListener('click', (event) => {
   const button = event.currentTarget as HTMLButtonElement
   button.disabled = true
