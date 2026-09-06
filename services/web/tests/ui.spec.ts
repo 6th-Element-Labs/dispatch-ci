@@ -1379,3 +1379,21 @@ test('does not start the read dwell from a thread-row right-click', async ({ pag
   expect(command).toBeUndefined()
   await expect(page.locator('[data-conversation-id="demo:t2"]')).toHaveClass(/dispatch-message-unread/)
 })
+
+test('puts the reader subject on its own row above the actions', async ({ page }) => {
+  await page.goto('/')
+  const subject = page.locator('[data-subject]')
+  const reply = page.getByRole('button', { name: 'Reply', exact: true })
+  await expect(subject).toHaveText('Opua berth confirmation')
+  await expect(page.locator('.dispatch-reader-toolbar [data-subject]')).toHaveCount(0)
+  const [subjectBox, replyBox] = await Promise.all([subject.boundingBox(), reply.boundingBox()])
+  expect(subjectBox).toBeTruthy()
+  expect(replyBox).toBeTruthy()
+  expect(subjectBox!.y + subjectBox!.height).toBeLessThanOrEqual(replyBox!.y)
+  const style = await subject.evaluate((node) => {
+    const computed = getComputedStyle(node)
+    return { whiteSpace: computed.whiteSpace, fontSize: Number.parseFloat(computed.fontSize) }
+  })
+  expect(style.whiteSpace).toBe('nowrap')
+  expect(style.fontSize).toBeLessThanOrEqual(16)
+})

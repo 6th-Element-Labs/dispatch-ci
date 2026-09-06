@@ -66,9 +66,9 @@ app.innerHTML = `
         <div class="empty dispatch-reader-empty" data-reader-empty><div class="empty-icon"><i class="ti ti-mail-opened"></i></div><p class="empty-title">Select a message</p></div>
         <div data-reader hidden>
           <header class="dispatch-reader-header">
+            <h2 class="dispatch-reader-subject" data-subject></h2>
             <div class="dispatch-reader-toolbar">
               <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-mobile-back" type="button" data-mobile-back aria-label="Back to Inbox"><i class="ti ti-arrow-left" aria-hidden="true"></i></button>
-              <h2 class="dispatch-reader-subject" data-subject></h2>
               <button class="btn btn-primary btn-sm" type="button" data-reply><i class="ti ti-arrow-back-up me-1" aria-hidden="true"></i>Reply</button>
               <div class="btn-group" role="group" aria-label="Reply options">
                 <button class="btn btn-icon btn-sm" type="button" data-reply-all aria-label="Reply all" title="Reply all"><i class="ti ti-arrow-back-up-double" aria-hidden="true"></i></button>

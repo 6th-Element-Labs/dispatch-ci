@@ -20,7 +20,7 @@ All connected Gmail accounts enter one date-ordered queue by default. The user c
 
 The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. All, Unread, and Read filters operate on conversation state. A conversation is unread when any retrieved member message carries Gmail's `UNREAD` label. All contains Inbox conversations plus unread conversations outside Inbox, excluding spam and trash. Unread contains every unread conversation outside spam and trash. Read remains scoped to read Inbox conversations.
 
-Selecting a conversation loads the complete Gmail thread with the newest message first. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
+Selecting a conversation loads the complete Gmail thread with the newest message first. The reader shows the subject on its own row, then the action buttons. A long subject stays on one line and uses an ellipsis. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
 
 Selecting an unread Gmail conversation starts a 5-second dwell. If that conversation stays selected, Dispatch marks it read through mail. The row stays unread until mail accepts the command. After mail accepts, the row stays read without Refresh, even if a later thread fetch or Gmail sync still reports unread. Demo conversations do not auto-mark. On the Unread filter, the row leaves the list and the reader stays on that conversation.
 
