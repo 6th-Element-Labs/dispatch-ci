@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { CodexBindingStore } from '../src/codex-bindings.js'
 import { createAgentServer } from '../src/server.js'
 
 const servers: ReturnType<typeof createAgentServer>[] = []
@@ -27,6 +31,16 @@ async function start() {
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, fake }
+}
+
+async function startWithBindings() {
+  const fake = runtime()
+  const path = join(await mkdtemp(join(tmpdir(), 'dispatch-agent-bind-')), 'codex-bindings.json')
+  const bindings = new CodexBindingStore(path)
+  const server = createAgentServer(fake, { bindings })
+  servers.push(server)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, fake, bindings }
 }
 
 describe('dispatch-agent', () => {
@@ -449,5 +463,86 @@ describe('dispatch-agent', () => {
       vi.unstubAllEnvs()
       vi.resetModules()
     }
+  })
+
+  it('starts one Codex thread for a conversation and reuses it', async () => {
+    const { base, fake } = await startWithBindings()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'thread/start') return { thread: { id: 'thread-t1' } }
+      if (method === 'thread/resume') return { thread: { id: 'thread-t1' } }
+      return { ok: true }
+    })
+    const body = { kind: 'conversation', accountId: 'one', gmailThreadId: 't1' }
+    const first = await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    expect(first.status).toBe(200)
+    await expect(first.json()).resolves.toEqual({ binding: { key: body, threadId: 'thread-t1', created: true, replaced: false } })
+    const second = await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    await expect(second.json()).resolves.toEqual({ binding: { key: body, threadId: 'thread-t1', created: false, replaced: false } })
+    expect(fake.request.mock.calls.filter(([method]) => method === 'thread/start')).toHaveLength(1)
+    expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({ threadId: 'thread-t1' }))
+  })
+
+  it('gives two conversations two thread ids', async () => {
+    const { base, fake } = await startWithBindings()
+    let n = 0
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'thread/start') {
+        n += 1
+        return { thread: { id: `thread-${n}` } }
+      }
+      return { ok: true }
+    })
+    const one = await (await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'conversation', accountId: 'one', gmailThreadId: 'a' }) })).json()
+    const two = await (await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'conversation', accountId: 'one', gmailThreadId: 'b' }) })).json()
+    expect(one.binding.threadId).toBe('thread-1')
+    expect(two.binding.threadId).toBe('thread-2')
+  })
+
+  it('keeps a stable unbound thread that is not a conversation key', async () => {
+    const { base, fake } = await startWithBindings()
+    fake.request.mockImplementation(async (method: string) => method === 'thread/start' ? { thread: { id: 'thread-unbound' } } : { ok: true })
+    const first = await (await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'unbound' }) })).json()
+    const again = await (await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'unbound' }) })).json()
+    expect(first.binding).toMatchObject({ key: { kind: 'unbound' }, threadId: 'thread-unbound' })
+    expect(again.binding.threadId).toBe('thread-unbound')
+    expect(fake.request.mock.calls.filter(([method]) => method === 'thread/start')).toHaveLength(1)
+  })
+
+  it('adopts the existing local thread id as the unbound thread', async () => {
+    const { base, fake } = await startWithBindings()
+    fake.request.mockImplementation(async (method: string) => method === 'thread/resume' ? { thread: { id: 'legacy' } } : { ok: true })
+    const response = await fetch(`${base}/v1/threads/bindings`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'unbound', adoptThreadId: 'legacy' }),
+    })
+    await expect(response.json()).resolves.toEqual({ binding: { key: { kind: 'unbound' }, threadId: 'legacy', created: false, replaced: false } })
+    expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({ threadId: 'legacy' }))
+    expect(fake.request).not.toHaveBeenCalledWith('thread/start', expect.anything())
+  })
+
+  it('does not rebind a failed resume to another conversation id', async () => {
+    const { base, fake, bindings } = await startWithBindings()
+    await bindings.put({ kind: 'conversation', accountId: 'one', gmailThreadId: 'a' }, 'dead')
+    await bindings.put({ kind: 'conversation', accountId: 'one', gmailThreadId: 'b' }, 'alive')
+    fake.request.mockImplementation(async (method: string, params?: unknown) => {
+      const threadId = (params as { threadId?: string } | undefined)?.threadId
+      if (method === 'thread/resume' && threadId === 'dead') throw new Error('unknown thread')
+      if (method === 'thread/resume') return { thread: { id: threadId } }
+      if (method === 'thread/start') return { thread: { id: 'replacement' } }
+      return { ok: true }
+    })
+    const failed = await (await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'conversation', accountId: 'one', gmailThreadId: 'a' }) })).json()
+    expect(failed.binding).toMatchObject({ threadId: 'replacement', created: true, replaced: true })
+    expect(bindings.get({ kind: 'conversation', accountId: 'one', gmailThreadId: 'b' })).toBe('alive')
+  })
+
+  it('rejects an invalid binding key', async () => {
+    const { base } = await startWithBindings()
+    const response = await fetch(`${base}/v1/threads/bindings`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'conversation', accountId: '', gmailThreadId: 't1' }),
+    })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: 'invalid_binding_key' })
   })
 })

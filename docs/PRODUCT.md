@@ -14,7 +14,7 @@ Dispatch has three persistent panels:
 2. Selected email or draft.
 3. Codex chat.
 
-The middle reading surface is visually primary. Selection changes the explicit Codex context but does not silently replace the active Codex conversation.
+The middle reading surface is visually primary. Selection of a Gmail conversation switches the one Codex pane to that conversation’s Codex thread. A new Compose with no Gmail thread id, and a state with no selection, use one unbound Codex thread.
 
 All connected Gmail accounts enter one date-ordered queue by default. The user can filter that queue to one account. Message rows show a compact date and time. The rendered message header shows the full date and time.
 

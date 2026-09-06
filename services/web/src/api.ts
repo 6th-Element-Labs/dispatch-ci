@@ -147,6 +147,12 @@ export const api = {
     const result = await request<{ thread: { id: string } }>(`${AGENT}/v1/threads`, { method: 'POST' })
     return result.thread.id
   },
+  async bindThread(key: { kind: 'unbound' } | { kind: 'conversation'; accountId: string; gmailThreadId: string }, adoptThreadId?: string): Promise<{ key: unknown; threadId: string; created: boolean; replaced: boolean; detail?: string }> {
+    const result = await request<{ binding: { key: unknown; threadId: string; created: boolean; replaced: boolean; detail?: string } }>(`${AGENT}/v1/threads/bindings`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(adoptThreadId ? { ...key, adoptThreadId } : key),
+    })
+    return result.binding
+  },
   async resumeThread(threadId: string): Promise<string> {
     const result = await request<{ thread: { id: string } }>(`${AGENT}/v1/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' })
     return result.thread.id

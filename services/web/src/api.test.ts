@@ -95,4 +95,26 @@ describe('draft API', () => {
     await expect(api.listRecipients('ana', 'link-one')).resolves.toEqual([{ name: 'Ana', address: 'ana@example.com', initials: 'A' }])
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:8411/v1/recipients?q=ana&account=link-one', expect.anything())
   })
+
+  it('asks agent to bind an unbound or conversation Codex thread', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ binding: { key: { kind: 'unbound' }, threadId: 'thread-u', created: false, replaced: false } }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.bindThread({ kind: 'unbound' }, 'legacy')).resolves.toEqual({
+      key: { kind: 'unbound' }, threadId: 'thread-u', created: false, replaced: false,
+    })
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8412/v1/threads/bindings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ kind: 'unbound', adoptThreadId: 'legacy' }),
+      }),
+    )
+  })
+
+  it('asks agent to bind a conversation Codex thread', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ binding: { key: { kind: 'conversation', accountId: 'one', gmailThreadId: 't1' }, threadId: 'thread-t1', created: true, replaced: false } }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.bindThread({ kind: 'conversation', accountId: 'one', gmailThreadId: 't1' })).resolves.toMatchObject({ threadId: 'thread-t1', created: true })
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({ kind: 'conversation', accountId: 'one', gmailThreadId: 't1' })
+  })
 })

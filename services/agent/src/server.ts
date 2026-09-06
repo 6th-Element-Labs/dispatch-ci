@@ -4,6 +4,7 @@ import { CodexProcess } from './codex-process.js'
 import type { RpcMessage } from './json-line-rpc.js'
 import { readGmailInventory, type GmailInventory } from './gmail-inventory.js'
 import { DISPATCH_DEFAULTS, readModelCatalog } from './model-catalog.js'
+import { CodexBindingStore, defaultBindingsPath, type CodexBindingKey } from './codex-bindings.js'
 
 interface AgentRuntime {
   ready(): Promise<void>
@@ -69,6 +70,31 @@ function turnSelection(payload: Record<string, unknown>): { model: string; effor
   return { model, effort }
 }
 
+function startThreadParams() {
+  return {
+    model: dispatchModel,
+    cwd: process.cwd(),
+    approvalPolicy: 'on-request' as const,
+    sandboxPolicy: { type: 'readOnly' as const, access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [] } },
+    developerInstructions: dispatchInstructions,
+    serviceName: 'dispatch-agent',
+  }
+}
+
+function threadIdFrom(value: unknown): string {
+  const id = (value as { thread?: { id?: unknown } })?.thread?.id
+  if (typeof id !== 'string' || !id) throw new Error('Codex App Server did not return a thread id')
+  return id
+}
+
+function parseBindingKey(payload: Record<string, unknown>): CodexBindingKey | undefined {
+  if (payload.kind === 'unbound') return { kind: 'unbound' }
+  if (payload.kind === 'conversation' && typeof payload.accountId === 'string' && payload.accountId && typeof payload.gmailThreadId === 'string' && payload.gmailThreadId) {
+    return { kind: 'conversation', accountId: payload.accountId, gmailThreadId: payload.gmailThreadId }
+  }
+  return undefined
+}
+
 async function readApps(runtime: AgentRuntime): Promise<unknown> {
   try {
     return await runtime.request('app/installed', { forceRefresh: false })
@@ -78,7 +104,8 @@ async function readApps(runtime: AgentRuntime): Promise<unknown> {
   }
 }
 
-export function createAgentServer(runtime: AgentRuntime) {
+export function createAgentServer(runtime: AgentRuntime, options: { bindings?: CodexBindingStore } = {}) {
+  const bindings = options.bindings ?? new CodexBindingStore(defaultBindingsPath())
   let gmailInventory: Promise<GmailInventory> | undefined
   const connectorThreadIds = new Map<string, Promise<string>>()
 
@@ -402,16 +429,41 @@ export function createAgentServer(runtime: AgentRuntime) {
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.readAttachment, arguments: args }))
       } catch (error) { return json(response, 502, { error: 'gmail_attachment_read_failed', detail: errorMessage(error) }) }
     }
+    if (request.method === 'POST' && url.pathname === '/v1/threads/bindings') {
+      try {
+        const payload = await body(request)
+        const key = parseBindingKey(payload)
+        if (!key) return json(response, 400, { error: 'invalid_binding_key' })
+        await bindings.load()
+        const adopt = key.kind === 'unbound' && typeof payload.adoptThreadId === 'string' ? payload.adoptThreadId : ''
+        const existing = bindings.get(key) ?? (adopt || undefined)
+        if (existing) {
+          try {
+            await runtime.request('thread/resume', {
+              threadId: existing,
+              model: dispatchModel,
+              approvalPolicy: 'on-request',
+              developerInstructions: dispatchInstructions,
+            })
+            if (!bindings.get(key)) await bindings.put(key, existing)
+            return json(response, 200, { binding: { key, threadId: existing, created: false, replaced: false } })
+          } catch (error) {
+            if (bindings.get(key) !== existing) throw error
+            const threadId = threadIdFrom(await runtime.request('thread/start', startThreadParams()))
+            await bindings.replace(key, threadId)
+            return json(response, 200, { binding: { key, threadId, created: true, replaced: true, detail: errorMessage(error) } })
+          }
+        }
+        const threadId = threadIdFrom(await runtime.request('thread/start', startThreadParams()))
+        await bindings.put(key, threadId)
+        return json(response, 200, { binding: { key, threadId, created: true, replaced: false } })
+      } catch (error) {
+        return json(response, 502, { error: 'codex_binding_failed', detail: errorMessage(error) })
+      }
+    }
     if (request.method === 'POST' && url.pathname === '/v1/threads') {
       try {
-        return json(response, 201, await runtime.request('thread/start', {
-          model: dispatchModel,
-          cwd: process.cwd(),
-          approvalPolicy: 'on-request',
-          sandboxPolicy: { type: 'readOnly', access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [] } },
-          developerInstructions: dispatchInstructions,
-          serviceName: 'dispatch-agent',
-        }))
+        return json(response, 201, await runtime.request('thread/start', startThreadParams()))
       } catch (error) {
         return json(response, 502, { error: 'app_server_request_failed', detail: errorMessage(error) })
       }

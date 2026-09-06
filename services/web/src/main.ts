@@ -230,7 +230,35 @@ let selectionSequence = 0
 const markReadDwell = createMarkReadDwell()
 let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
+const BINDING_CACHE = 'dispatch.codex.bindings.v1'
+type CodexPaneKey = { kind: 'unbound' } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
 let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
+
+function bindingCacheKey(key: CodexPaneKey): string {
+  return key.kind === 'unbound' ? 'unbound' : `conversation:${key.accountId}:${key.gmailThreadId}`
+}
+
+function readBindingCache(): Record<string, string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(BINDING_CACHE) ?? '{}') as unknown
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, string> : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeBindingCache(key: CodexPaneKey, id: string): void {
+  const cache = readBindingCache()
+  cache[bindingCacheKey(key)] = id
+  localStorage.setItem(BINDING_CACHE, JSON.stringify(cache))
+  localStorage.setItem('dispatch.codex.threadId', id)
+}
+
+function conversationBindingKey(conversation: { accountId?: string; threadId: string; source?: string }): { kind: 'conversation'; accountId: string; gmailThreadId: string } {
+  const accountId = conversation.accountId || (conversation.source === 'demo' ? 'demo' : '')
+  if (!accountId || !conversation.threadId) throw new Error('This conversation has no Gmail account or thread id for Codex.')
+  return { kind: 'conversation', accountId, gmailThreadId: conversation.threadId }
+}
 let apps: AppSummary[] = []
 const DEFAULT_MODEL: DispatchModel = { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], exhausted: null, resetsAt: null }
 let modelCatalog: DispatchModelCatalog | undefined
@@ -240,6 +268,7 @@ let selectedEffort = localStorage.getItem('dispatch.codex.effort') || 'medium'
 let activeAgentMessage: HTMLElement | undefined
 let activeAgentText = ''
 let agentEvents: EventSource | undefined
+let paneSequence = 0
 let reconnectTimer: number | undefined
 let agentConnecting = false
 let syncStatusTimer: number | undefined
@@ -705,6 +734,14 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
       if (sequence !== selectionSequence || selectedConversationId !== id) return
       elements.context.textContent = `Editing draft · ${draft.subject || '(no subject)'}`
       showDraft(draft, false)
+      try {
+        const key = conversationBindingKey({ accountId: summary.accountId, threadId: summary.threadId })
+        await bindAndShowCodex(key, { sequence, clearOnFailure: true })
+      } catch (error) {
+        if (sequence !== selectionSequence) return
+        elements.stream.replaceChildren()
+        addAgentMessage('error', error instanceof Error ? error.message : String(error))
+      }
     } catch (error) {
       if (sequence !== selectionSequence) return
       loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
@@ -735,6 +772,14 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0)))
     void warmAttachments(conversation, sequence)
     prefetchConversations(id)
+    try {
+      const key = conversationBindingKey({ accountId: conversation.accountId, threadId: conversation.threadId, source: conversation.source })
+      await bindAndShowCodex(key, { sequence, clearOnFailure: true })
+    } catch (error) {
+      if (sequence !== selectionSequence) return
+      elements.stream.replaceChildren()
+      addAgentMessage('error', error instanceof Error ? error.message : String(error))
+    }
   } catch (error) {
     if (sequence !== selectionSequence) return
     loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
@@ -1108,8 +1153,11 @@ function openCompose(): void {
     addAgentMessage('error', 'Connect a Gmail account before composing mail.')
     return
   }
+  markReadDwell.cancel()
+  const sequence = ++selectionSequence
   selected = undefined
   selectedConversationId = undefined
+  void bindAndShowCodex({ kind: 'unbound' }, { sequence, clearOnFailure: true })
   if (usesMobilePanels()) {
     mobilePanel = 'reader'
     mobileReturnPanel = 'reader'
@@ -1620,6 +1668,61 @@ function agentHistoryText(value: unknown): string {
   return ''
 }
 
+async function showCodexThread(nextThreadId: string, created: boolean, replaced: boolean, detail?: string): Promise<void> {
+  if (nextThreadId === threadId && agentEvents && agentEvents.readyState !== EventSource.CLOSED) return
+  const sequence = ++paneSequence
+  threadId = nextThreadId
+  agentEvents?.close()
+  elements.stream.replaceChildren()
+  activeAgentMessage = undefined
+  activeAgentText = ''
+  activeTurnId = undefined
+  elements.stop.hidden = true
+  if (replaced) addAgentMessage('tool', detail ? `Codex thread replaced · ${detail}` : 'Codex thread replaced')
+  if (!created) {
+    try {
+      const history = await api.readThread(nextThreadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
+      if (sequence !== paneSequence) return
+      const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
+      for (const item of restored) {
+        const text = agentHistoryText(item)
+        if (text && item.type === 'userMessage') addAgentMessage('user', text)
+        if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
+      }
+    } catch (error) {
+      if (sequence !== paneSequence) return
+      addAgentMessage('error', `Could not restore Codex history: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if (sequence !== paneSequence) return
+  agentEvents = api.events(nextThreadId)
+  agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
+  agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as AgentEvent)
+  agentEvents.onerror = () => {
+    agentEvents?.close()
+    elements.agentStatus.textContent = 'Reconnecting'
+    scheduleAgentReconnect()
+  }
+}
+
+async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: string; sequence?: number; clearOnFailure?: boolean } = {}): Promise<boolean> {
+  try {
+    if (!await api.agentReady()) return false
+    const binding = await api.bindThread(key, options.adoptThreadId)
+    if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
+    writeBindingCache(key, binding.threadId)
+    await showCodexThread(binding.threadId, binding.created, binding.replaced, binding.detail)
+    return true
+  } catch (error) {
+    if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
+    const message = error instanceof Error ? error.message : String(error)
+    elements.agentStatus.textContent = 'Reconnecting'
+    if (options.clearOnFailure) elements.stream.replaceChildren()
+    addAgentMessage('error', message)
+    return false
+  }
+}
+
 async function connectAgent(): Promise<void> {
   if (agentConnecting) return
   agentConnecting = true
@@ -1637,43 +1740,15 @@ async function connectAgent(): Promise<void> {
     if (apps.length === 0) apps = await api.listApps()
     const gmail = gmailAppId(apps)
     elements.connector.textContent = gmail ? 'Gmail available' : 'No Gmail connector'
-    let restoreHistory = false
-    if (threadId) {
-      try {
-        threadId = await api.resumeThread(threadId)
-        restoreHistory = true
-      } catch {
-        threadId = await api.startThread()
-      }
-    } else {
-      threadId = await api.startThread()
+    const unbound = { kind: 'unbound' as const }
+    if (!await bindAndShowCodex(unbound, { adoptThreadId: localStorage.getItem('dispatch.codex.threadId') || undefined })) {
+      throw new Error(elements.stream.lastElementChild?.textContent || 'Could not bind the unbound Codex thread.')
     }
-    localStorage.setItem('dispatch.codex.threadId', threadId)
-    if (restoreHistory) {
-      try {
-        const history = await api.readThread(threadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
-        const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
-        if (restored.length > 0 && elements.stream.querySelectorAll('.dispatch-agent-message').length === 0) {
-          for (const item of restored) {
-            const text = agentHistoryText(item)
-            if (text && item.type === 'userMessage') addAgentMessage('user', text)
-            if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
-          }
-        }
-      } catch (error) {
-        addAgentMessage('error', `Could not restore Codex history: ${error instanceof Error ? error.message : String(error)}`)
-      }
+    if (selected) {
+      const key = conversationBindingKey({ accountId: selected.accountId, threadId: selected.threadId, source: selected.source })
+      await bindAndShowCodex(key)
     }
-    agentEvents?.close()
-    agentEvents = api.events(threadId)
-    agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
     void refreshModelCatalog()
-    agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as AgentEvent)
-    agentEvents.onerror = () => {
-      agentEvents?.close()
-      elements.agentStatus.textContent = 'Reconnecting'
-      scheduleAgentReconnect()
-    }
   } catch (error) {
     elements.agentStatus.textContent = 'Reconnecting'
     elements.connector.textContent = error instanceof Error ? error.message : String(error)

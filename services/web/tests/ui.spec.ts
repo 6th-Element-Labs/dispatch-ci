@@ -18,6 +18,24 @@ const conversations = messages.map((message) => ({
   messageCount: 1,
 }))
 
+async function stubAgent(page: import('@playwright/test').Page, bindings: Record<string, { threadId: string }> = {}) {
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', async (route) => {
+    const body = await route.request().postDataJSON() as { kind?: string; accountId?: string; gmailThreadId?: string }
+    const key = body.kind === 'conversation' ? `conversation:${body.accountId}:${body.gmailThreadId}` : 'unbound'
+    const threadId = bindings[key]?.threadId ?? `thread-${key}`
+    await route.fulfill({ json: { binding: { key: body, threadId, created: false, replaced: false } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/[^/]+$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const id = route.request().url().split('/').pop()
+    await route.fulfill({ json: { thread: { turns: [{ items: [{ type: 'agentMessage', text: `History for ${id}` }] }] } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+}
+
 test.beforeEach(async ({ page }) => {
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
   await page.route('http://127.0.0.1:8411/v1/sync/status', (route) => route.fulfill({ json: { sync: { state: 'ready', startedAt: '2026-09-04T09:00:00+12:00', completedAt: '2026-09-04T09:01:00+12:00', error: null, messageCount: 2 } } }))
@@ -226,6 +244,8 @@ test('saves a new draft before asking Codex to revise its real Gmail draft ID', 
   })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-revise' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-revise', created: false, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/thread-revise$/, (route) => route.fulfill({ json: { thread: { turns: [] } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-revise/turns', async (route) => {
     operationOrder.push('turn')
     turnRequest = await route.request().postDataJSON() as Record<string, unknown>
@@ -262,6 +282,8 @@ test('picks Luna Reserve when Sol has hit its usage limit and sends it with the 
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
   await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-model' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-model', created: false, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/thread-model$/, (route) => route.fulfill({ json: { thread: { turns: [] } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-model/turns', async (route) => {
     turns.push(await route.request().postDataJSON() as Record<string, unknown>)
     await route.fulfill({ status: 202, json: { turn: { id: `turn-${turns.length}` } } })
@@ -335,6 +357,8 @@ test('does not ask Codex to revise when Gmail does not return a draft ID', async
   } } }))
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-no-id' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-no-id', created: false, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/thread-no-id$/, (route) => route.fulfill({ json: { thread: { turns: [] } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-no-id/turns', async (route) => {
     turnCount += 1
     await route.fulfill({ status: 202, json: {} })
@@ -814,6 +838,7 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   await page.unroute('http://127.0.0.1:8412/ready')
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-history', created: false, replaced: false } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-history/resume', (route) => route.fulfill({ json: { thread: { id: 'thread-history' } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-history', (route) => route.fulfill({ json: {
     thread: { turns: [{ items: [
@@ -844,13 +869,66 @@ test('does not read history for a brand-new Codex task', async ({ page }) => {
   await page.unroute('http://127.0.0.1:8412/ready')
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
-  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-new' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-new', created: true, replaced: false } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-new', (route) => { historyReads += 1; return route.fulfill({ status: 502, json: { error: 'thread_unavailable' } }) })
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
   await page.goto('/')
   await expect.poll(() => page.evaluate(() => localStorage.getItem('dispatch.codex.threadId'))).toBe('thread-new')
   expect(historyReads).toBe(0)
   await expect(page.getByText(/Could not restore Codex history/)).toHaveCount(0)
+})
+
+test('switches the Codex pane when the selected conversation changes', async ({ page }) => {
+  const turns: string[] = []
+  await stubAgent(page, {
+    unbound: { threadId: 'thread-unbound' },
+    'conversation:link-one:t1': { threadId: 'thread-t1' },
+    'conversation:link-one:t2': { threadId: 'thread-t2' },
+  })
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const one = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  const two = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [one, two], nextCursor: null, total: 2 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1/, (route) => route.fulfill({ json: { conversation: { ...one, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'A' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2/, (route) => route.fulfill({ json: { conversation: { ...two, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'B' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/.*\/turns/, async (route) => {
+    turns.push(route.request().url())
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+  await page.goto('/')
+  await expect(page.getByText('History for thread-t1')).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.getByText('History for thread-t2')).toBeVisible()
+  await expect(page.getByText('History for thread-t1')).toHaveCount(0)
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Work on B')
+  await page.getByRole('textbox', { name: 'Ask Codex' }).press('Enter')
+  await expect.poll(() => turns.some((url) => url.includes('thread-t2'))).toBe(true)
+  expect(turns.some((url) => url.includes('thread-t1'))).toBe(false)
+})
+
+test('uses the unbound Codex thread for a new compose', async ({ page }) => {
+  await stubAgent(page, { unbound: { threadId: 'thread-unbound' } })
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await expect(page.getByText('History for thread-unbound')).toBeVisible()
+})
+
+test('replaces a stale Codex binding cache from agent', async ({ page }) => {
+  await stubAgent(page, { unbound: { threadId: 'thread-agent' } })
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=all/, (route) => route.fulfill({ json: { source: 'demo', conversations: [], nextCursor: null, total: 0 } }))
+  await page.addInitScript(() => {
+    localStorage.setItem('dispatch.codex.threadId', 'thread-stale')
+    localStorage.setItem('dispatch.codex.bindings.v1', JSON.stringify({ unbound: 'thread-stale' }))
+  })
+  await page.goto('/')
+  await expect(page.getByText('History for thread-agent')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dispatch.codex.threadId'))).toBe('thread-agent')
 })
 
 test('filters conversations by all, unread, and read state', async ({ page }) => {
@@ -969,6 +1047,7 @@ test('answers Codex approval requests without changing the request id type', asy
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
   await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-test' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-test', created: true, replaced: false } } }))
   await page.route('http://127.0.0.1:8412/v1/server-requests/respond', async (route) => {
     approval = await route.request().postDataJSON()
     await route.fulfill({ json: { status: 'resolved' } })
