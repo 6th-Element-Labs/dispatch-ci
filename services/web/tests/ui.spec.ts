@@ -72,7 +72,9 @@ test('renders the three-panel mail surface and sanitizes provider HTML', async (
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Codex' })).toBeVisible()
   await expect(page.getByText('GPT-5.6 Sol · Medium')).toBeVisible()
-  await expect(page.locator('[data-context]')).toContainText('Opua berth confirmation · Ana Morales')
+  await expect(page.locator('[data-context]')).toHaveCount(0)
+  await expect(page.locator('.dispatch-agent > header')).toHaveCount(0)
+  await expect(page.locator('.dispatch-agent > footer [data-model-toggle]')).toBeVisible()
   await expect(page.locator('[data-conversation-id="demo:t1"] time')).toHaveText('Sep 4, 9:42 AM')
   await expect(page.locator('[data-body] script')).toHaveCount(0)
   await expect(page.locator('.dispatch-thread-message')).toHaveCount(2)
@@ -84,7 +86,9 @@ test('renders the three-panel mail surface and sanitizes provider HTML', async (
   await expect(page.locator('.dispatch-reader-header .subheader')).toHaveCount(0)
   await expect(page.locator('.dispatch-reader-actions')).toHaveCount(0)
   await expect(page.locator('.dispatch-thread-message time').first()).toHaveText('September 4, 2026 at 9:42 AM')
-  await expect(page.locator('[data-agent-status]')).toHaveText('Reconnecting')
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Reconnecting')
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('title', 'Waiting for Codex App Server')
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('aria-label', 'Waiting for Codex App Server')
 })
 
 test('opens folders from the toolbar popover and keeps the account scope in the toolbar', async ({ page }) => {
@@ -106,9 +110,21 @@ test('opens folders from the toolbar popover and keeps the account scope in the 
 
 test('shows a live Tabler activity indicator while Codex is working', async ({ page }) => {
   await page.goto('/')
-  await page.evaluate(() => { const status = document.querySelector('[data-agent-status]'); if (status) status.textContent = 'Working' })
+  await page.evaluate(() => {
+    const status = document.querySelector('[data-agent-status]')
+    if (!status) return
+    status.setAttribute('data-status', 'Working')
+    status.setAttribute('title', 'Working')
+    status.setAttribute('aria-label', 'Working')
+  })
   await expect(page.locator('[data-agent-activity]')).toBeVisible()
-  await page.evaluate(() => { const status = document.querySelector('[data-agent-status]'); if (status) status.textContent = 'Connected' })
+  await page.evaluate(() => {
+    const status = document.querySelector('[data-agent-status]')
+    if (!status) return
+    status.setAttribute('data-status', 'Connected')
+    status.setAttribute('title', 'Connected')
+    status.setAttribute('aria-label', 'Connected')
+  })
   await expect(page.locator('[data-agent-activity]')).toBeHidden()
 })
 
@@ -253,7 +269,8 @@ test('saves a new draft before asking Codex to revise its real Gmail draft ID', 
   })
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
   await page.goto('/')
-  await expect(page.locator('[data-connector]')).toHaveText('Gmail available')
+  await expect(page.locator('[data-connector]')).toHaveAttribute('title', 'Gmail available')
+  await expect(page.locator('[data-connector]')).toHaveAttribute('data-ready', 'true')
   await page.getByRole('button', { name: 'Compose' }).click()
   await page.getByRole('textbox', { name: 'Draft subject' }).fill('Plan')
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Original')
@@ -302,7 +319,8 @@ test('picks Luna Reserve when Sol has hit its usage limit and sends it with the 
     } })
   })
   await page.goto('/')
-  await expect(page.locator('[data-connector]')).toHaveText('No Gmail connector')
+  await expect(page.locator('[data-connector]')).toHaveAttribute('title', 'No Gmail connector')
+  await expect(page.locator('[data-connector]')).toHaveAttribute('data-ready', 'false')
   const toggle = page.locator('[data-model-toggle]')
   await expect(toggle).toHaveText('GPT-5.6 Sol · Medium')
   await expect(toggle).toHaveClass(/bg-yellow-lt/)
@@ -339,7 +357,7 @@ test('picks Luna Reserve when Sol has hit its usage limit and sends it with the 
 
 test('tells the user the model list needs Codex when the agent is down', async ({ page }) => {
   await page.goto('/')
-  await expect(page.locator('[data-agent-status]')).toHaveText('Reconnecting')
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Reconnecting')
   await page.locator('[data-model-toggle]').click()
   await expect(page.locator('[data-model-summary]')).toHaveText('Codex not connected')
   await expect(page.locator('[data-model-id="gpt-5.6-sol"]')).toBeEnabled()
@@ -365,7 +383,8 @@ test('does not ask Codex to revise when Gmail does not return a draft ID', async
   })
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
   await page.goto('/')
-  await expect(page.locator('[data-connector]')).toHaveText('Gmail available')
+  await expect(page.locator('[data-connector]')).toHaveAttribute('title', 'Gmail available')
+  await expect(page.locator('[data-connector]')).toHaveAttribute('data-ready', 'true')
   await page.getByRole('button', { name: 'Compose' }).click()
   await page.getByRole('button', { name: 'Ask Codex to revise' }).click()
 

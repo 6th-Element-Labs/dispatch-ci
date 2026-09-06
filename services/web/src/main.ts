@@ -7,7 +7,7 @@ import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
-import { contextLabel, gmailAppId, isNativeShell } from './model.js'
+import { gmailAppId, isNativeShell } from './model.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -111,11 +111,10 @@ app.innerHTML = `
       </main>
       <div class="dispatch-divider" data-divider="agent" role="separator" tabindex="0" aria-label="Resize Codex panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <aside class="card rounded-0 border-0 dispatch-agent" aria-label="Codex">
-        <header class="card-header"><div class="d-flex align-items-center w-100"><span class="avatar avatar-sm bg-dark text-white me-2">✦</span><strong>Codex</strong><span class="dispatch-model"><button class="badge bg-blue-lt text-blue ms-2 border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span><span class="badge bg-secondary-lt ms-auto" aria-live="polite" data-agent-status>Connecting</span></div><div class="alert alert-info mt-3 mb-0 py-2 px-3 dispatch-context" data-context>No email selected</div><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div></header>
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
           <div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
-          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="d-flex align-items-center justify-content-between mt-2"><span class="text-secondary small" data-connector>Checking connectors</span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
+          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span></span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
         </footer>
       </aside>
     </div>
@@ -161,7 +160,6 @@ const elements = {
   sendConfirm: app.querySelector<HTMLElement>('[data-send-confirm]')!,
   sendConfirmText: app.querySelector<HTMLElement>('[data-send-confirm-text]')!,
   sendConfirmGo: app.querySelector<HTMLButtonElement>('[data-send-confirm-go]')!,
-  context: app.querySelector<HTMLElement>('[data-context]')!,
   agentStatus: app.querySelector<HTMLElement>('[data-agent-status]')!,
   agentActivity: app.querySelector<HTMLElement>('[data-agent-activity]')!,
   connector: app.querySelector<HTMLElement>('[data-connector]')!,
@@ -187,21 +185,28 @@ const elements = {
   moveInbox: app.querySelector<HTMLButtonElement>('[data-move-inbox]')!,
 }
 
+function setAgentStatus(status: string, label = status): void {
+  elements.agentStatus.dataset.status = status
+  elements.agentStatus.title = label
+  elements.agentStatus.setAttribute('aria-label', label)
+  renderServiceStatus()
+}
+
+function setConnectorStatus(label: string, ready: boolean): void {
+  elements.connector.dataset.ready = ready ? 'true' : 'false'
+  elements.connector.title = label
+  elements.connector.setAttribute('aria-label', label)
+}
+
 function renderServiceStatus(): void {
-  elements.agentStatus.classList.remove('bg-secondary-lt', 'bg-green-lt', 'text-green', 'bg-blue-lt', 'text-blue', 'bg-yellow-lt', 'text-yellow', 'bg-red-lt', 'text-red')
-  const status = elements.agentStatus.textContent?.trim() ?? ''
-  if (status === 'Connected') elements.agentStatus.classList.add('bg-green-lt', 'text-green')
-  else if (status === 'Working') elements.agentStatus.classList.add('bg-blue-lt', 'text-blue')
-  else if (status === 'Needs attention') elements.agentStatus.classList.add('bg-yellow-lt', 'text-yellow')
-  else if (status === 'Failed') elements.agentStatus.classList.add('bg-red-lt', 'text-red')
-  else elements.agentStatus.classList.add('bg-secondary-lt')
+  const status = elements.agentStatus.dataset.status ?? ''
   elements.agentActivity.hidden = status !== 'Working'
   const source = elements.mailSource.textContent?.trim() ?? ''
   elements.sync.dataset.syncState = /FAILED|Unavailable/.test(source) ? 'failed' : /^(Syncing|Refreshing)/.test(source) ? 'syncing' : /^(STALE|Partial)/.test(source) ? 'stale' : 'ready'
 }
 
 new MutationObserver(renderServiceStatus).observe(elements.mailSource, { childList: true, subtree: true })
-new MutationObserver(renderServiceStatus).observe(elements.agentStatus, { childList: true, subtree: true })
+new MutationObserver(renderServiceStatus).observe(elements.agentStatus, { attributes: true, attributeFilter: ['data-status'] })
 renderServiceStatus()
 let activeDraft: DraftProjection | undefined
 let draftPreviewTimer: number | undefined
@@ -718,7 +723,6 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   elements.attachments.hidden = false
   elements.subject.textContent = summary.subject
   renderThreadMeta(summary)
-  elements.context.textContent = `Loading · ${summary.subject} · ${summary.sender.name}`
   const loading = document.createElement('div')
   loading.className = 'empty text-secondary dispatch-reader-loading'
   loading.textContent = 'Loading conversation…'
@@ -733,7 +737,6 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     try {
       const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId)
       if (sequence !== selectionSequence || selectedConversationId !== id) return
-      elements.context.textContent = `Editing draft · ${draft.subject || '(no subject)'}`
       showDraft(draft, false)
       try {
         const key = conversationBindingKey({ accountId: summary.accountId, threadId: summary.threadId })
@@ -747,7 +750,6 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
       if (sequence !== selectionSequence) return
       loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
       loading.textContent = error instanceof Error ? error.message : String(error)
-      elements.context.textContent = `Unavailable · ${summary.subject}`
     }
     return
   }
@@ -770,8 +772,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
     elements.subject.textContent = conversation.subject
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
-    elements.context.textContent = `Working with · ${contextLabel(conversation)}`
-    const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
+const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
     elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0)))
     void warmAttachments(conversation, sequence)
     prefetchConversations(id)
@@ -787,8 +788,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     if (sequence !== selectionSequence) return
     loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
     loading.textContent = error instanceof Error ? error.message : String(error)
-    elements.context.textContent = `Unavailable · ${summary.subject}`
-    window.setTimeout(() => {
+window.setTimeout(() => {
       if (selectedConversationId === id) void selectConversation(id)
     }, 1_500)
   }
@@ -1453,7 +1453,7 @@ function addRequestButton(card: HTMLElement, label: string, result: unknown, pri
     })
     void api.respondToServerRequest(id, result).then(() => {
       card.classList.add('dispatch-request-resolved')
-      elements.agentStatus.textContent = 'Working'
+      setAgentStatus('Working')
       const state = card.querySelector<HTMLElement>('[data-request-state]')
       if (state) state.textContent = label
     }).catch((error) => {
@@ -1509,7 +1509,7 @@ function renderUserInputRequest(card: HTMLElement, params: Record<string, unknow
     if (id === undefined) return
     void api.respondToServerRequest(id, { answers }).then(() => {
       card.classList.add('dispatch-request-resolved')
-      elements.agentStatus.textContent = 'Working'
+      setAgentStatus('Working')
       card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((control) => { control.disabled = true })
       const state = card.querySelector<HTMLElement>('[data-request-state]')
       if (state) state.textContent = 'Submitted'
@@ -1535,7 +1535,7 @@ function renderElicitationRequest(card: HTMLElement): void {
       if (id === undefined) return
       void api.respondToServerRequest(id, { action: 'accept', content }).then(() => {
         card.classList.add('dispatch-request-resolved')
-        elements.agentStatus.textContent = 'Working'
+        setAgentStatus('Working')
         card.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>('button, textarea').forEach((control) => { control.disabled = true })
         const state = card.querySelector<HTMLElement>('[data-request-state]')
         if (state) state.textContent = 'Submitted'
@@ -1593,7 +1593,7 @@ function renderServerRequest(message: AgentEvent): void {
     description.textContent = `Unsupported request: ${message.method}`
     addRequestButton(card, 'Cancel request', { decision: 'cancel' })
   }
-  elements.agentStatus.textContent = 'Needs attention'
+  setAgentStatus('Needs attention')
   elements.stream.scrollTop = elements.stream.scrollHeight
 }
 
@@ -1605,8 +1605,7 @@ function handleAgentEvent(message: AgentEvent): void {
   const params = message.params as Record<string, unknown> | undefined
   if (message.method === 'dispatch/appServerDisconnected') {
     agentEvents?.close()
-    elements.agentStatus.textContent = 'Reconnecting'
-    elements.connector.textContent = 'Restarting Codex App Server'
+    setAgentStatus('Reconnecting', 'Restarting Codex App Server')
     scheduleAgentReconnect()
     return
   }
@@ -1629,18 +1628,18 @@ function handleAgentEvent(message: AgentEvent): void {
     const turn = params?.turn as Record<string, unknown> | undefined
     activeTurnId = typeof turn?.id === 'string' ? turn.id : undefined
     elements.stop.hidden = !activeTurnId
-    elements.agentStatus.textContent = 'Working'
+    setAgentStatus('Working')
   }
   if (message.method === 'turn/completed') {
     const turn = params?.turn as Record<string, unknown> | undefined
     const status = String(turn?.status ?? 'completed')
     if (status === 'failed') {
       const error = turn?.error as Record<string, unknown> | undefined
-      elements.agentStatus.textContent = 'Failed'
+      setAgentStatus('Failed')
       addAgentMessage('error', String(error?.message ?? 'The Codex turn failed.'))
       if (error?.codexErrorInfo === 'usageLimitExceeded') void refreshModelCatalog()
     } else {
-      elements.agentStatus.textContent = status === 'interrupted' ? 'Interrupted' : 'Connected'
+      setAgentStatus(status === 'interrupted' ? 'Interrupted' : 'Connected')
     }
     activeAgentMessage = undefined
     activeAgentText = ''
@@ -1662,7 +1661,7 @@ function handleAgentEvent(message: AgentEvent): void {
     updateAgentMessage(activeAgentMessage, activeAgentText)
   }
   // Tool-call starts (item/started for mcpToolCall) and plan updates are
-  // intentionally not echoed into the chat: the Working badge and activity
+  // intentionally not echoed into the chat: the Working status and activity
   // bar already show progress, and the rows only added noise.
   if (message.method === 'item/completed') {
     const item = params?.item as Record<string, unknown> | undefined
@@ -1673,7 +1672,7 @@ function handleAgentEvent(message: AgentEvent): void {
   }
   if (message.method === 'error') {
     const error = params?.error as Record<string, unknown> | undefined
-    elements.agentStatus.textContent = 'Failed'
+    setAgentStatus('Failed')
     addAgentMessage('error', String(error?.message ?? params?.message ?? 'Codex reported an error.'))
   }
 }
@@ -1726,11 +1725,11 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   }
   if (sequence !== paneSequence) return
   agentEvents = api.events(nextThreadId)
-  agentEvents.onopen = () => { elements.agentStatus.textContent = 'Connected' }
+  agentEvents.onopen = () => { setAgentStatus('Connected') }
   agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as AgentEvent)
   agentEvents.onerror = () => {
     agentEvents?.close()
-    elements.agentStatus.textContent = 'Reconnecting'
+    setAgentStatus('Reconnecting')
     scheduleAgentReconnect()
   }
 }
@@ -1746,7 +1745,7 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
   } catch (error) {
     if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
     const message = error instanceof Error ? error.message : String(error)
-    elements.agentStatus.textContent = 'Reconnecting'
+    setAgentStatus('Reconnecting')
     if (options.clearOnFailure) elements.stream.replaceChildren()
     addAgentMessage('error', message)
     return false
@@ -1757,8 +1756,7 @@ async function connectAgent(): Promise<void> {
   if (agentConnecting) return
   agentConnecting = true
   if (!await api.agentReady()) {
-    elements.agentStatus.textContent = 'Reconnecting'
-    elements.connector.textContent = 'Waiting for Codex App Server'
+    setAgentStatus('Reconnecting', 'Waiting for Codex App Server')
     agentConnecting = false
     scheduleAgentReconnect()
     return
@@ -1769,7 +1767,7 @@ async function connectAgent(): Promise<void> {
       .map((account) => ({ id: account.connectorId, name: 'Gmail', isAccessible: true, isEnabled: true }))
     if (apps.length === 0) apps = await api.listApps()
     const gmail = gmailAppId(apps)
-    elements.connector.textContent = gmail ? 'Gmail available' : 'No Gmail connector'
+    setConnectorStatus(gmail ? 'Gmail available' : 'No Gmail connector', Boolean(gmail))
     const unbound = { kind: 'unbound' as const }
     if (!await bindAndShowCodex(unbound, { adoptThreadId: localStorage.getItem('dispatch.codex.threadId') || undefined })) {
       throw new Error(elements.stream.lastElementChild?.textContent || 'Could not bind the unbound Codex thread.')
@@ -1780,8 +1778,7 @@ async function connectAgent(): Promise<void> {
     }
     void refreshModelCatalog()
   } catch (error) {
-    elements.agentStatus.textContent = 'Reconnecting'
-    elements.connector.textContent = error instanceof Error ? error.message : String(error)
+    setAgentStatus('Reconnecting', error instanceof Error ? error.message : String(error))
     scheduleAgentReconnect()
   } finally {
     agentConnecting = false
@@ -1792,7 +1789,7 @@ async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
   if (!text || !threadId) return
   addAgentMessage('user', text)
-  elements.agentStatus.textContent = 'Working'
+  setAgentStatus('Working')
   elements.prompt.value = ''
   try {
     if (activeTurnId) {
@@ -1897,7 +1894,6 @@ async function loadConversations(preserveSelection = false): Promise<void> {
       elements.reader.hidden = true
       elements.readerEmpty.hidden = false
       elements.readerEmpty.textContent = defaultEmptyListMessage()
-      elements.context.textContent = 'No email selected'
     }
   } catch (error) {
     if (loadSequence !== conversationLoadSequence) return
