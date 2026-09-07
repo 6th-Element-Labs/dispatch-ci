@@ -127,6 +127,12 @@ function filterSearch(messages: readonly IndexedGmailMessage[], query: string): 
   return filtered
 }
 
+export type IndexStreamFlag = 'inbox' | 'unread' | 'sent' | 'drafts' | 'spam' | 'trash' | 'archive'
+
+const STREAM_COLUMNS: Record<IndexStreamFlag, string> = {
+  inbox: 'in_inbox', unread: 'unread', sent: 'in_sent', drafts: 'in_drafts', spam: 'in_spam', trash: 'in_trash', archive: 'in_archive',
+}
+
 export class GmailIndex {
   readonly #db: DatabaseSync
   readonly #acceptedUnread = new Map<string, boolean>()
@@ -224,6 +230,40 @@ export class GmailIndex {
       this.#db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * A stream that Gmail returned in full (no next page) is the truth for its
+   * flag: rows still carrying the flag that Gmail no longer lists lose it, and
+   * rows left in no folder at all are gone from Gmail, so they are deleted.
+   * Called per stream so a mailbox too large for a complete sync still drops
+   * sent or deleted drafts, emptied trash, and read mail. Rows this run
+   * upserted (any stream) are never touched here: their flags already came
+   * from Gmail's labels.
+   */
+  reconcileStream(accountId: string, flag: IndexStreamFlag, presentIds: readonly string[], runId: string): { cleared: number; removed: number } {
+    const column = STREAM_COLUMNS[flag]
+    const present = new Set(presentIds)
+    const rows = this.#db.prepare(`SELECT id FROM gmail_messages WHERE account_id = ? AND ${column} = 1 AND sync_run_id <> ?`).all(accountId, runId) as unknown as Array<{ id: string }>
+    const stale = rows.map((row) => row.id).filter((id) => !present.has(id))
+    if (stale.length === 0) return { cleared: 0, removed: 0 }
+    const clear = this.#db.prepare(`UPDATE gmail_messages SET ${column} = 0 WHERE account_id = ? AND id = ?`)
+    const remove = this.#db.prepare(`
+      DELETE FROM gmail_messages WHERE account_id = ? AND id = ?
+        AND in_inbox = 0 AND in_sent = 0 AND in_drafts = 0 AND in_spam = 0 AND in_trash = 0 AND in_archive = 0`)
+    let removed = 0
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const id of stale) {
+        clear.run(accountId, id)
+        removed += Number(remove.run(accountId, id).changes)
+      }
+      this.#db.exec('COMMIT')
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
+    return { cleared: stale.length, removed }
   }
 
   pruneAccounts(accountIds: readonly string[]): void {

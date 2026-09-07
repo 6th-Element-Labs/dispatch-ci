@@ -760,8 +760,11 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
       }
     } catch (error) {
       if (sequence !== selectionSequence) return
+      const detail = error instanceof Error ? error.message : String(error)
+      const gone = detail.includes('gmail_draft_not_found')
       loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
-      loading.textContent = error instanceof Error ? error.message : String(error)
+      loading.textContent = gone ? 'This draft no longer exists in Gmail. It was sent or deleted.' : detail
+      if (gone) void loadConversations(true)
     }
     return
   }

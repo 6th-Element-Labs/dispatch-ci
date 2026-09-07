@@ -664,3 +664,41 @@ describe('GmailConnectorProvider', () => {
     await expect(provider.discardGmailDraft('link-one', 'draft-1')).rejects.toMatchObject({ code: 'gmail_draft_discard_unavailable' })
   })
 })
+
+describe('stale rows', () => {
+  it('drops a draft from the Drafts list once Gmail stops returning it, even when the mailbox is too big to sync completely', async () => {
+    let draftsPresent = true
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> : {}
+      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        const labels = (body.labelIds as string[] | undefined) ?? []
+        if (labels.includes('DRAFT')) return response.end(JSON.stringify({ structuredContent: { emails: draftsPresent ? [{ id: 'draft-msg', thread_id: 't-draft', from_: 'Steve <work@example.com>', subject: 'Unsent', snippet: '', labels: ['DRAFT'], email_ts: '2026-09-05T21:42:00Z' }] : [] } }))
+        if (labels.includes('INBOX')) {
+          // Two pages: the 60-second refresh reads only the first, so this stream is never complete for it.
+          if (body.nextPageToken === 'more') return response.end(JSON.stringify({ structuredContent: { emails: [{ id: 'in-2', thread_id: 't-in-2', from_: 'Bo <bo@example.com>', subject: 'Older', snippet: '', labels: ['INBOX'], email_ts: '2026-09-03T21:42:00Z' }], next_page_token: '' } }))
+          return response.end(JSON.stringify({ structuredContent: { emails: [{ id: 'in-1', thread_id: 't-in', from_: 'Ana <ana@example.com>', subject: 'Hello', snippet: '', labels: ['INBOX'], email_ts: '2026-09-04T21:42:00Z' }], next_page_token: 'more' } }))
+        }
+        return response.end(JSON.stringify({ structuredContent: { emails: [] } }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/list') return response.end(JSON.stringify({ structuredContent: { drafts: [], next_page_token: '' } }))
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: ':memory:' })
+    await provider.syncNow()
+    expect((await provider.listMailboxConversations!('drafts', 'all')).map((conversation) => conversation.latestMessageId)).toEqual(['draft-msg'])
+    draftsPresent = false
+    await provider.refreshNow()
+    expect(await provider.listMailboxConversations!('drafts', 'all')).toEqual([])
+    expect((await provider.listMailboxConversations!('inbox', 'all')).map((conversation) => conversation.latestMessageId)).toEqual(['in-1', 'in-2'])
+    await provider.syncNow()
+    expect(await provider.listMailboxConversations!('drafts', 'all')).toEqual([])
+    await expect(provider.openGmailDraft('link-one', 'draft-msg', 't-draft')).rejects.toThrow('no longer exists in Gmail')
+  })
+})

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { resolveAttachmentBytes } from './open-attachment.js'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage } from './gmail-index.js'
+import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage, type IndexStreamFlag } from './gmail-index.js'
 import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
@@ -59,14 +59,14 @@ function structured(value: unknown): UnknownRecord {
 }
 
 export const INDEX_STREAMS = [
-  { query: '-in:spam -in:trash', labelIds: ['INBOX'] },
-  { query: '-in:spam -in:trash', labelIds: ['UNREAD'] },
-  { query: '-in:trash', labelIds: ['SENT'] },
-  { query: '-in:trash', labelIds: ['DRAFT'] },
-  { query: 'in:spam', labelIds: ['SPAM'] },
-  { query: 'in:trash', labelIds: ['TRASH'] },
-  { query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labelIds: [] },
-] as const
+  { flag: 'inbox', query: '-in:spam -in:trash', labelIds: ['INBOX'] },
+  { flag: 'unread', query: '-in:spam -in:trash', labelIds: ['UNREAD'] },
+  { flag: 'sent', query: '-in:trash', labelIds: ['SENT'] },
+  { flag: 'drafts', query: '-in:trash', labelIds: ['DRAFT'] },
+  { flag: 'spam', query: 'in:spam', labelIds: ['SPAM'] },
+  { flag: 'trash', query: 'in:trash', labelIds: ['TRASH'] },
+  { flag: 'archive', query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labelIds: [] },
+] as const satisfies readonly { flag: IndexStreamFlag; query: string; labelIds: readonly string[] }[]
 
 function queueSearchSpec(state: MailStateFilter): { query: string; labels: readonly string[] } {
   if (state === 'unread') return { query: 'is:unread -in:spam -in:trash', labels: ['UNREAD'] }
@@ -373,14 +373,17 @@ export class GmailConnectorProvider {
         this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
         const pages = await Promise.all(accounts.map(async (account) => {
-          const streams = await Promise.all(INDEX_STREAMS.map((stream) => this.#searchPage(account, 50, stream.query, stream.labelIds, '')))
+          const streams = await Promise.all(INDEX_STREAMS.map(async (stream) => ({ stream, page: await this.#searchPage(account, 50, stream.query, stream.labelIds, '') })))
           this.#syncProgress.pagesFetched += streams.length
-          this.#syncProgress.fetchedMessages += streams.reduce((count, page) => count + page.messages.length, 0)
-          return { account, messages: mergeIndexedMessages(streams.flatMap((page) => page.messages)) }
+          this.#syncProgress.fetchedMessages += streams.reduce((count, item) => count + item.page.messages.length, 0)
+          return { account, streams, messages: mergeIndexedMessages(streams.flatMap((item) => item.page.messages)) }
         }))
         for (const page of pages) {
           this.#syncProgress.currentAccount = page.account.name
           this.#index!.replaceAccount(page.account.id, page.messages, runId, false)
+          for (const item of page.streams) {
+            if (!item.page.nextPageToken) this.#index!.reconcileStream(page.account.id, item.stream.flag, item.page.messages.map((message) => message.id), runId)
+          }
           this.#syncProgress.accountsCompleted += 1
         }
         this.#syncProgress.currentAccount = null
@@ -555,14 +558,17 @@ export class GmailConnectorProvider {
         for (const account of accounts) {
           this.#syncProgress.currentAccount = account.name
           const messages: IndexedGmailMessage[] = []
+          const completeStreams: Array<{ flag: IndexStreamFlag; ids: string[] }> = []
           let complete = true
           for (const stream of INDEX_STREAMS) {
             let token = ''
+            const streamIds: string[] = []
             for (let pageNumber = 0; pageNumber < maxPagesPerStream; pageNumber += 1) {
               const page = await this.#searchPage(account, 50, stream.query, stream.labelIds, token)
               this.#syncProgress.pagesFetched += 1
               this.#syncProgress.fetchedMessages += page.messages.length
               messages.push(...page.messages)
+              streamIds.push(...page.messages.map((message) => message.id))
               if (!page.nextPageToken) {
                 token = ''
                 break
@@ -573,9 +579,12 @@ export class GmailConnectorProvider {
             if (token) {
               complete = false
               if (requireComplete) throw new Error(`Gmail pagination exceeded ${maxPagesPerStream} pages for account ${account.name}`)
+            } else {
+              completeStreams.push({ flag: stream.flag, ids: streamIds })
             }
           }
           this.#index!.replaceAccount(account.id, mergeIndexedMessages(messages), runId, complete)
+          for (const stream of completeStreams) this.#index!.reconcileStream(account.id, stream.flag, stream.ids, runId)
           completion.push(complete)
           this.#syncProgress.accountsCompleted += 1
         }
@@ -693,7 +702,9 @@ export class GmailConnectorProvider {
   async openGmailDraft(accountId: string, messageId: string, threadId = ''): Promise<DraftProjection> {
     const summary = await this.#findGmailDraft(accountId, (draft) => draft.messageId === messageId || draft.threadId === messageId || (threadId !== '' && draft.threadId === threadId))
     if (!summary) {
-      throw Object.assign(new Error(`Gmail draft for message ${messageId} was not found`), { code: 'gmail_draft_not_found' })
+      // Gmail has no such draft any more (sent or deleted); stop listing it.
+      this.#index?.discardDraftMessages(accountId, [messageId])
+      throw Object.assign(new Error('This draft no longer exists in Gmail. It was sent or deleted.'), { code: 'gmail_draft_not_found' })
     }
     const message = await this.readMessage(accountId, summary.messageId)
     const draft = this.#projectGmailDraft(summary, message, messageId, accountId)
