@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bindingRecordKey, CodexBindingStore } from '../src/codex-bindings.js'
+import { bindingRecordKey, CodexBindingStore, defaultCodexWorkspace } from '../src/codex-bindings.js'
 
 describe('CodexBindingStore', () => {
+  it('keeps the Codex workspace out of the Dispatch repository', () => {
+    expect(defaultCodexWorkspace()).toContain('Application Support/Dispatch/codex-workspace')
+    expect(defaultCodexWorkspace()).not.toContain('/Git/dispatch')
+  })
+
   it('encodes unbound and conversation keys', () => {
     expect(bindingRecordKey({ kind: 'unbound' })).toBe('unbound')
     expect(bindingRecordKey({ kind: 'conversation', accountId: 'link-one', gmailThreadId: 't1' })).toBe('conversation:link-one:t1')

@@ -43,9 +43,9 @@ The first useful version lets a user:
 5. Open a cited Gmail resource.
 6. Create a draft through Codex.
 7. Review and edit the draft in the middle panel.
-8. Confirm recipients and subject, then send from the Send button.
+8. Confirm recipients and subject, then send from the Send button, or ask Codex to send that draft through the installed Gmail connector.
 
-The middle panel owns the visible Gmail draft. Recipient, subject, and Markdown body remain editable. Codex revises that same draft through mail create/update. Sending occurs only after the Send confirm and displays the connector result.
+The middle panel owns the visible Gmail draft. Recipient, subject, and Markdown body remain editable. Codex creates and revises that same Gmail draft through the installed connector, including attachments. A draft that Codex creates through MCP opens in the middle panel. The user can send from the Send button, or ask Codex to call `gmail.send_draft` or `gmail.send_email`. Autonomous send without a user request remains out of scope.
 
 Codex restores stored thread turns after reload, shows plans and tool activity, accepts same-turn steering, and exposes interruption. Gmail attachments use their exact parent message and attachment identities. A click on the desktop client asks mail to write the file and open it with the default native app for that extension. The same identities stay in Codex citation context. Inline CID images still load through the existing attachment GET.
 
@@ -53,7 +53,7 @@ Thread rows show a Tabler paperclip when any indexed member has attachments. Onc
 
 ## Current foundation
 
-The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, paginated Gmail synchronization of Inbox, Unread, Sent, Drafts, Spam, Trash, and the archive query into a durable SQLite index, full MIME retrieval, safe browser rendering, and the browser experience. Sync state, timestamps, progress, and failures remain visible. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail draft create and update may run from the editor or from Codex tools. Sending never runs from Codex. The Send button shows a confirm, then dispatch-mail sends the draft. Inbox, Sent, Drafts, Archive, Spam, and Trash lists read that index. All, Unread, and Read on the default queue still exclude spam and trash.
+The current slice proves the service boundaries, real Codex App Server handshake, installed Gmail connector discovery, paginated Gmail synchronization of Inbox, Unread, Sent, Drafts, Spam, Trash, and the archive query into a durable SQLite index, full MIME retrieval, safe browser rendering, and the browser experience. Sync state, timestamps, progress, and failures remain visible. Demo projections require the explicit `DISPATCH_DEMO_MAIL=1` development setting. A missing Gmail connection is a visible readiness failure and never silently substitutes demo mail. Gmail draft create and update may run from the editor or from Codex tools. Codex may send when the user asks it to use the Gmail connector. The Send button still shows a confirm, then dispatch-mail sends the draft. Inbox, Sent, Drafts, Archive, Spam, and Trash lists read that index. All, Unread, and Read on the default queue still exclude spam and trash.
 
 ## Non-goals for the foundation
 
@@ -62,3 +62,12 @@ The current slice proves the service boundaries, real Codex App Server handshake
 - A second agent runtime.
 - A second Gmail MCP server.
 - A pure SwiftUI rewrite.
+
+
+## AI result and editor consistency
+
+Attachment context includes its Gmail account, conversation, parent message, and attachment ID. Changing conversations or starting a new message clears it. Prompts wait until Codex is bound to the selected conversation.
+
+A confirmed Gmail draft tool result opens the exact draft and account in the editor. Late responses cannot replace a different selection or newer edits, including edits already saved while the response was pending. A user-edited draft stays in place and the client reports where to find the saved AI version. Connector error results never count as saved or sent. Sending a different draft does not close the active editor.
+
+Transient task-resume failures keep the existing history binding and retry. A new binding is created only for a confirmed missing task. Gmail draft commands retain the strict multipart payload adapter; Codex follows the installed tool schema and the user’s approval policy.

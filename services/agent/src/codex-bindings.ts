@@ -16,6 +16,12 @@ export function defaultBindingsPath(): string {
   return join(homedir(), 'Library', 'Application Support', 'Dispatch', 'codex-bindings.json')
 }
 
+/** Working directory for in-app Codex threads. Kept off the Dispatch repo so AGENTS.md does not bind the email assistant. */
+export function defaultCodexWorkspace(): string {
+  if (process.env.DISPATCH_CODEX_CWD) return process.env.DISPATCH_CODEX_CWD
+  return join(homedir(), 'Library', 'Application Support', 'Dispatch', 'codex-workspace')
+}
+
 export class CodexBindingStore {
   #records = new Map<string, string>()
   #loaded = false

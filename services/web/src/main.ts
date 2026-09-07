@@ -10,6 +10,7 @@ import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCa
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
+import { codexMailEffect, visibleUserPrompt, type CodexMailEffect } from './codex-mail-effect.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 
@@ -220,6 +221,8 @@ let recipientSuggestTimer: number | undefined
 let draftPreviewSequence = 0
 let draftEditSession = 0
 let draftDirty = false
+let draftEditRevision = 0
+function markDraftDirty(): void { draftDirty = true; draftEditRevision += 1 }
 // Keep Gmail draft writes in order so a slow save cannot overwrite a newer save.
 let draftSaveFlight: Promise<DraftProjection | undefined> | undefined
 // Keep Gmail send confirmation single-flight.
@@ -276,6 +279,8 @@ let modelCatalog: DispatchModelCatalog | undefined
 let modelCatalogError: string | undefined
 let selectedModelId = localStorage.getItem('dispatch.codex.model') || DEFAULT_MODEL.id
 let selectedEffort = localStorage.getItem('dispatch.codex.effort') || 'medium'
+const userChoseModel = () => Boolean(localStorage.getItem('dispatch.codex.model'))
+const userChoseEffort = () => Boolean(localStorage.getItem('dispatch.codex.effort'))
 let activeAgentMessage: HTMLElement | undefined
 let activeAgentText = ''
 let agentEvents: EventSource | undefined
@@ -296,7 +301,8 @@ const mailStartupGraceUntil = performance.now() + MAIL_STARTUP_GRACE_MS
 let searchQuery = ''
 let searchTimer: number | undefined
 let activeTurnId: string | undefined
-let selectedAttachmentContext: { messageId: string; attachmentId: string; filename: string } | undefined
+let codexContextReady = false
+let selectedAttachmentContext: { accountId?: string; threadId: string; messageId: string; attachmentId: string; filename: string } | undefined
 let mobilePanel: PanelName = 'messages'
 let mobileReturnPanel: Exclude<PanelName, 'messages'> = 'reader'
 
@@ -709,7 +715,7 @@ async function warmAttachments(conversation: ConversationProjection, sequence: n
 }
 
 async function openAttachment(message: MessageProjection, attachmentId: string, filename: string): Promise<void> {
-  selectedAttachmentContext = { messageId: message.id, attachmentId, filename }
+  selectedAttachmentContext = { accountId: message.accountId, threadId: message.threadId, messageId: message.id, attachmentId, filename }
   try {
     await api.openAttachment(message.id, attachmentId, message.accountId, filename)
     addAgentMessage('tool', `Opened ${filename}`)
@@ -721,6 +727,8 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   const summary = conversations.find((conversation) => conversation.id === id)
   if (!summary) return
   const sequence = ++selectionSequence
+  selectedAttachmentContext = undefined
+  codexContextReady = false
   try {
     await flushDraftAutosave()
   } catch (error) {
@@ -1050,7 +1058,7 @@ function renderRecipientChips(input: HTMLInputElement, addresses: readonly strin
     remove.addEventListener('click', () => {
       chip.remove()
       hideRecipientSuggestions(input)
-      draftDirty = true
+      markDraftDirty()
       if (activeDraft?.id) autosaveDraft()
     })
     chip.append(label, remove)
@@ -1098,7 +1106,7 @@ async function suggestRecipients(input: HTMLInputElement): Promise<void> {
       item.addEventListener('mousedown', (event) => {
         event.preventDefault()
         addRecipientChip(input, recipient.address)
-        draftDirty = true
+        markDraftDirty()
         if (activeDraft?.id) autosaveDraft()
       })
       return item
@@ -1147,7 +1155,7 @@ function renderDraftAttachments(): void {
       if (!activeDraft) return
       activeDraft = { ...activeDraft, attachments: activeDraft.attachments.filter((_, itemIndex) => itemIndex !== index) }
       renderDraftAttachments()
-      draftDirty = true
+      markDraftDirty()
       if (activeDraft.id) void saveDraft(false).catch(draftError)
     })
     row.append(name, remove)
@@ -1317,6 +1325,8 @@ function openCompose(): void {
   }
   markReadDwell.cancel()
   const sequence = ++selectionSequence
+  selectedAttachmentContext = undefined
+  codexContextReady = false
   selected = undefined
   selectedConversationId = undefined
   void bindAndShowCodex({ kind: 'unbound' }, { sequence, clearOnFailure: true })
@@ -1387,8 +1397,7 @@ async function reviseDraft(): Promise<void> {
   if (!draft.accountId) throw new Error('The Gmail account is missing from this draft.')
   elements.prompt.value = [
     `Revise Gmail draft ${draft.id} on account ${draft.accountId}.`,
-    `Call Gmail update_draft on that draft ID. Put the revised Markdown in text_plain and the revised HTML in payload.`,
-    'Never call gmail.send_draft or gmail.send_email. Never send this draft.',
+    `Call Gmail update_draft on that draft ID using the installed tool schema and a multipart/alternative payload for plain text and HTML. Preserve existing attachments. This is a revision request, not permission to send.`,
     `Current draft:\n\n${elements.draftBody.value}`,
   ].join(' ')
   elements.prompt.focus()
@@ -1793,10 +1802,8 @@ function handleAgentEvent(message: AgentEvent): void {
     activeTurnId = undefined
     elements.stop.hidden = true
     const draftToRefresh = activeDraft
-    if (draftToRefresh?.id && draftToRefresh.accountId) {
-      void api.getDraft(draftToRefresh.id, draftToRefresh.accountId).then((draft) => {
-        if (activeDraft?.id === draftToRefresh.id) showDraft(draft, false)
-      }).catch(draftError)
+    if (draftToRefresh?.id && draftToRefresh.accountId && codexDraftFlights === 0) {
+      void refreshCodexDraft(draftToRefresh.id, draftToRefresh.accountId, false)
     }
   }
   if (message.method === 'item/agentMessage/delta') {
@@ -1816,11 +1823,58 @@ function handleAgentEvent(message: AgentEvent): void {
       activeAgentMessage = undefined
       activeAgentText = ''
     }
+    const effect = codexMailEffect(item)
+    if (effect) void applyCodexMailEffect(effect)
   }
   if (message.method === 'error') {
     const error = params?.error as Record<string, unknown> | undefined
     setAgentStatus('Failed')
     addAgentMessage('error', String(error?.message ?? params?.message ?? 'Codex reported an error.'))
+  }
+}
+
+let codexDraftFlights = 0
+let codexDraftRequest = 0
+
+/** A remote result may update only the editor revision that requested it. */
+async function refreshCodexDraft(draftId: string, accountId: string, createdByCodex: boolean): Promise<void> {
+  if (!codexContextReady) return
+  const snapshot = { selection: selectionSequence, pane: paneSequence, session: draftEditSession, revision: draftEditRevision,
+    dirty: draftDirty, saving: Boolean(draftSaveFlight), draftId: activeDraft?.id, accountId: activeDraft?.accountId }
+  const request = ++codexDraftRequest
+  codexDraftFlights += 1
+  try {
+    const draft = await api.getDraft(draftId, accountId)
+    if (request !== codexDraftRequest || snapshot.selection !== selectionSequence || snapshot.pane !== paneSequence) return
+    if (draft.id !== draftId || draft.accountId !== accountId) throw new Error('Gmail returned a different draft or account; the editor was not changed.')
+    const unchanged = snapshot.session === draftEditSession && snapshot.revision === draftEditRevision
+      && snapshot.draftId === activeDraft?.id && snapshot.accountId === activeDraft?.accountId
+      && !snapshot.dirty && !snapshot.saving && !draftDirty && !draftSaveFlight
+    if (unchanged) showDraft(draft, false)
+    else if (createdByCodex) addAgentMessage('tool', 'Gmail saved the draft. Your current edits were kept; open Drafts to review the saved version.')
+    if (createdByCodex && mailbox === 'drafts') void loadConversations(true)
+  } catch (error) {
+    if (snapshot.selection === selectionSequence && snapshot.pane === paneSequence) addAgentMessage('error', error instanceof Error ? error.message : String(error))
+  } finally { codexDraftFlights -= 1 }
+}
+
+async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
+  if (!codexContextReady) return
+  if (effect.kind === 'draft') {
+    await refreshCodexDraft(effect.draftId, effect.accountId, true)
+    return
+  }
+  // A send of some other draft must not close the editor or discard local edits.
+  if (effect.draftId && activeDraft?.id === effect.draftId && activeDraft.accountId === effect.accountId
+    && !draftDirty && !draftSaveFlight) hideDraftEditor()
+  const selection = selectionSequence
+  try {
+    await api.refreshMail()
+    if (selection !== selectionSequence) return
+    await loadConversations(true)
+    addAgentMessage('tool', 'Gmail accepted the send.')
+  } catch (error) {
+    if (selection === selectionSequence) addAgentMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
@@ -1862,7 +1916,7 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
       const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
       for (const item of restored) {
         const text = agentHistoryText(item)
-        if (text && item.type === 'userMessage') addAgentMessage('user', text)
+        if (text && item.type === 'userMessage') addAgentMessage('user', visibleUserPrompt(text))
         if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
       }
     } catch (error) {
@@ -1873,7 +1927,9 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   if (sequence !== paneSequence) return
   agentEvents = api.events(nextThreadId)
   agentEvents.onopen = () => { setAgentStatus('Connected') }
-  agentEvents.onmessage = (event) => handleAgentEvent(JSON.parse(event.data) as AgentEvent)
+  agentEvents.onmessage = (event) => {
+    if (sequence === paneSequence && nextThreadId === threadId) handleAgentEvent(JSON.parse(event.data) as AgentEvent)
+  }
   agentEvents.onerror = () => {
     agentEvents?.close()
     setAgentStatus('Reconnecting')
@@ -1883,11 +1939,14 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
 
 async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: string; sequence?: number; clearOnFailure?: boolean } = {}): Promise<boolean> {
   try {
-    if (!await api.agentReady()) return false
+    if (!await api.agentReady()) { scheduleAgentReconnect(); return false }
     const binding = await api.bindThread(key, options.adoptThreadId)
     if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
     writeBindingCache(key, binding.threadId)
     await showCodexThread(binding.threadId, binding.created, binding.replaced, binding.detail)
+    const context = selected ?? (mailbox === 'drafts' ? conversations.find((item) => item.id === selectedConversationId) : undefined)
+    const currentKey = context ? conversationBindingKey(context) : !selectedConversationId ? { kind: 'unbound' } : undefined
+    if (currentKey && JSON.stringify(key) === JSON.stringify(currentKey) && (options.sequence === undefined || options.sequence === selectionSequence)) codexContextReady = true
     return true
   } catch (error) {
     if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
@@ -1895,6 +1954,7 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
     setAgentStatus('Reconnecting')
     if (options.clearOnFailure) elements.stream.replaceChildren()
     addAgentMessage('error', message)
+    scheduleAgentReconnect()
     return false
   }
 }
@@ -1909,10 +1969,7 @@ async function connectAgent(): Promise<void> {
     return
   }
   try {
-    apps = accounts
-      .filter((account) => account.connectorId)
-      .map((account) => ({ id: account.connectorId, name: 'Gmail', isAccessible: true, isEnabled: true }))
-    if (apps.length === 0) apps = await api.listApps()
+    apps = await api.listApps()
     const gmail = gmailAppId(apps)
     setConnectorStatus(gmail ? 'Gmail available' : 'No Gmail connector', Boolean(gmail))
     const unbound = { kind: 'unbound' as const }
@@ -1935,6 +1992,7 @@ async function connectAgent(): Promise<void> {
 async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
   if (!text || !threadId) return
+  if (!codexContextReady) { addAgentMessage('error', 'Codex is still connecting to the selected conversation. Please try again.'); return }
   addAgentMessage('user', text)
   setAgentStatus('Working')
   elements.prompt.value = ''
@@ -1945,10 +2003,21 @@ async function sendPrompt(): Promise<void> {
     }
     await api.startTurn(threadId, {
       text,
-      model: selectedModelId,
-      effort: selectedEffort,
+      ...userChoseModel() ? { model: selectedModelId } : {},
+      ...userChoseEffort() ? { effort: selectedEffort } : {},
       appId: gmailAppId(apps),
-      mailContext: selected ? { messageId: selected.latestMessageId, threadId: selected.threadId, subject: selected.subject, sender: selected.sender.address, attachment: selectedAttachmentContext } : undefined,
+      mailContext: selected ? {
+        accountId: selected.accountId,
+        messageId: selected.latestMessageId,
+        threadId: selected.threadId,
+        subject: selected.subject,
+        sender: selected.sender.address,
+        attachment: selectedAttachmentContext?.accountId === selected.accountId
+          && selectedAttachmentContext?.threadId === selected.threadId
+          && selected.messages.some((message) => message.id === selectedAttachmentContext?.messageId
+            && message.attachments.some((file) => file.id === selectedAttachmentContext?.attachmentId))
+          ? selectedAttachmentContext : undefined,
+      } : undefined,
     })
   } catch (error) {
     addAgentMessage('error', error instanceof Error ? error.message : String(error))
@@ -2254,14 +2323,14 @@ app.querySelector('[data-attach-draft]')?.addEventListener('click', () => { elem
 elements.draftFiles.addEventListener('change', () => { void attachDraftFiles() })
 elements.draftBody.addEventListener('input', () => {
   elements.sendConfirm.hidden = true
-  draftDirty = true
+  markDraftDirty()
   refreshPreview()
   autosaveDraft()
 })
 for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc]) {
   field.addEventListener('input', () => {
     elements.sendConfirm.hidden = true
-    draftDirty = true
+    markDraftDirty()
     onRecipientInput(field)
     if (activeDraft?.id) autosaveDraft()
   })
@@ -2269,14 +2338,14 @@ for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc]) {
     if ((event.key === 'Enter' || event.key === 'Tab') && field.value.trim()) {
       if (event.key === 'Enter') event.preventDefault()
       acceptRecipientInput(field)
-      draftDirty = true
+      markDraftDirty()
       if (activeDraft?.id) autosaveDraft()
     }
     if (event.key === 'Backspace' && !field.value) {
       const chips = recipientChipAddresses(field)
       if (chips.length === 0) return
       renderRecipientChips(field, chips.slice(0, -1))
-      draftDirty = true
+      markDraftDirty()
       if (activeDraft?.id) autosaveDraft()
     }
     if (event.key === 'Escape') hideRecipientSuggestions(field)
@@ -2287,7 +2356,7 @@ for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc]) {
 }
 elements.draftSubject.addEventListener('input', () => {
   elements.sendConfirm.hidden = true
-  draftDirty = true
+  markDraftDirty()
   if (activeDraft?.id) autosaveDraft()
 })
 elements.draftAccount.addEventListener('input', () => { elements.sendConfirm.hidden = true })

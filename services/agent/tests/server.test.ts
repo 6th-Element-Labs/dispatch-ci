@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 function runtime() {
-  const request = vi.fn(async (method: string): Promise<unknown> => method === 'thread/start' ? { thread: { id: 'thread-1' } } : { ok: true })
+  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => method === 'thread/start' ? { thread: { id: 'thread-1' } } : { ok: true })
   return {
     ready: vi.fn(async () => undefined),
     lastError: vi.fn(() => null),
@@ -23,6 +23,15 @@ function runtime() {
     respond: vi.fn(),
     close: vi.fn(),
   }
+}
+
+function rpcParams(fake: ReturnType<typeof runtime>, method: string, match?: (params: Record<string, unknown>) => boolean): Record<string, unknown> {
+  for (const call of fake.request.mock.calls) {
+    const name = call[0]
+    const params = (call[1] ?? {}) as Record<string, unknown>
+    if (name === method && (!match || match(params))) return params
+  }
+  throw new Error(`No ${method} call`)
 }
 
 async function start() {
@@ -53,19 +62,23 @@ describe('dispatch-agent', () => {
     await expect(response.json()).resolves.toMatchObject({ harness: 'codex-app-server' })
   })
 
-  it('starts a restricted Codex thread', async () => {
+  it('starts a Codex thread that inherits the user Codex config and allows Gmail MCP', async () => {
     const { base, fake } = await start()
     const response = await fetch(`${base}/v1/threads`, { method: 'POST' })
     expect(response.status).toBe(201)
-    expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
-      model: 'gpt-5.6-sol',
-      approvalPolicy: 'on-request',
-      sandboxPolicy: expect.objectContaining({ type: 'readOnly' }),
-      developerInstructions: expect.stringMatching(/Never call gmail\.send_draft[\s\S]*press Send in Dispatch to send it/),
-    }))
-    expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
-      developerInstructions: expect.stringContaining('update that Gmail draft id'),
-    }))
+    const params = rpcParams(fake, 'thread/start')
+    expect(params).toMatchObject({
+      cwd: expect.stringContaining('codex-workspace'),
+      developerInstructions: expect.stringMatching(/gmail\.(create_draft|send_draft)/),
+      serviceName: 'dispatch-agent',
+    })
+    expect(params).not.toHaveProperty('model')
+    expect(params).not.toHaveProperty('approvalPolicy')
+    expect(params).not.toHaveProperty('sandboxPolicy')
+    expect(params).not.toHaveProperty('sandbox')
+    expect(String(params.developerInstructions)).not.toMatch(/Never call gmail\.send/)
+    expect(String(params.developerInstructions)).toMatch(/send_draft|send_email/)
+    expect(String(params.developerInstructions)).toMatch(/attachment/i)
   })
 
   it('resumes an existing Codex thread after an adapter restart', async () => {
@@ -73,16 +86,26 @@ describe('dispatch-agent', () => {
     fake.request.mockResolvedValueOnce({ thread: { id: 'thread-1' } })
     const response = await fetch(`${base}/v1/threads/thread-1/resume`, { method: 'POST' })
     expect(response.status).toBe(200)
-    expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({
-      threadId: 'thread-1', model: 'gpt-5.6-sol', approvalPolicy: 'on-request', developerInstructions: expect.stringContaining('untrusted data'),
-    }))
+    const params = rpcParams(fake, 'thread/resume')
+    expect(params).toMatchObject({
+      threadId: 'thread-1',
+      cwd: expect.stringContaining('codex-workspace'),
+      developerInstructions: expect.stringMatching(/send_draft|send_email/),
+    })
+    expect(params).not.toHaveProperty('model')
+    expect(params).not.toHaveProperty('approvalPolicy')
+    expect(String(params.developerInstructions)).not.toMatch(/Never call gmail\.send/)
   })
 
-  it('defaults Dispatch turns to GPT-5.6 Sol with medium effort', async () => {
+  it('omits model and effort when the client sent none so the thread keeps the user Codex default', async () => {
     const { base, fake } = await start()
     const response = await fetch(`${base}/v1/threads/thread-1/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Summarize this email.', model: '', effort: '  ' }) })
     expect(response.status).toBe(202)
-    expect(fake.request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ threadId: 'thread-1', model: 'gpt-5.6-sol', effort: 'medium' }))
+    const params = rpcParams(fake, 'turn/start')
+    expect(params).toMatchObject({ threadId: 'thread-1' })
+    expect(params).not.toHaveProperty('model')
+    expect(params).not.toHaveProperty('effort')
+    expect(params).not.toHaveProperty('approvalPolicy')
   })
 
   it('forwards the model and effort the client chose for a turn', async () => {
@@ -90,6 +113,25 @@ describe('dispatch-agent', () => {
     const response = await fetch(`${base}/v1/threads/thread-1/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Summarize this email.', model: 'gpt-reserve', effort: 'max' }) })
     expect(response.status).toBe(202)
     expect(fake.request).toHaveBeenCalledWith('turn/start', expect.objectContaining({ threadId: 'thread-1', model: 'gpt-reserve', effort: 'max' }))
+  })
+
+  it('adds a short selected-Gmail line instead of a JSON dump', async () => {
+    const { base, fake } = await start()
+    const response = await fetch(`${base}/v1/threads/thread-1/turns`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: 'Reply for me.',
+        mailContext: { accountId: 'link-one', threadId: 't1', messageId: 'm1', subject: 'Berth', sender: 'ana@example.com' },
+      }),
+    })
+    expect(response.status).toBe(202)
+    const params = rpcParams(fake, 'turn/start')
+    const input = (params.input as Array<{ text?: string }> | undefined) ?? []
+    expect(input[0]?.text).toContain('Reply for me.')
+    expect(input[0]?.text).toContain('account link-one')
+    expect(input[0]?.text).toContain('thread t1')
+    expect(input[0]?.text).not.toContain('Selected email context supplied by Dispatch UI')
+    expect(input[0]?.text).not.toContain('"subject":"Berth"')
   })
 
   it('serves the model catalog joined with usage buckets', async () => {
@@ -232,7 +274,7 @@ describe('dispatch-agent', () => {
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ tool: 'gmail.delete_emails', arguments: { link_id: 'link-one', message_ids: ['m1'] } }))
   })
 
-  it('sends HTML and Markdown payloads for Gmail drafts and forbids Codex sending', async () => {
+  it('sends HTML and Markdown payloads for Gmail drafts and tells Codex it may send', async () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
@@ -257,9 +299,9 @@ describe('dispatch-agent', () => {
     }))
 
     await fetch(`${base}/v1/threads`, { method: 'POST' })
-    expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
-      developerInstructions: expect.stringContaining('Never call gmail.send_draft'),
-    }))
+    const chatStart = rpcParams(fake, 'thread/start', (params) => Boolean(params.developerInstructions))
+    expect(String(chatStart.developerInstructions)).toMatch(/send_draft|send_email/)
+    expect(String(chatStart.developerInstructions)).not.toMatch(/Never call gmail\.send/)
   })
 
   it('reads a Gmail attachment by id without a filename selector', async () => {
@@ -590,4 +632,36 @@ describe('connector threads', () => {
     expect(fake.respond).not.toHaveBeenCalledWith(10, expect.anything())
     void base
   })
+})
+
+
+it.each(['Temporary transport timeout', 'MCP server unavailable', 'Unauthorized', 'Invalid model configuration'])(
+  'preserves the history binding after a temporary or non-missing resume failure: %s', async (message) => {
+    const { base, fake, bindings } = await startWithBindings()
+    const key = { kind: 'conversation' as const, accountId: 'account-A', gmailThreadId: 'mail-A' }
+    await bindings.put(key, 'existing-history')
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'thread/resume') throw new Error(message)
+      return { thread: { id: 'replacement' } }
+    })
+    const response = await fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(key) })
+    expect(response.status).toBe(502)
+    expect(bindings.get(key)).toBe('existing-history')
+    expect(fake.request).not.toHaveBeenCalledWith('thread/start', expect.anything())
+    await bindings.load()
+    expect(bindings.get(key)).toBe('existing-history')
+  },
+)
+
+it('passes a file only with its matching account and conversation context', async () => {
+  const { base, fake } = await start()
+  const send = (attachment: Record<string, string>) => fetch(`${base}/v1/threads/task-A/turns`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'Read this file', mailContext: { accountId: 'account-A', threadId: 'mail-A', messageId: 'new-email', attachment } }),
+  })
+  await send({ accountId: 'account-A', threadId: 'mail-A', messageId: 'older-email', attachmentId: 'file-A', filename: 'report.pdf' })
+  expect(JSON.stringify(rpcParams(fake, 'turn/start'))).toContain('older-email')
+  fake.request.mockClear()
+  await send({ accountId: 'account-B', threadId: 'mail-B', messageId: 'wrong-email', attachmentId: 'wrong-file' })
+  expect(JSON.stringify(rpcParams(fake, 'turn/start'))).not.toContain('wrong-file')
 })

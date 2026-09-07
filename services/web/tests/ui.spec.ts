@@ -259,6 +259,7 @@ test('saves a new draft before asking Codex to revise its real Gmail draft ID', 
     } } })
   })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true }] } }))
   await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-revise' } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-revise', created: false, replaced: false } } }))
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/thread-revise$/, (route) => route.fulfill({ json: { thread: { turns: [] } } }))
@@ -281,9 +282,11 @@ test('saves a new draft before asking Codex to revise its real Gmail draft ID', 
   expect(text).toContain('gmail-draft-42')
   expect(text).toContain('link-one')
   expect(text).toContain('update_draft')
-  expect(text).toContain('text_plain')
+  expect(text).toContain('multipart/alternative')
+  expect(text).not.toContain('text_plain')
   expect(text).toContain('payload')
-  expect(text).toContain('Never send')
+  expect(text).not.toContain('Never send')
+  expect(text).not.toContain('Never call gmail.send')
 
   operationOrder.length = 0
   turnRequest = undefined
@@ -374,6 +377,7 @@ test('does not ask Codex to revise when Gmail does not return a draft ID', async
     bodyText: '', attachments: [], state: 'draft', accountId: 'link-one',
   } } }))
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true }] } }))
   await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-no-id' } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-no-id', created: false, replaced: false } } }))
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/thread-no-id$/, (route) => route.fulfill({ json: { thread: { turns: [] } } }))
@@ -917,7 +921,7 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   await page.route('http://127.0.0.1:8412/v1/threads/thread-history/resume', (route) => route.fulfill({ json: { thread: { id: 'thread-history' } } }))
   await page.route('http://127.0.0.1:8412/v1/threads/thread-history', (route) => route.fulfill({ json: {
     thread: { turns: [{ items: [
-      { type: 'userMessage', content: [{ type: 'input_text', text: 'Summarize this thread.' }] },
+      { type: 'userMessage', content: [{ type: 'input_text', text: 'Summarize this thread.\n\nSelected Gmail account link-one, thread t1.' }] },
       { type: 'agentMessage', content: { type: 'output_text', text: '## Here is the summary.\n\n- First fact\n- Second fact\n\n| Source | Date |\n| --- | --- |\n| Gmail | Sep 3 |\n\n`thread/read`\n\n[Open evidence](https://example.com)' } },
       { type: 'userMessage', content: [{ type: 'input_text', text: `Long context ${'x'.repeat(320)}` }] },
       { type: 'agentMessage', content: { type: 'output_text', text: `Long response ${'y'.repeat(320)}\n\nhttps://example.com/${'path'.repeat(80)}` } },
@@ -927,6 +931,7 @@ test('restores structured Codex history as readable text', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('dispatch.codex.threadId', 'thread-history'))
   await page.goto('/')
   await expect(page.getByText('Summarize this thread.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Selected Gmail account link-one', { exact: false })).toHaveCount(0)
   await expect(page.getByText('Here is the summary.', { exact: true })).toBeVisible()
   await expect(page.locator('.ai-response h2')).toHaveText('Here is the summary.')
   await expect(page.locator('.ai-response table')).toContainText('Gmail')
@@ -1131,6 +1136,41 @@ test('recovers the mail list automatically after a transient service failure', a
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
 
+test('opens a Gmail draft that Codex created through MCP', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'connector-gmail', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [], nextCursor: null, total: 0 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/codex-draft-9/, (route) => route.fulfill({ json: { draft: {
+    id: 'codex-draft-9', inReplyToMessageId: '', to: [{ name: 'Ana', address: 'ana@example.com', initials: 'A' }],
+    cc: '', bcc: '', subject: 'Berth plan', bodyMarkdown: 'See you in Opua.', bodyHtml: '<p>See you in Opua.</p>',
+    bodyText: 'See you in Opua.', attachments: [{ name: 'arrival.pdf', mediaType: 'application/pdf' }], state: 'draft', accountId: 'link-one',
+  } } }))
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true }] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-mcp', created: true, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    await route.fulfill({
+      contentType: 'text/event-stream',
+      body: [
+        'data: {"method":"turn/started","params":{"threadId":"thread-mcp","turn":{"status":"inProgress"}}}\n\n',
+        'data: {"method":"item/completed","params":{"threadId":"thread-mcp","item":{"type":"mcpToolCall","status":"completed","tool":"gmail.create_draft","arguments":{"link_id":"link-one"},"result":{"structuredContent":{"draft_id":"codex-draft-9"}}}}}\n\n',
+      ].join(''),
+    })
+  })
+  const draftReads: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/v1/drafts/codex-draft-9')) draftReads.push(request.url())
+  })
+  await page.goto('/')
+  await expect.poll(() => draftReads.length).toBeGreaterThan(0)
+  await expect(page.getByRole('textbox', { name: 'Draft subject' })).toHaveValue('Berth plan')
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('See you in Opua.')
+  await expect(page.getByLabel('Draft attachments')).toContainText('arrival.pdf')
+})
+
 test('answers Codex approval requests without changing the request id type', async ({ page }) => {
   let approval: unknown
   await page.unroute('http://127.0.0.1:8412/ready')
@@ -1153,7 +1193,7 @@ test('answers Codex approval requests without changing the request id type', asy
   await expect(page.getByText('Approve command?')).toBeVisible()
   await page.getByRole('button', { name: 'Allow once' }).first().click()
   await expect.poll(() => approval).toEqual({ id: 42, result: { decision: 'accept' } })
-  await expect(page.getByText('Allow once', { exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Allow once', exact: true })).toBeDisabled()
 })
 
 test('marks a conversation selected before its full thread finishes loading', async ({ page }) => {
@@ -1574,3 +1614,79 @@ test('collapses thread attachments and opens repeated filenames from their exact
   await page.locator('[data-conversation-id="demo:t2"]').click()
   await expect(toggle).toBeHidden()
 })
+
+test('clears an earlier thread attachment before asking about another account', async ({page}) => {
+  await stubAgent(page)
+  let sent: any
+  await page.route(/8411\/v1\/conversations\/t1/,route=>route.fulfill({json:{conversation:{...conversations[0],accountId:'account-A',source:'gmail',messages:[{...messages[0],accountId:'account-A',source:'gmail',body:{kind:'plain-text',content:'Thread A'},attachments:[{id:'file-A',name:'only-in-A.pdf',mediaType:'application/pdf',sizeLabel:'1 KB'}]}]}}}))
+  await page.route(/8411\/v1\/conversations\/t2/, route => route.fulfill({ json: { conversation: { ...conversations[1], accountId: 'account-B', source: 'gmail', messages: [{ ...messages[1], accountId: 'account-B', source: 'gmail', body: { kind: 'plain-text', content: 'Hello from B' }, attachments: [] }] } } }))
+  await page.route(/8411\/v1\/messages\/.+\/attachments\/.+/,route=>route.fulfill({json:{opened:true,cached:true}}))
+  await page.route(/8412\/v1\/threads\/.+\/turns/,async route=>{sent=route.request().postDataJSON();await route.fulfill({json:{turn:{id:'turn-1'}}})})
+  await page.goto('/')
+  await page.getByRole('button',{name:'PDF only-in-A.pdf 1 KB',exact:true}).click()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.locator('[data-body]')).toContainText('Hello')
+  await expect(page.getByText('History for thread-conversation%3Aaccount-B%3At2', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Ask Codex')).toBeVisible()
+  await page.getByLabel('Ask Codex').fill('Summarize the selected thread')
+  await page.locator('[data-send]').click()
+  await expect.poll(()=>sent?.mailContext?.threadId).toBe('t2')
+  expect(sent.mailContext.attachment).toBeUndefined()
+  expect(sent.mailContext.accountId).toBe('account-B')
+})
+
+test('keeps local draft edits when an AI completion refresh returns late', async ({page})=>{
+  await page.addInitScript(()=>{
+    class FakeEvents {
+      static CLOSED=2;readyState=1;onopen:any;onmessage:any;onerror:any;
+      constructor(){(window as any).auditEvents=this;setTimeout(()=>this.onopen?.({}),0)}
+      close(){this.readyState=2}
+    }
+    ;(window as any).EventSource=FakeEvents
+  })
+  await stubAgent(page)
+  const draft={id:'audit-draft',inReplyToMessageId:'m1',accountId:'account-A',to:[messages[0]!.sender],subject:'Draft',bodyMarkdown:'Saved older text',bodyHtml:'<p>Saved older text</p>',bodyText:'Saved older text',attachments:[],state:'draft'}
+  await page.route('http://127.0.0.1:8411/v1/drafts',route=>route.fulfill({json:{draft}}))
+  let pending:any
+  await page.route(/8411\/v1\/drafts\/audit-draft/,async route=>{if(route.request().method()==='GET'){pending=route;return new Promise(()=>{})}return route.fulfill({json:{draft}})})
+  await page.goto('/')
+  await expect(page.getByText('History for thread-conversation%3Ademo%3At1', { exact: true })).toBeVisible()
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Connected')
+  await page.getByRole('button',{name:'Reply',exact:true}).click()
+  await expect(page.locator('[data-draft-body]')).toHaveValue('Saved older text')
+  await page.evaluate(()=>{(window as any).auditEvents.onmessage({data:JSON.stringify({method:'turn/completed',params:{turn:{status:'completed'}}})})})
+  await expect.poll(()=>Boolean(pending)).toBe(true)
+  await page.locator('[data-draft-body]').fill('My newer unsaved edit')
+  await pending.fulfill({json:{draft}})
+  await expect(page.locator('[data-draft-body]')).toHaveValue('My newer unsaved edit')
+})
+
+
+for (const intervening of ['edit', 'switch', 'none'] as const) {
+  test(`handles a newly created AI draft with an intervening ${intervening}`, async ({ page }) => {
+    await page.addInitScript(() => {
+      class FakeEvents {
+        static CLOSED = 2; readyState = 1; onopen: any; onmessage: any; onerror: any
+        constructor() { (window as any).auditEvents = this; setTimeout(() => this.onopen?.({}), 0) }
+        close() { this.readyState = 2 }
+      }
+      ;(window as any).EventSource = FakeEvents
+    })
+    await stubAgent(page)
+    const draft = { id: 'new-ai-draft', accountId: 'account-A', inReplyToMessageId: 'm1', to: [messages[0]!.sender], subject: 'AI draft', bodyMarkdown: 'AI saved text', bodyHtml: '<p>AI saved text</p>', bodyText: 'AI saved text', attachments: [], state: 'draft' }
+    let pending: import('@playwright/test').Route | undefined
+    await page.route(/8411\/v1\/drafts\/new-ai-draft/, async (route) => { pending = route; await new Promise(() => {}) })
+    await page.goto('/')
+    await expect(page.getByText('History for thread-conversation%3Ademo%3At1', { exact: true })).toBeVisible()
+    await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Connected')
+    if (intervening === 'edit') await page.getByRole('button', { name: 'Reply', exact: true }).click()
+    await page.evaluate(() => (window as any).auditEvents.onmessage({ data: JSON.stringify({ method: 'item/completed', params: { item: { type: 'mcpToolCall', status: 'completed', tool: 'gmail.create_draft', arguments: { link_id: 'account-A' }, result: { structuredContent: { id: 'new-ai-draft', message: { id: 'new-message' } } } } } }) }))
+    await expect.poll(() => Boolean(pending)).toBe(true)
+    if (intervening === 'edit') await page.locator('[data-draft-body]').fill('My local draft')
+    if (intervening === 'switch') await page.locator('[data-conversation-id="demo:t2"]').click()
+    await pending!.fulfill({ json: { draft } })
+    if (intervening === 'none') await expect(page.locator('[data-draft-body]')).toHaveValue('AI saved text')
+    if (intervening === 'edit') await expect(page.locator('[data-draft-body]')).toHaveValue('My local draft')
+    if (intervening === 'switch') await expect(page.locator('[data-draft]')).toBeHidden()
+  })
+}
