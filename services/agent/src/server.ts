@@ -262,11 +262,14 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     }
     if (request.method === 'GET' && url.pathname === '/v1/models') {
       try {
-        const [catalog, limits] = await Promise.all([
+        const cwd = defaultCodexWorkspace()
+        mkdirSync(cwd, { recursive: true })
+        const [catalog, limits, config] = await Promise.all([
           runtime.request('model/list', { cursor: null, limit: 100, includeHidden: true }),
           runtime.request('account/rateLimits/read', {}).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error)))),
+          runtime.request('config/read', { cwd }),
         ])
-        return json(response, 200, readModelCatalog(catalog, limits))
+        return json(response, 200, readModelCatalog(catalog, limits, config))
       } catch (error) {
         return json(response, 502, { error: 'model_catalog_unavailable', detail: errorMessage(error) })
       }

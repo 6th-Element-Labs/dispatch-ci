@@ -274,11 +274,10 @@ function conversationBindingKey(conversation: { accountId?: string; threadId: st
   return { kind: 'conversation', accountId, gmailThreadId: conversation.threadId }
 }
 let apps: AppSummary[] = []
-const DEFAULT_MODEL: DispatchModel = { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], exhausted: null, resetsAt: null }
 let modelCatalog: DispatchModelCatalog | undefined
 let modelCatalogError: string | undefined
-let selectedModelId = localStorage.getItem('dispatch.codex.model') || DEFAULT_MODEL.id
-let selectedEffort = localStorage.getItem('dispatch.codex.effort') || 'medium'
+let selectedModelId = localStorage.getItem('dispatch.codex.model') || ''
+let selectedEffort = localStorage.getItem('dispatch.codex.effort') || ''
 const userChoseModel = () => Boolean(localStorage.getItem('dispatch.codex.model'))
 const userChoseEffort = () => Boolean(localStorage.getItem('dispatch.codex.effort'))
 let activeAgentMessage: HTMLElement | undefined
@@ -1964,6 +1963,7 @@ async function connectAgent(): Promise<void> {
   agentConnecting = true
   if (!await api.agentReady()) {
     setAgentStatus('Reconnecting', 'Waiting for Codex App Server')
+    void refreshModelCatalog()
     agentConnecting = false
     scheduleAgentReconnect()
     return
@@ -2380,9 +2380,26 @@ const EFFORT_LABELS: Record<string, string> = { low: 'Low', medium: 'Medium', hi
 function effortLabel(effort: string): string {
   return EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1)
 }
+function placeholderModel(): DispatchModel {
+  return {
+    id: selectedModelId,
+    label: selectedModelId || (modelCatalogError ? 'Model' : 'Loading models'),
+    efforts: selectedEffort ? [selectedEffort] : [],
+    exhausted: null,
+    resetsAt: null,
+  }
+}
 function currentModel(): DispatchModel {
-  return modelCatalog?.models.find((model) => model.id === selectedModelId)
-    ?? (selectedModelId === DEFAULT_MODEL.id ? DEFAULT_MODEL : { ...DEFAULT_MODEL, id: selectedModelId, label: selectedModelId })
+  if (!modelCatalog) return placeholderModel()
+  return modelCatalog.models.find((model) => model.id === selectedModelId)
+    ?? (selectedModelId
+      ? { id: selectedModelId, label: selectedModelId, efforts: selectedEffort ? [selectedEffort] : [], exhausted: null, resetsAt: null }
+      : placeholderModel())
+}
+function modelToggleText(model: DispatchModel): string {
+  if (!model.id) return model.label
+  const effort = selectedEffort || modelCatalog?.defaults.effort || ''
+  return effort ? `${model.label} · ${effortLabel(effort)}` : model.label
 }
 function resetLabel(resetsAt: number | null): string {
   if (!resetsAt) return ''
@@ -2390,7 +2407,7 @@ function resetLabel(resetsAt: number | null): string {
 }
 function renderModelPicker(): void {
   const model = currentModel()
-  elements.modelLabel.textContent = `${model.label} · ${effortLabel(selectedEffort)}`
+  elements.modelLabel.textContent = modelToggleText(model)
   elements.modelToggle.classList.toggle('bg-blue-lt', model.exhausted !== true)
   elements.modelToggle.classList.toggle('text-blue', model.exhausted !== true)
   elements.modelToggle.classList.toggle('bg-yellow-lt', model.exhausted === true)
@@ -2401,7 +2418,7 @@ function renderModelPicker(): void {
   else if (modelCatalog.rateLimitsError) elements.modelSummary.textContent = `Usage limits unavailable: ${modelCatalog.rateLimitsError}`
   else elements.modelSummary.textContent = 'Model'
   elements.modelList.replaceChildren()
-  for (const candidate of modelCatalog?.models ?? [model]) {
+  for (const candidate of modelCatalog?.models ?? (model.id ? [model] : [])) {
     const row = document.createElement('button')
     row.type = 'button'
     row.className = 'dropdown-item dispatch-model-option'
@@ -2469,6 +2486,8 @@ async function refreshModelCatalog(): Promise<void> {
       }
       modelCatalog = await api.listModels()
       modelCatalogError = undefined
+      if (!userChoseModel()) selectedModelId = modelCatalog.defaults.model
+      if (!userChoseEffort()) selectedEffort = modelCatalog.defaults.effort
     } catch (error) {
       modelCatalogError = error instanceof Error ? error.message : String(error)
     } finally {
@@ -2489,6 +2508,7 @@ elements.modelToggle.addEventListener('click', (event) => {
   setModelMenu(elements.modelMenu.hidden)
 })
 renderModelPicker()
+void refreshModelCatalog()
 function setFolderMenu(open: boolean): void {
   elements.folderMenu.hidden = !open
   elements.folderMenu.classList.toggle('show', open)

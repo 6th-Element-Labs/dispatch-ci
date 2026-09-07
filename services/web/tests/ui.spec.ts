@@ -71,7 +71,8 @@ test('renders the three-panel mail surface and sanitizes provider HTML', async (
   await expect(page.getByText('Dispatch', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Codex' })).toBeVisible()
-  await expect(page.getByText('GPT-5.6 Sol · Medium')).toBeVisible()
+  await expect(page.locator('[data-model-toggle]')).toHaveText('Model')
+  await expect(page.getByText('GPT-5.6 Sol · Medium')).toHaveCount(0)
   await expect(page.locator('[data-context]')).toHaveCount(0)
   await expect(page.locator('.dispatch-agent > header')).toHaveCount(0)
   await expect(page.locator('.dispatch-agent > footer [data-model-toggle]')).toBeVisible()
@@ -361,9 +362,51 @@ test('picks Luna Reserve when Sol has hit its usage limit and sends it with the 
 test('tells the user the model list needs Codex when the agent is down', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Reconnecting')
+  await expect(page.locator('[data-model-toggle]')).toHaveText('Model')
   await page.locator('[data-model-toggle]').click()
   await expect(page.locator('[data-model-summary]')).toHaveText('Codex not connected')
-  await expect(page.locator('[data-model-id="gpt-5.6-sol"]')).toBeEnabled()
+  await expect(page.locator('[data-model-id="gpt-5.6-sol"]')).toHaveCount(0)
+})
+
+test('shows the Codex config default without pinning the next turn', async ({ page }) => {
+  const turns: Record<string, unknown>[] = []
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-config' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-config', created: false, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/thread-config$/, (route) => route.fulfill({ json: { thread: { turns: [] } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/thread-config/turns', async (route) => {
+    turns.push(await route.request().postDataJSON() as Record<string, unknown>)
+    await route.fulfill({ status: 202, json: { turn: { id: `turn-${turns.length}` } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
+  await page.route('http://127.0.0.1:8412/v1/models', (route) => route.fulfill({ json: {
+    defaults: { model: 'gpt-6-astra', effort: 'xhigh' },
+    rateLimitsError: null,
+    models: [
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra', efforts: ['medium', 'xhigh'], exhausted: false, resetsAt: null },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'medium', 'high'], exhausted: false, resetsAt: null },
+    ],
+  } }))
+  await page.goto('/')
+  const toggle = page.locator('[data-model-toggle]')
+  await expect(toggle).toHaveText('GPT-6 Astra · Extra high')
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Use my Codex default.')
+  await page.keyboard.press('Enter')
+  await expect.poll(() => turns.length).toBe(1)
+  expect(turns[0]).toMatchObject({ text: 'Use my Codex default.' })
+  expect(turns[0]).not.toHaveProperty('model')
+  expect(turns[0]).not.toHaveProperty('effort')
+
+  await toggle.click()
+  await page.locator('[data-model-id="gpt-5.6-sol"]').click()
+  await page.locator('[data-effort="medium"]').click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Use Sol this turn.')
+  await page.keyboard.press('Enter')
+  await expect.poll(() => turns.length).toBe(2)
+  expect(turns[1]).toMatchObject({ text: 'Use Sol this turn.', model: 'gpt-5.6-sol', effort: 'medium' })
 })
 
 test('does not ask Codex to revise when Gmail does not return a draft ID', async ({ page }) => {
@@ -1191,14 +1234,14 @@ test('answers Codex approval requests without changing the request id type', asy
   }))
   await page.goto('/')
   await expect(page.getByText('Approve command?')).toBeVisible()
-  await page.getByRole('button', { name: 'Allow once' }).first().click()
+  await page.getByRole('button', { name: 'Allow once' }).click()
   await expect.poll(() => approval).toEqual({ id: 42, result: { decision: 'accept' } })
   await expect(page.getByRole('button', { name: 'Allow once', exact: true })).toBeDisabled()
 })
 
 test('marks a conversation selected before its full thread finishes loading', async ({ page }) => {
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2/, async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 350))
+    await new Promise((resolve) => setTimeout(resolve, 500))
     const summary = conversations[1]!
     return route.fulfill({ json: { conversation: { ...summary, source: 'demo', messages: [{ ...messages[1]!, source: 'demo', body: { kind: 'plain-text', content: 'Loaded.' }, attachments: [] }] } } })
   })

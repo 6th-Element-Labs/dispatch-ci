@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CodexBindingStore } from '../src/codex-bindings.js'
+import { CodexBindingStore, defaultCodexWorkspace } from '../src/codex-bindings.js'
 import { createAgentServer } from '../src/server.js'
 
 const servers: ReturnType<typeof createAgentServer>[] = []
@@ -145,11 +145,13 @@ describe('dispatch-agent', () => {
         codex: { primary: { usedPercent: 100, resetsAt: 1788754468 }, rateLimitReachedType: 'rate_limit_reached' },
         base_model_inference: { primary: { usedPercent: 0, resetsAt: 1789252467 }, rateLimitReachedType: null },
       } }
+      if (method === 'config/read') return { config: { model: 'gpt-5.6-sol', model_reasoning_effort: 'medium' }, origins: {} }
       return { ok: true }
     })
     const response = await fetch(`${base}/v1/models`)
     expect(response.status).toBe(200)
     expect(fake.request).toHaveBeenCalledWith('model/list', expect.objectContaining({ includeHidden: true }))
+    expect(fake.request).toHaveBeenCalledWith('config/read', { cwd: defaultCodexWorkspace() })
     await expect(response.json()).resolves.toEqual({
       defaults: { model: 'gpt-5.6-sol', effort: 'medium' },
       rateLimitsError: null,
@@ -166,11 +168,46 @@ describe('dispatch-agent', () => {
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'model/list') return { data: [{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol', hidden: false, supportedReasoningEfforts: [] }] }
       if (method === 'account/rateLimits/read') throw new Error('limits offline')
+      if (method === 'config/read') return { config: { model: 'gpt-5.6-sol', model_reasoning_effort: 'medium' }, origins: {} }
       return { ok: true }
     })
     const response = await fetch(`${base}/v1/models`)
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ rateLimitsError: 'limits offline', models: [{ id: 'gpt-5.6-sol', exhausted: null }] })
+  })
+
+  it('uses the Codex config as the picker default and lists a hidden default model', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'model/list') return { data: [
+        { id: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol', hidden: false, isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] },
+        { id: 'gpt-6-astra', displayName: 'GPT-6-Astra', hidden: true, isDefault: false, supportedReasoningEfforts: [{ reasoningEffort: 'medium' }, { reasoningEffort: 'xhigh' }] },
+      ] }
+      if (method === 'account/rateLimits/read') return { rateLimitsByLimitId: {} }
+      if (method === 'config/read') return { config: { model: 'gpt-6-astra', model_reasoning_effort: 'xhigh' }, origins: {} }
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/models`)
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('config/read', { cwd: defaultCodexWorkspace() })
+    await expect(response.json()).resolves.toMatchObject({
+      defaults: { model: 'gpt-6-astra', effort: 'xhigh' },
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'gpt-6-astra', label: 'GPT-6 Astra', efforts: ['medium', 'xhigh'] }),
+      ]),
+    })
+  })
+
+  it('fails visibly when config/read is unavailable', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'model/list') return { data: [{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol', hidden: false, isDefault: true, supportedReasoningEfforts: [] }] }
+      if (method === 'config/read') throw new Error('config/read timed out')
+      return { ok: true }
+    })
+    const response = await fetch(`${base}/v1/models`)
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: 'model_catalog_unavailable', detail: 'config/read timed out' })
   })
 
   it('fails visibly when the catalog is unavailable', async () => {

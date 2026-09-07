@@ -7,7 +7,10 @@
  * Reset credits are deliberately not read or surfaced.
  */
 
-export const DISPATCH_DEFAULTS = { model: 'gpt-5.6-sol', effort: 'medium' } as const
+export interface DispatchDefaults {
+  readonly model: string
+  readonly effort: string
+}
 
 export interface DispatchModel {
   readonly id: string
@@ -21,7 +24,7 @@ export interface DispatchModel {
 
 export interface DispatchModelCatalog {
   readonly models: readonly DispatchModel[]
-  readonly defaults: typeof DISPATCH_DEFAULTS
+  readonly defaults: DispatchDefaults
   readonly rateLimitsError: string | null
 }
 
@@ -35,6 +38,8 @@ interface CatalogModel {
   id?: unknown
   displayName?: unknown
   hidden?: unknown
+  isDefault?: unknown
+  defaultReasoningEffort?: unknown
   supportedReasoningEfforts?: unknown
 }
 
@@ -77,18 +82,44 @@ function bucketState(bucket: Bucket | undefined): Pick<DispatchModel, 'exhausted
   return { exhausted, resetsAt }
 }
 
-export function readModelCatalog(catalog: unknown, limits: unknown): DispatchModelCatalog {
+function text(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
+}
+
+/** Reads model and effort from App Server `config/read`. */
+export function readConfigDefaults(value: unknown): DispatchDefaults | undefined {
+  const root = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+  const config = root?.config && typeof root.config === 'object' && !Array.isArray(root.config)
+    ? root.config as Record<string, unknown>
+    : root
+  const model = text(config?.model)
+  if (!model) return undefined
+  return { model, effort: text(config?.model_reasoning_effort) || 'medium' }
+}
+
+function catalogDefaults(entries: readonly CatalogModel[]): DispatchDefaults | undefined {
+  const entry = entries.find((item) => item.isDefault === true && text(item.id) && !NEVER_LISTED.has(text(item.id)))
+  const model = text(entry?.id)
+  if (!model) return undefined
+  const effort = text(entry?.defaultReasoningEffort) || efforts(entry ?? {})[0] || 'medium'
+  return { model, effort }
+}
+
+export function readModelCatalog(catalog: unknown, limits: unknown, config: unknown): DispatchModelCatalog {
   const container = catalog as { data?: unknown } | null
+  const entries = records(container?.data) as CatalogModel[]
+  const defaults = readConfigDefaults(config) ?? catalogDefaults(entries)
+  if (!defaults) throw new Error('Codex App Server returned no default model')
   const rateLimitsError = limits instanceof Error ? limits.message : null
   const byBucket = rateLimitsError ? {} : buckets(limits)
   const models: DispatchModel[] = []
-  for (const entry of records(container?.data) as CatalogModel[]) {
-    const id = typeof entry.id === 'string' ? entry.id : ''
+  for (const entry of entries) {
+    const id = text(entry.id)
     if (!id || NEVER_LISTED.has(id)) continue
-    if (entry.hidden === true && id !== RESERVE_MODEL) continue
+    if (entry.hidden === true && id !== RESERVE_MODEL && id !== defaults.model) continue
     const state = rateLimitsError ? { exhausted: null, resetsAt: null } : bucketState(byBucket[BUCKETS[id] ?? DEFAULT_BUCKET])
     models.push({ id, label: label(entry, id), efforts: efforts(entry), ...state })
   }
   if (models.length === 0) throw new Error('Codex App Server returned no models')
-  return { models, defaults: DISPATCH_DEFAULTS, rateLimitsError }
+  return { models, defaults, rateLimitsError }
 }
