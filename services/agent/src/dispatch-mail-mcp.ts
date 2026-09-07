@@ -38,6 +38,11 @@ export function createDispatchMailMcp(mailBase = `http://127.0.0.1:${process.env
   const readonly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
   const write = { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
   server.registerTool('list_accounts', { description: 'List the Gmail accounts connected to Dispatch. Use the exact accountId for draft actions.', inputSchema: {}, annotations: readonly }, () => result(() => request('/v1/accounts')))
+  server.registerTool('show_search_results', {
+    description: 'Display your email search findings as a selectable list in Dispatch. Search and read messages with Gmail tools first. Supply exact account/message IDs and a short verbatim plain-text body passage supporting each match (omit HTML tags; do not paraphrase); mail verifies the quotes. For unanswered questions, read the thread and assess replies rather than treating unread as unanswered. Keep relevance reasons concise. Use the requestId from the search request when supplied. Pass an empty matches array for no findings.',
+    inputSchema: { query: z.string().min(1).max(2000), requestId: z.string().max(100).optional(), matches: z.array(z.object({ accountId: z.string().min(1), messageId: z.string().min(1), quote: z.string().min(1).max(500), reason: z.string().max(500) })).max(30) },
+    annotations: readonly,
+  }, input => result(() => request('/v1/search-results', 'POST', input)))
   server.registerTool('read_draft', { description: 'Read the exact Gmail draft through Dispatch, including To, Cc, Bcc, body, and attachments. This does not change or send it.', inputSchema: identity, annotations: readonly }, ({ accountId, draftId }) => result(async () => ({ draft: await read(accountId, draftId) })))
   server.registerTool('create_draft', { description: 'Create a Gmail draft through Dispatch and open the saved draft in the editor. Creating a draft does not send it.', inputSchema: { accountId: identity.accountId, messageId: z.string().optional(), ...fields }, annotations: write }, ({ accountId, messageId, ...input }) => result(() => request('/v1/drafts', 'POST', {
     accountId, messageId: messageId ?? '', ...input, to: input.to?.join(', ') ?? '', cc: input.cc?.join(', ') ?? '', bcc: input.bcc?.join(', ') ?? '', bodyMarkdown: input.bodyMarkdown ?? '',

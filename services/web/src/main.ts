@@ -1,3 +1,4 @@
+import { resultExcerpt, highlightPassage } from './search-highlights.js'
 import { renderThreadAttachments } from './thread-attachments'
 import '@tabler/core/dist/css/tabler.min.css'
 import '@tabler/icons-webfont/dist/tabler-icons.min.css'
@@ -6,7 +7,7 @@ import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
-import type { AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import type { SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
@@ -45,7 +46,7 @@ app.innerHTML = `
         <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
         <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button>
         <span class="dispatch-toolbar-spacer" data-tauri-drag-region></span>
-        <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control form-control-sm" data-search placeholder="Search" aria-label="Search mail"><kbd class="dispatch-search-kbd" aria-hidden="true">⌘K</kbd></label>
+        <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control form-control-sm" data-search placeholder="Search" aria-label="Search mail" title="Type to filter; press Enter to search with Codex"><kbd class="dispatch-search-kbd" aria-hidden="true">⌘K</kbd></label><button class="btn btn-sm btn-icon btn-ghost-primary" type="button" data-ai-search aria-label="Search with Codex" title="Search with Codex (Enter)"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
       </div>
       <div class="dispatch-toolbar-cluster dispatch-toolbar-agent" data-toolbar-agent data-tauri-drag-region>
         <span class="dispatch-toolbar-spacer" data-tauri-drag-region></span>
@@ -60,6 +61,7 @@ app.innerHTML = `
       <nav class="dispatch-rail nav nav-pills flex-column bg-white" aria-label="Mail folders"><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
         <nav class="dispatch-mail-tabs" aria-label="Message state"><button class="dispatch-mail-tab active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="dispatch-mail-tab" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="dispatch-mail-tab" type="button" data-mail-state="read" aria-pressed="false">Read</button></nav>
+        <div class="dispatch-search-status" data-search-status hidden><span data-search-summary role="status"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-clear-search aria-label="Return to mailbox">Clear</button></div>
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
       </aside>
@@ -171,6 +173,8 @@ const elements = {
   connector: app.querySelector<HTMLElement>('[data-connector]')!,
   stream: app.querySelector<HTMLElement>('[data-agent-stream]')!,
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
+  searchStatus: app.querySelector<HTMLElement>('[data-search-status]')!,
+  searchSummary: app.querySelector<HTMLElement>('[data-search-summary]')!,
   search: app.querySelector<HTMLInputElement>('[data-search]')!,
   toolbarMessages: app.querySelector<HTMLElement>('[data-toolbar-messages]')!,
   toolbarAgent: app.querySelector<HTMLElement>('[data-toolbar-agent]')!,
@@ -299,6 +303,8 @@ const MAIL_STARTUP_GRACE_MS = 20_000
 const MAIL_STARTUP_RETRY_MS = 500
 const mailStartupGraceUntil = performance.now() + MAIL_STARTUP_GRACE_MS
 let searchQuery = ''
+let acceptChatSearchResults = true
+let searchView: (SearchResults & { phase: 'pending' | 'ready' | 'failed'; error?: string }) | undefined
 let searchTimer: number | undefined
 let activeTurnId: string | undefined
 let codexContextReady = false
@@ -480,14 +486,17 @@ function attachmentIndicator(count?: number): HTMLElement {
 
 function renderList(emptyMessage = defaultEmptyListMessage()): void {
   elements.list.innerHTML = ''
-  if (conversations.length === 0) {
+  const listed = searchView ? searchView.results.map(result => result.conversation) : conversations
+  renderSearchStatus()
+  if (searchView) emptyMessage = searchView.phase === 'pending' ? 'Searching with Codex…' : searchView.phase === 'failed' ? searchView.error || 'Search failed.' : 'No matching conversations.'
+  if (listed.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty text-secondary p-4 dispatch-message-list-empty'
     empty.textContent = emptyMessage
     elements.list.append(empty)
     return
   }
-  for (const conversation of conversations) {
+  for (const conversation of listed) {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'list-group-item list-group-item-action dispatch-message'
@@ -522,13 +531,22 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     subject.textContent = conversation.subject
     subject.title = conversation.subject
     const preview = document.createElement('small')
-    preview.textContent = conversation.preview
+    const match = searchView?.results.find(result => result.conversation.id === conversation.id)
+    button.classList.toggle('dispatch-search-match', Boolean(match))
+    if (match?.hits[0]) preview.append(resultExcerpt(match.hits[0]))
+    else preview.textContent = conversation.preview
     preview.title = conversation.preview
     const account = document.createElement('span')
     account.className = 'dispatch-message-account'
     account.textContent = conversation.accountLabel ?? ''
     account.title = conversation.accountLabel ?? ''
     content.append(top, subject, preview)
+    if (match?.hits[0]) {
+      const reason = document.createElement('span')
+      reason.className = 'dispatch-search-reason'
+      reason.textContent = match.hits[0].reason
+      content.append(reason)
+    }
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
     button.addEventListener('click', () => { void selectConversation(conversation.id, { revealOnMobile: true, startReadDwell: true }) })
@@ -538,11 +556,11 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     })
     elements.list.append(button)
   }
-  if (nextConversationCursor) {
+  if (!searchView && nextConversationCursor) {
     const more = document.createElement('button')
     more.type = 'button'
     more.className = 'btn btn-outline-secondary m-3 dispatch-load-more'
-    more.textContent = loadingMoreConversations ? 'Loading more…' : `Load more · ${Math.max(0, conversationTotal - conversations.length)} remaining`
+    more.textContent = loadingMoreConversations ? 'Loading more…' : `Load more · ${Math.max(0, conversationTotal - listed.length)} remaining`
     more.disabled = loadingMoreConversations
     more.addEventListener('click', () => { void loadMoreConversations() })
     elements.list.append(more)
@@ -575,7 +593,7 @@ function accountColor(accountId: string | undefined): string {
 
 function renderThreadMeta(summary: Pick<ConversationSummary, 'messageCount' | 'accountId' | 'accountLabel'>): void {
   elements.messageCount.textContent = summary.messageCount === 1 ? '1 message' : `${summary.messageCount} messages`
-  elements.threadMailbox.textContent = mailboxLabels[mailbox]
+  elements.threadMailbox.textContent = searchView ? 'Search result' : mailboxLabels[mailbox]
   const showAccount = Boolean(summary.accountLabel) && accounts.length > 1
   elements.address.hidden = !showAccount
   elements.accountDot.hidden = !showAccount
@@ -724,7 +742,8 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
 
 async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean } = {}): Promise<void> {
   markReadDwell.cancel()
-  const summary = conversations.find((conversation) => conversation.id === id)
+  const matchResult = searchView?.results.find(result => result.conversation.id === id)
+  const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
   if (!summary) return
   const sequence = ++selectionSequence
   selectedAttachmentContext = undefined
@@ -775,7 +794,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     markReadDwell.schedule(conversationId, () => { void completeReadDwell(conversationId) })
   }
 
-  if (mailbox === 'drafts' && summary.accountId) {
+  if (!searchView && mailbox === 'drafts' && summary.accountId) {
     try {
       const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId, summary.threadId)
       if (sequence !== selectionSequence || selectedConversationId !== id) return
@@ -818,7 +837,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     elements.subject.textContent = conversation.subject
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
 const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
-    elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0)))
+    elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0 || Boolean(matchResult?.hits.some(hit => hit.messageId === message.id)))))
     const attachmentCount = newestFirst.reduce((count, message) => count + message.attachments.length, 0)
     threadAttachmentCounts.set(id, attachmentCount)
     renderList()
@@ -849,6 +868,22 @@ const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(
       toggle.hidden = false
       elements.body.prepend(files)
       renderDisclosure()
+    }
+    if (matchResult) {
+      for (const hit of matchResult.hits) {
+        const message = [...elements.body.querySelectorAll<HTMLElement>('[data-message-id]')].find(node => node.dataset.messageId === hit.messageId)
+        const content = message?.querySelector<HTMLElement>('.dispatch-thread-content')
+        if (content && !highlightPassage(content, hit.quote)) {
+          const evidence = document.createElement('div')
+          evidence.className = 'dispatch-search-evidence'
+          evidence.append(resultExcerpt(hit)); content.before(evidence)
+        }
+      }
+      const first = matchResult.hits[0]
+      if (first) {
+        const message = [...elements.body.querySelectorAll<HTMLElement>('[data-message-id]')].find(node => node.dataset.messageId === first.messageId)
+        ;(message?.querySelector('mark') ?? message)?.scrollIntoView({ block: 'center' })
+      }
     }
     void warmAttachments(conversation, sequence)
     prefetchConversations(id)
@@ -1007,7 +1042,7 @@ async function runThreadContextCommand(id: string): Promise<void> {
 }
 
 function prefetchConversations(exceptId: string): void {
-  for (const summary of conversations.filter((item) => item.id !== exceptId).slice(0, 3)) {
+  for (const summary of (searchView?.results.map(result => result.conversation) ?? conversations).filter((item) => item.id !== exceptId).slice(0, 3)) {
     const key = `${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
     if (!conversationCache.has(key)) {
       const request = api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId)
@@ -1805,6 +1840,10 @@ function handleAgentEvent(message: AgentEvent): void {
   if (message.method === 'turn/completed') {
     const turn = params?.turn as Record<string, unknown> | undefined
     const status = String(turn?.status ?? 'completed')
+    if (searchView?.phase === 'pending') {
+      searchView = { ...searchView, phase: 'failed', error: status === 'interrupted' ? 'Search stopped.' : 'Codex did not publish verified results. Refine the request or try again.' }
+      renderList()
+    }
     // Codex may have created or updated a draft; the Drafts folder is served live, so show it now.
     if (mailbox === 'drafts') void loadConversations(true)
     if (status === 'failed') {
@@ -1878,6 +1917,21 @@ async function refreshCodexDraft(draftId: string, accountId: string, createdByCo
 
 async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
   if (!codexContextReady) return
+  if (effect.kind === 'search') {
+    if (!effect.search.requestId && !acceptChatSearchResults) return
+    if (effect.search.requestId && effect.search.requestId !== searchView?.requestId) return
+    if (searchView?.phase === 'pending' && effect.search.requestId !== searchView.requestId) return
+    if (searchView?.requestId && selectedAccountId && effect.search.results.some(result => result.conversation.accountId !== selectedAccountId)) {
+      searchView = { ...searchView, phase: 'failed', error: 'The results do not match the selected account. Please retry.' }; renderList(); return
+    }
+    conversationLoadSequence += 1
+    const query = effect.search.requestId && effect.search.requestId === searchView?.requestId ? searchView.query : effect.search.query
+    searchView = { ...effect.search, query, phase: 'ready' }
+    searchQuery = query
+    elements.search.value = searchQuery
+    renderList()
+    return
+  }
   if (effect.kind === 'draft') {
     await refreshCodexDraft(effect.draftId, effect.accountId, true)
     return
@@ -2012,6 +2066,7 @@ async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
   if (!text || !threadId) return
   if (!codexContextReady) { addAgentMessage('error', 'Codex is still connecting to the selected conversation. Please try again.'); return }
+  acceptChatSearchResults = true
   addAgentMessage('user', text)
   setAgentStatus('Working')
   elements.prompt.value = ''
@@ -2026,6 +2081,7 @@ async function sendPrompt(): Promise<void> {
       ...userChoseEffort() ? { effort: selectedEffort } : {},
       appId: gmailAppId(apps),
       mailContext: selected || activeDraft ? {
+        searchMatch: selected && searchView ? { query: searchView.query, hits: searchView.results.find(result => result.conversation.id === selectedConversationId)?.hits } : undefined,
         draft: activeDraft ? { id: activeDraft.id, accountId: activeDraft.accountId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, hasUnsavedChanges: draftDirty } : undefined,
         accountId: selected?.accountId,
         messageId: selected?.latestMessageId,
@@ -2044,7 +2100,70 @@ async function sendPrompt(): Promise<void> {
   }
 }
 
+function renderSearchStatus(): void {
+  elements.searchStatus.hidden = !searchView
+  elements.searchSummary.textContent = !searchView ? '' : searchView.phase === 'pending' ? 'Searching with Codex…' : searchView.phase === 'failed' ? 'Search needs attention' : `${searchView.results.length} matching ${searchView.results.length === 1 ? 'thread' : 'threads'} · Codex search`
+}
+
+function clearSearchView(): void {
+  acceptChatSearchResults = false
+  if (!searchView) return
+  searchView = undefined
+  conversationLoadSequence += 1
+  searchQuery = ''
+  elements.search.value = ''
+  renderSearchStatus()
+}
+
+async function searchWithCodex(): Promise<void> {
+  const query = elements.search.value.trim()
+  if (!query) return
+  if (searchTimer !== undefined) window.clearTimeout(searchTimer)
+  try {
+    // Navigation must not drop a draft that has not reached Gmail yet.
+    if (activeDraft && !activeDraft.id && draftDirty) await saveDraft(false)
+    else await flushDraftAutosave()
+    if (draftDirty || draftSaveFlight) throw new Error('Your draft still has unsaved changes. Save it before searching.')
+  } catch (error) { elements.mailError.hidden = false; elements.mailError.textContent = String(error); return }
+  const requestId = crypto.randomUUID()
+  conversationLoadSequence += 1
+  const sequence = ++selectionSequence
+  markReadDwell.cancel()
+  acceptChatSearchResults = false
+  searchView = { query, requestId, results: [], phase: 'pending' }
+  searchQuery = query
+  selected = undefined; selectedConversationId = undefined; selectedAttachmentContext = undefined
+  activeDraft = undefined; draftEditSession += 1; codexContextReady = false
+  elements.reader.hidden = true; elements.readerEmpty.hidden = false
+  elements.readerEmpty.textContent = 'Search results will appear in the message list.'
+  elements.mailError.hidden = true
+  panels.messages = true; panels.agent = true
+  if (usesMobilePanels()) mobilePanel = 'messages'
+  renderPanels(); renderList()
+  const account = selectedAccountId ? accounts.find(item => item.id === selectedAccountId) : undefined
+  try {
+    if (!await bindAndShowCodex({ kind: 'unbound' }, { sequence, clearOnFailure: true }) || !threadId) throw new Error('Codex is not connected. Try the search again when it is ready.')
+    if (sequence !== selectionSequence || searchView?.requestId !== requestId) return
+    addAgentMessage('user', query)
+    const prompt = `${query}\n\nSelected Gmail search context: ` + [
+      `Search email for this request: ${JSON.stringify(query)}.`,
+      `Search scope: ${account ? `only account ${account.id} (${account.email})` : 'all connected Gmail accounts'}. Search across mail folders, not only the current Inbox list.`,
+      `Current local time: ${new Date().toString()}.`,
+      'Use Gmail tools to search and read candidates. For unanswered questions, inspect the conversation replies; unread does not mean unanswered. Do not infer customer identity when the evidence is unclear.',
+      `Publish your findings with dispatch_mail.show_search_results using requestId ${requestId} and the original query. Supply the exact account ID, message ID, a verbatim body quote, and a short relevance reason for each match. Return an empty matches list if no sources match.`,
+    ].join(' ')
+    setAgentStatus('Working')
+    if (activeTurnId) await api.steerTurn(threadId, activeTurnId, prompt)
+    else await api.startTurn(threadId, { text: prompt, ...userChoseModel() ? { model: selectedModelId } : {}, ...userChoseEffort() ? { effort: selectedEffort } : {}, appId: gmailAppId(apps) })
+  } catch (error) {
+    if (searchView?.requestId !== requestId) return
+    searchView = { ...searchView, phase: 'failed', error: error instanceof Error ? error.message : String(error) }
+    renderList()
+  }
+}
+
 async function loadConversations(preserveSelection = false): Promise<void> {
+  if (searchView) { renderList(); return }
   const loadSequence = ++conversationLoadSequence
   const cacheKey = `dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailbox}:${mailState}:${searchQuery}`
   let usedCache = false
@@ -2286,10 +2405,12 @@ app.querySelector<HTMLButtonElement>('[data-refresh]')?.addEventListener('click'
   }).finally(() => { button.disabled = false })
 })
 elements.account.addEventListener('change', () => {
+  clearSearchView()
   selectedAccountId = elements.account.value || undefined
   void loadConversations()
 })
 app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => button.addEventListener('click', () => {
+  clearSearchView()
   mailbox = button.dataset.mailbox as GmailMailbox
   renderMailbox()
   void loadConversations()
@@ -2297,9 +2418,15 @@ app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => bu
 elements.search.addEventListener('input', () => {
   searchQuery = elements.search.value.trim()
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
+  if (searchView && !searchQuery) clearSearchView()
+  if (searchView || activeDraft) return
   searchTimer = window.setTimeout(() => { void loadConversations() }, 250)
 })
+elements.search.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void searchWithCodex() } })
+app.querySelector('[data-ai-search]')?.addEventListener('click', () => { void searchWithCodex() })
+app.querySelector('[data-clear-search]')?.addEventListener('click', () => { clearSearchView(); void loadConversations() })
 app.querySelectorAll<HTMLButtonElement>('[data-mail-state]').forEach((button) => button.addEventListener('click', () => {
+  clearSearchView()
   mailState = button.dataset.mailState as MailStateFilter
   void loadConversations()
 }))

@@ -264,3 +264,11 @@ button { cursor: pointer; }
 .dispatch-thread-file-open > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .dispatch-thread-file > small { font-size: .7rem; overflow-wrap: anywhere; }
 .dispatch-thread-file-source { font-size: .7rem; padding: .2rem .4rem; }
+
+.dispatch-search-status { grid-row: 2; display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem .75rem; border-bottom: 1px solid var(--tblr-border-color); font-size: .75rem; }
+.dispatch-message-list { grid-row: 3; }
+.dispatch-messages > [data-mail-error] { grid-row: 4; }
+.dispatch-search-reason { display: block; margin-top: .35rem; font-size: .7rem; color: var(--tblr-secondary-color); }
+.dispatch-search-evidence { padding: .75rem 1.25rem; font-size: .8rem; border-bottom: 1px solid var(--tblr-border-color); }
+.dispatch-message mark, .dispatch-thread-content mark, .dispatch-search-evidence mark { padding: 0; color: inherit; background: var(--tblr-yellow-lt, #fff2b2); }
+.dispatch-search-match small { -webkit-line-clamp: 4; }

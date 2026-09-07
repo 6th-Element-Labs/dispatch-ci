@@ -115,3 +115,8 @@ export interface ConversationProjection extends ConversationSummary {
   readonly messages: readonly MessageProjection[]
   readonly source: 'demo' | 'gmail'
 }
+
+
+export interface SearchHit { readonly messageId: string; readonly quote: string; readonly excerpt: string; readonly matchStart: number; readonly matchEnd: number; readonly reason: string }
+export interface SearchResult { readonly conversation: ConversationSummary; readonly hits: readonly SearchHit[] }
+export interface SearchResults { readonly query: string; readonly requestId?: string; readonly results: readonly SearchResult[] }

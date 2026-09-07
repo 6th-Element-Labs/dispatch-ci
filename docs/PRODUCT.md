@@ -77,3 +77,12 @@ Gmail draft recipient fields accept the connector's string arrays as well as leg
 
 
 Dispatch embeds the full installed Codex experience, not an email-only agent. It adds no model, sandbox, capability allowlist, or send-button-only policy. The user’s normal Codex configuration and permissions remain authoritative. The internal `dispatch_mail` tools provide an optional path to list accounts, read/create/update drafts, and send the saved draft through Dispatch’s mail service. Header-only updates preserve original MIME content and attachments. These tools are configured for new and resumed conversations, and their confirmed results update the visible editor. The visible draft ID, account, recipients, and unsaved state are supplied as context.
+
+
+## Search with Codex
+
+Typing in Search keeps the instant indexed filter. Enter or the adjacent Tabler sparkles button submits a natural-language search to the existing unbound Codex task. The selected account is the search scope; All inboxes searches connected accounts across mail folders. Unsaved drafts must be saved successfully before navigating into search.
+
+Codex uses its installed Gmail tools to search and read candidate messages, then publishes a result list through `dispatch_mail.show_search_results`. The mail service verifies every account/message identity and quoted body passage before returning a projection. Codex supplies relevance judgments; unread status is not treated as evidence that a question is unanswered.
+
+Results stay in the message list during background sync. Each row shows a highlighted source excerpt and the reason Codex selected it. Clicking a result loads the full conversation, expands the matched messages, and highlights the passage in the reader. Clear returns to the ordinary mailbox. Superseded results cannot replace a newer search. Empty results, failed searches, and missing source evidence remain distinct.

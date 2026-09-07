@@ -1757,3 +1757,86 @@ for (const hasRecipient of [true, false]) {
     }
   })
 }
+
+async function searchEvents(page: import('@playwright/test').Page) {
+  await page.addInitScript(() => {
+    class Events {
+      static CLOSED = 2; readyState = 1; onopen: any; onmessage: any; onerror: any
+      constructor() { (window as any).searchEvents = this; setTimeout(() => this.onopen?.({}), 0) }
+      close() { this.readyState = 2 }
+    }
+    ;(window as any).EventSource = Events
+  })
+  await stubAgent(page)
+}
+async function publishSearch(page: import('@playwright/test').Page, searchResults: unknown) {
+  await page.evaluate(searchResults => (window as any).searchEvents.onmessage({ data: JSON.stringify({ method: 'item/completed', params: { item: { type: 'mcpToolCall', server: 'dispatch_mail', tool: 'show_search_results', status: 'completed', result: { structuredContent: { searchResults } } } } }) }), searchResults)
+}
+
+test('natural-language search renders a selectable source list and highlights the matching older email', async ({ page }) => {
+  await searchEvents(page)
+  let prompt = ''
+  let searchTurnPayload: any
+  await page.route(/8412\/v1\/threads\/.+\/turns/, async route => { searchTurnPayload = route.request().postDataJSON(); prompt = searchTurnPayload.text; await route.fulfill({ json: { turn: { id: 'search-turn' } } }) })
+  const summary = { ...conversations[0]!, id: 'account-A:outside-thread', accountId: 'account-A', accountLabel: 'work@example.com', threadId: 'outside-thread', latestMessageId: 'old-hit', subject: 'Delivery commitment', unread: false }
+  const older = { ...messages[0]!, id: 'old-hit', threadId: 'outside-thread', accountId: 'account-A', source: 'gmail', unread: false, receivedAt: '2026-09-02T08:00:00Z', body: { kind: 'sanitized-html', content: '<p>We agreed to <strong>September</strong> delivery.</p>' }, attachments: [] }
+  await page.route(/8411\/v1\/conversations\/outside-thread/, route => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...older, id: 'new-hit', receivedAt: '2026-09-03T08:00:00Z', body: { kind: 'plain-text', content: 'Thanks, noted.' } }, older] } } }))
+  await page.route('http://127.0.0.1:8411/v1/sync', route => route.fulfill({ json: { sync: { state: 'ready', completedAt: '2026-09-08T08:00:00Z' } } }))
+  await page.goto('/')
+  await expect(page.getByText('History for thread-conversation%3Ademo%3At1', { exact: true })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Search mail' }).fill('Find the email where we agreed to September delivery')
+  await page.getByRole('textbox', { name: 'Search mail' }).press('Enter')
+  await expect.poll(() => prompt).toContain('show_search_results')
+  const requestId = /using requestId ([\w-]+)/.exec(prompt)![1]
+  expect(prompt).toContain('all connected Gmail accounts')
+  const quote = 'We agreed to September delivery.'
+  await publishSearch(page, { query: 'September delivery', requestId, results: [{ conversation: summary, hits: [{ messageId: 'old-hit', quote, excerpt: quote, matchStart: 0, matchEnd: quote.length, reason: 'The customer confirms the delivery month.' }] }] })
+  await expect(page.locator('[data-search-summary]')).toHaveText('1 matching thread · Codex search')
+  await expect(page.locator('[data-message-list] .dispatch-message')).toHaveCount(1)
+  await expect(page.locator('[data-message-list] mark')).toHaveText(quote)
+  await page.locator('[data-conversation-id="account-A:outside-thread"]').click()
+  await expect(page.locator('[data-message-id="old-hit"]')).not.toHaveClass(/dispatch-thread-collapsed/)
+  await expect.poll(async () => (await page.locator('[data-message-id="old-hit"] .dispatch-thread-content mark').allTextContents()).join('')).toBe(quote)
+  await expect(page.getByText('History for thread-conversation%3Aaccount-A%3Aoutside-thread', { exact: true })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Explain this commitment')
+  await page.locator('[data-send]').click()
+  await expect.poll(() => searchTurnPayload?.mailContext?.searchMatch?.hits?.[0]?.messageId).toBe('old-hit')
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+  await expect(page.locator('[data-message-list] .dispatch-message')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Return to mailbox' }).click()
+  await expect(page.locator('[data-message-list] .dispatch-message')).toHaveCount(2)
+  await expect(page.locator('[data-search-status]')).toBeHidden()
+  await publishSearch(page, { query: 'Late result after Clear', results: [] })
+  await expect(page.locator('[data-search-status]')).toBeHidden()
+  await expect(page.locator('[data-message-list] .dispatch-message')).toHaveCount(2)
+})
+
+test('a superseded search cannot replace newer results and empty results are explicit', async ({ page }) => {
+  await searchEvents(page)
+  const prompts: string[] = []
+  await page.route(/8412\/v1\/threads\/.+\/turns/, async route => { prompts.push(route.request().postDataJSON().text); await route.fulfill({ json: { turn: { id: 'search-turn' } } }) })
+  await page.goto('/')
+  await expect(page.getByText('History for thread-conversation%3Ademo%3At1', { exact: true })).toBeVisible()
+  const input = page.getByRole('textbox', { name: 'Search mail' })
+  await input.fill('first search'); await input.press('Enter')
+  await expect.poll(() => prompts.length).toBe(1)
+  await input.fill('second search'); await input.press('Enter')
+  await expect.poll(() => prompts.length).toBe(2)
+  const first = /using requestId ([\w-]+)/.exec(prompts[0]!)![1]
+  const second = /using requestId ([\w-]+)/.exec(prompts[1]!)![1]
+  await publishSearch(page, { query: 'first search', requestId: first, results: [] })
+  await expect(page.locator('[data-search-summary]')).toHaveText('Searching with Codex…')
+  await publishSearch(page, { query: 'second search', requestId: second, results: [] })
+  await expect(page.locator('[data-search-summary]')).toHaveText('0 matching threads · Codex search')
+  await expect(page.getByText('No matching conversations.', { exact: true })).toBeVisible()
+})
+
+test('a search requested in ordinary Codex chat can also publish the mail list', async ({ page }) => {
+  await searchEvents(page)
+  await page.goto('/')
+  await expect(page.getByText('History for thread-conversation%3Ademo%3At1', { exact: true })).toBeVisible()
+  await publishSearch(page, { query: 'Related correspondence', results: [] })
+  await expect(page.locator('[data-search-summary]')).toHaveText('0 matching threads · Codex search')
+  await expect(page.getByRole('textbox', { name: 'Search mail' })).toHaveValue('Related correspondence')
+})

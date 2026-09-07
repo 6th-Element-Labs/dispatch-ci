@@ -69,3 +69,14 @@ it('opens and reconciles drafts changed through Dispatch software controls', () 
     .toEqual({ kind: 'sent', draftId: 'draft-A', accountId: 'account-A' })
   expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'send_draft', result: { isError: true, structuredContent: { id: 'sent-A', draftId: 'draft-A', accountId: 'account-A' } } })).toBeUndefined()
 })
+
+it('publishes the mail service search projection only from a successful Dispatch tool', () => {
+  const searchResults = { query: 'delivery', requestId: 'search-A', results: [] }
+  const item = { type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'show_search_results', result: { structuredContent: { searchResults } } }
+  expect(codexMailEffect(item)).toEqual({ kind: 'search', search: searchResults })
+  expect(codexMailEffect({ ...item, result: { ...item.result, isError: true } })).toBeUndefined()
+})
+
+it('keeps restored search prompts free of internal search instructions', () => {
+  expect(visibleUserPrompt('Find the delivery agreement\n\nSelected Gmail search context: requestId internal-1; verify quotes')).toBe('Find the delivery agreement')
+})

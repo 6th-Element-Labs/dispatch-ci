@@ -1,3 +1,4 @@
+import { projectSearchResults, type SearchMatch } from './search-results.js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { DemoMailProvider } from './demo-provider.js'
@@ -189,6 +190,27 @@ export function createMailServer(
             return writeJson(response, 200, { source: 'demo', scope: 'demo', state, conversations: page, nextCursor, total: conversations.length })
           })()
         : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/search-results') {
+      try {
+        const value = draftObject(await readJson(request))
+        if (!value || typeof value.query !== 'string' || !value.query.trim() || value.query.length > 2000
+          || !Array.isArray(value.matches) || value.matches.length > 30
+          || (value.requestId !== undefined && (typeof value.requestId !== 'string' || value.requestId.length > 100))) {
+          return writeJson(response, 400, { error: 'invalid_search_results' })
+        }
+        const matches: SearchMatch[] = []
+        for (const item of value.matches) {
+          const match = draftObject(item)
+          if (!match || typeof match.accountId !== 'string' || !match.accountId || typeof match.messageId !== 'string' || !match.messageId
+            || typeof match.quote !== 'string' || !match.quote.trim() || match.quote.length > 500 || typeof match.reason !== 'string' || match.reason.length > 500) {
+            return writeJson(response, 400, { error: 'invalid_search_match' })
+          }
+          matches.push({ accountId: match.accountId, messageId: match.messageId, quote: match.quote, reason: match.reason })
+        }
+        const searchResults = await projectSearchResults(value.query.trim(), matches, (accountId, id) => gmail.readMessage(accountId, id), value.requestId as string | undefined)
+        return writeJson(response, 200, { searchResults })
+      } catch (error) { return writeJson(response, 502, { error: 'search_evidence_failed', detail: error instanceof Error ? error.message : String(error) }) }
     }
     const conversationMatch = /^\/v1\/conversations\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && conversationMatch?.[1]) {

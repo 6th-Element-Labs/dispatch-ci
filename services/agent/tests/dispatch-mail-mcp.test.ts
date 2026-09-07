@@ -15,6 +15,7 @@ async function setup() {
     const chunks = []; for await (const chunk of req) chunks.push(chunk)
     const body = JSON.parse(Buffer.concat(chunks).toString() || '{}')
     writes.push({ method: req.method!, url: req.url!, body })
+    if (req.url === '/v1/search-results') return res.end(JSON.stringify({ searchResults: { query: body.query, requestId: body.requestId, results: [] } }))
     if (req.url?.includes('action=send')) return res.end(JSON.stringify({ delivery: { structuredContent: { id: 'sent-A' } } }))
     if (body.to !== undefined) draft = { ...draft, to: body.to ? [{ address: body.to }] : [] }
     return res.end(JSON.stringify({ draft }))
@@ -46,4 +47,13 @@ it('rejects a wrong-account response before any write', async () => {
   const result = await client.callTool({ name: 'send_draft', arguments: { accountId: 'other-account', draftId: 'draft-A' } })
   expect(result.isError).toBe(true)
   expect(writes).toEqual([])
+})
+
+
+it('publishes email findings through the mail-owned source validation route', async () => {
+  const { client, writes } = await setup()
+  const input = { query: 'September delivery', requestId: 'search-one', matches: [] }
+  const result = await client.callTool({ name: 'show_search_results', arguments: input })
+  expect(result.structuredContent).toEqual({ searchResults: { query: input.query, requestId: input.requestId, results: [] } })
+  expect(writes).toEqual([{ method: 'POST', url: '/v1/search-results', body: input }])
 })
