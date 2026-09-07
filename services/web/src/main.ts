@@ -1,3 +1,4 @@
+import { renderThreadAttachments } from './thread-attachments'
 import '@tabler/core/dist/css/tabler.min.css'
 import '@tabler/icons-webfont/dist/tabler-icons.min.css'
 import './styles.css'
@@ -89,7 +90,7 @@ app.innerHTML = `
                 </div>
               </div>
             </div>
-            <div class="dispatch-thread-meta" data-thread-meta><span data-message-count></span><span class="dispatch-meta-sep">·</span><span data-thread-mailbox></span><span class="dispatch-meta-sep" data-account-sep hidden>·</span><span class="dispatch-account-dot" data-account-dot hidden aria-hidden="true"></span><span data-address hidden></span></div>
+            <div class="dispatch-thread-meta" data-thread-meta><span data-message-count></span><span class="dispatch-meta-sep">·</span><span data-thread-mailbox></span><span class="dispatch-meta-sep" data-account-sep hidden>·</span><span class="dispatch-account-dot" data-account-dot hidden aria-hidden="true"></span><span data-address hidden></span><button type="button" class="btn btn-sm btn-ghost-primary dispatch-thread-files-toggle" data-thread-files-toggle aria-expanded="false" aria-controls="dispatch-thread-files" hidden></button></div>
           </header>
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
@@ -146,6 +147,7 @@ const elements = {
   readerMore: app.querySelector<HTMLButtonElement>('[data-reader-more]')!,
   readerMenu: app.querySelector<HTMLElement>('[data-reader-menu]')!,
   body: app.querySelector<HTMLElement>('[data-body]')!,
+  threadFilesToggle: app.querySelector<HTMLButtonElement>('[data-thread-files-toggle]')!,
   attachments: app.querySelector<HTMLElement>('[data-attachments]')!,
   draft: app.querySelector<HTMLElement>('[data-draft]')!,
   draftTo: app.querySelector<HTMLInputElement>('[data-draft-to]')!,
@@ -458,6 +460,18 @@ function renderMailbox(): void {
   elements.moveInbox.hidden = mailbox !== 'archive' && mailbox !== 'spam' && mailbox !== 'trash'
 }
 
+const threadAttachmentCounts = new Map<string, number>()
+const expandedAttachmentThreads = new Set<string>()
+
+function attachmentIndicator(count?: number): HTMLElement {
+  const indicator = document.createElement('span')
+  indicator.className = 'dispatch-attachment-indicator text-primary'
+  indicator.setAttribute('aria-label', count === undefined ? 'Has attachments' : `${count} attachments`)
+  indicator.innerHTML = '<i class="ti ti-paperclip" aria-hidden="true"></i>'
+  if (count !== undefined) indicator.append(document.createTextNode(String(count)))
+  return indicator
+}
+
 function renderList(emptyMessage = defaultEmptyListMessage()): void {
   elements.list.innerHTML = ''
   if (conversations.length === 0) {
@@ -493,6 +507,11 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     const time = document.createElement('time')
     time.textContent = conversation.receivedLabel
     top.append(sender, time)
+    const attachmentCount = threadAttachmentCounts.get(conversation.id)
+    if (attachmentCount ? attachmentCount > 0 : conversation.hasAttachment && attachmentCount !== 0) {
+      top.append(attachmentIndicator(attachmentCount))
+      button.setAttribute('aria-label', `${button.getAttribute('aria-label')}, has attachments`)
+    }
     const subject = document.createElement('b')
     subject.textContent = conversation.subject
     subject.title = conversation.subject
@@ -562,6 +581,7 @@ function renderThreadMeta(summary: Pick<ConversationSummary, 'messageCount' | 'a
 function renderThreadMessage(message: MessageProjection, expanded: boolean): HTMLElement {
   const article = document.createElement('article')
   article.className = 'card dispatch-thread-message'
+  article.dataset.messageId = message.id
   article.classList.toggle('dispatch-thread-collapsed', !expanded)
   const header = document.createElement('header')
   const avatar = document.createElement('span')
@@ -586,6 +606,7 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
   time.dateTime = message.receivedAt
   time.textContent = expanded ? message.receivedFullLabel : message.receivedLabel
   header.append(avatar, identity, time)
+  if (message.attachments.length) header.append(attachmentIndicator(message.attachments.length))
   article.append(header)
   if (!expanded) {
     article.tabIndex = 0
@@ -740,6 +761,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   loading.textContent = 'Loading conversation…'
   elements.body.replaceChildren(loading)
   elements.attachments.replaceChildren()
+  elements.threadFilesToggle.hidden = true
   if (options.startReadDwell && summary.unread && summary.accountId) {
     const conversationId = summary.id
     markReadDwell.schedule(conversationId, () => { void completeReadDwell(conversationId) })
@@ -789,6 +811,37 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
 const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
     elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0)))
+    const attachmentCount = newestFirst.reduce((count, message) => count + message.attachments.length, 0)
+    threadAttachmentCounts.set(id, attachmentCount)
+    renderList()
+    if (attachmentCount > 0) {
+      const files = renderThreadAttachments(newestFirst, (message, attachmentId, name) => {
+        void openAttachment(message, attachmentId, name)
+      }, (message) => {
+        const article = [...elements.body.querySelectorAll<HTMLElement>('[data-message-id]')].find((item) => item.dataset.messageId === message.id)
+        if (!article) return
+        const expanded = renderThreadMessage(message, true)
+        article.replaceWith(expanded)
+        expanded.tabIndex = -1
+        expanded.focus({ preventScroll: true })
+        expanded.scrollIntoView({ block: 'nearest' })
+      })
+      const toggle = elements.threadFilesToggle
+      const renderDisclosure = () => {
+        const expanded = expandedAttachmentThreads.has(id)
+        files.hidden = !expanded
+        toggle.setAttribute('aria-expanded', String(expanded))
+        toggle.innerHTML = `<i class="ti ti-paperclip" aria-hidden="true"></i>${attachmentCount} ${attachmentCount === 1 ? 'attachment' : 'attachments'}<i class="ti ti-chevron-${expanded ? 'up' : 'down'}" aria-hidden="true"></i>`
+      }
+      toggle.onclick = () => {
+        if (expandedAttachmentThreads.has(id)) expandedAttachmentThreads.delete(id)
+        else expandedAttachmentThreads.add(id)
+        renderDisclosure()
+      }
+      toggle.hidden = false
+      elements.body.prepend(files)
+      renderDisclosure()
+    }
     void warmAttachments(conversation, sequence)
     prefetchConversations(id)
     try {
@@ -1128,6 +1181,7 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   elements.readerEmpty.hidden = true
   elements.reader.classList.add('dispatch-drafting')
   elements.reader.classList.toggle('dispatch-composing', !selected)
+  if (!selected) elements.threadFilesToggle.hidden = true
   if (!selected) [elements.archive, elements.spam, elements.trash, elements.moveInbox].forEach((control) => { control.hidden = true })
   elements.body.hidden = !selected
   elements.attachments.hidden = true

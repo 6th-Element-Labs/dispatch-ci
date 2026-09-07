@@ -1541,3 +1541,36 @@ test('reloads the Drafts list when a Codex turn completes', async ({ page }) => 
   const before = draftLists
   await expect.poll(() => draftLists, { timeout: 5000 }).toBeGreaterThan(before)
 })
+
+test('collapses thread attachments and opens repeated filenames from their exact parent email', async ({ page }) => {
+  let opened = ''
+  const attachment = { id: 'same-id', name: 'arrival.pdf', mediaType: 'application/pdf', sizeLabel: '12 KB' }
+  const newer = { ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Latest email' }, attachments: [attachment] }
+  const older = { ...newer, id: 'older-email', receivedAt: '2026-09-03T07:30:00+12:00', receivedFullLabel: 'September 3, 2026 at 7:30 AM', attachments: [attachment] }
+  await page.route(/8411\/v1\/conversations\/t1/, (route) => route.fulfill({ json: { conversation: { ...conversations[0]!, accountId: 'link-one', source: 'gmail', messages: [older, newer] } } }))
+  await page.route(/8411\/v1\/messages\/.+\/attachments\/.+\/cache/, (route) => route.fulfill({ json: { cached: true } }))
+  await page.route(/8411\/v1\/messages\/.+\/attachments\/.+\/open/, (route) => {
+    opened = route.request().url()
+    return route.fulfill({ json: { opened: true } })
+  })
+  await page.goto('/')
+  const toggle = page.locator('[data-thread-files-toggle]')
+  const files = page.getByRole('region', { name: 'All attachments in this thread' })
+  await expect(toggle).toHaveText('2 attachments')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(files).toBeHidden()
+  await expect(page.locator('[data-conversation-id="demo:t1"] .dispatch-attachment-indicator')).toHaveText('2')
+  await toggle.click()
+  await expect(files).toBeVisible()
+  await expect(files.locator('.dispatch-thread-file')).toHaveCount(2)
+  await expect(files.locator('.dispatch-thread-file').first()).toContainText('September 4')
+  await files.locator('.dispatch-thread-file-open').nth(1).click()
+  await expect.poll(() => opened).toBe('http://127.0.0.1:8411/v1/messages/older-email/attachments/same-id/open?filename=arrival.pdf&account=link-one')
+  await files.getByRole('button', { name: /Go to email.*September 3/ }).click()
+  await expect(page.locator('[data-message-id="older-email"]')).not.toHaveClass(/dispatch-thread-collapsed/)
+  await toggle.focus()
+  await page.keyboard.press('Enter')
+  await expect(files).toBeHidden()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(toggle).toBeHidden()
+})

@@ -21,6 +21,7 @@ export function summarizeConversation(messages: readonly MessageSummary[]): Conv
     receivedFullLabel: latest.receivedFullLabel,
     preview: latest.preview,
     unread: ordered.some((message) => message.unread),
+    hasAttachment: ordered.some((message) => message.hasAttachment === true),
     messageCount: ordered.length,
   }
 }
@@ -40,7 +41,7 @@ export function groupConversations(messages: readonly MessageSummary[], state: M
 
 export function projectConversation(messages: readonly MessageProjection[], source: 'demo' | 'gmail'): ConversationProjection {
   const chronological = [...messages].sort((left, right) => Date.parse(left.receivedAt) - Date.parse(right.receivedAt))
-  return { ...summarizeConversation(chronological), messageCount: chronological.length, messages: chronological.reverse(), source }
+  return { ...summarizeConversation(chronological), hasAttachment: chronological.some((message) => message.attachments.length > 0), messageCount: chronological.length, messages: chronological.reverse(), source }
 }
 
 export function replySourceMessage(conversation: ConversationProjection): MessageProjection {

@@ -54,3 +54,12 @@ describe('conversation projection', () => {
     expect(conversation.latestMessageId).toBe('new')
   })
 })
+
+it('keeps the attachment indicator when only an earlier email has a file', () => {
+  const [summary] = groupConversations([
+    { ...base, hasAttachment: true },
+    { ...base, id: 'new', receivedAt: '2026-09-05T08:00:00Z', hasAttachment: false },
+  ], 'all')
+  expect(summary).toMatchObject({ latestMessageId: 'new', hasAttachment: true })
+  expect(groupConversations([base], 'all')[0]?.hasAttachment).toBe(false)
+})

@@ -254,3 +254,13 @@ button { cursor: pointer; }
   .dispatch-email-body, .dispatch-draft { padding: .75rem; }
   .dispatch-draft .row { display: block; }
 }
+
+.dispatch-attachment-indicator { display: inline-flex; align-items: center; gap: .2rem; flex: none; font-size: .75rem; white-space: nowrap; }
+.dispatch-thread-files-toggle { margin-left: auto; flex: none; gap: .35rem; }
+.dispatch-thread-meta { flex-wrap: wrap; }
+.dispatch-thread-files { margin: -1rem -1.25rem 1rem; padding: 1rem 1.25rem; background: var(--tblr-bg-surface); border-bottom: 1px solid var(--tblr-border-color); }
+.dispatch-thread-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .25rem .5rem; padding: .65rem 0; border-top: 1px solid var(--tblr-border-color); }
+.dispatch-thread-file-open { grid-column: 1 / -1; justify-content: flex-start; text-align: left; padding: 0; gap: .5rem; white-space: normal; }
+.dispatch-thread-file-open > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.dispatch-thread-file > small { font-size: .7rem; overflow-wrap: anywhere; }
+.dispatch-thread-file-source { font-size: .7rem; padding: .2rem .4rem; }

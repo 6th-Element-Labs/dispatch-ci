@@ -79,6 +79,7 @@ export interface ConversationSummary {
   readonly receivedFullLabel: string
   readonly preview: string
   readonly unread: boolean
+  readonly hasAttachment?: boolean
   readonly messageCount: number
 }
 
