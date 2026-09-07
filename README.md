@@ -54,3 +54,6 @@ bash scripts/dispatch_ci.sh
 ```
 
 The canonical repository is private. `6th-Element-Labs/dispatch-ci` is a public, verification-only CI sandbox. Any branch pushed there becomes public.
+
+
+Dispatch.app prefers the Codex runtime bundled with Codex Desktop (Codex.app or ChatGPT.app) so its live model catalog stays aligned with the desktop client. An explicit `DISPATCH_CODEX_COMMAND` still takes precedence. PATH, Homebrew, and user CLI locations remain fallbacks when the desktop app is absent.

@@ -13,6 +13,10 @@ pub struct Resolution {
     pub searched: Vec<PathBuf>,
 }
 
+const DESKTOP_BUNDLES: [&str; 2] = [
+    "/Applications/Codex.app/Contents/Resources/codex",
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+];
 const WELL_KNOWN: [&str; 2] = ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"];
 const HOME_RELATIVE: [&str; 2] = [".local/bin/codex", ".npm-global/bin/codex"];
 
@@ -22,6 +26,8 @@ pub fn candidates(overridden: Option<&str>, path_var: Option<&str>, home: &Path)
     if let Some(value) = overridden.map(str::trim).filter(|value| !value.is_empty()) {
         list.push(PathBuf::from(value));
     }
+    // Keep the embedded experience on the same runtime and catalog as Codex Desktop.
+    list.extend(DESKTOP_BUNDLES.iter().map(PathBuf::from));
     for directory in path_var.unwrap_or("").split(':').filter(|d| !d.is_empty()) {
         list.push(Path::new(directory).join("codex"));
     }
@@ -129,11 +135,13 @@ mod tests {
     }
 
     #[test]
-    fn path_entries_come_before_well_known_locations_in_order() {
+    fn desktop_runtime_precedes_path_and_cli_fallbacks() {
         let list = candidates(None, Some("/a:/b"), &home());
         assert_eq!(
             list,
             vec![
+                PathBuf::from(DESKTOP_BUNDLES[0]),
+                PathBuf::from(DESKTOP_BUNDLES[1]),
                 PathBuf::from("/a/codex"),
                 PathBuf::from("/b/codex"),
                 PathBuf::from("/opt/homebrew/bin/codex"),
@@ -145,12 +153,26 @@ mod tests {
     }
 
     #[test]
+    fn desktop_runtime_wins_over_an_older_path_cli() {
+        let executable = |path: &Path| path == Path::new(DESKTOP_BUNDLES[1]) || path == Path::new("/opt/homebrew/bin/codex");
+        let result = resolve(None, Some("/opt/homebrew/bin"), &home(), &executable, &|| None);
+        assert_eq!(result.path, Some(PathBuf::from(DESKTOP_BUNDLES[1])));
+    }
+
+    #[test]
+    fn explicit_override_still_wins_over_desktop_runtime() {
+        let executable = |_: &Path| true;
+        let result = resolve(Some("/custom/codex"), Some("/opt/homebrew/bin"), &home(), &executable, &|| None);
+        assert_eq!(result.path, Some(PathBuf::from("/custom/codex")));
+    }
+
+    #[test]
     fn homebrew_is_found_when_path_is_minimal() {
         let executable = |path: &Path| path == Path::new("/opt/homebrew/bin/codex");
         let shell = || panic!("login shell must not run when a candidate matched");
         let result = resolve(None, Some("/usr/bin:/bin"), &home(), &executable, &shell);
         assert_eq!(result.path, Some(PathBuf::from("/opt/homebrew/bin/codex")));
-        assert_eq!(result.searched.len(), 3);
+        assert_eq!(result.searched.len(), 3 + DESKTOP_BUNDLES.len());
     }
 
     #[test]
@@ -168,7 +190,7 @@ mod tests {
         let shell = || None;
         let result = resolve(None, Some("/usr/bin"), &home(), &executable, &shell);
         assert_eq!(result.path, None);
-        assert_eq!(result.searched.len(), 6);
+        assert_eq!(result.searched.len(), 6 + DESKTOP_BUNDLES.len());
         assert!(result.searched.last().unwrap().to_string_lossy().contains("zsh"));
     }
 }
