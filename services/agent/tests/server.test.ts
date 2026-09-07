@@ -69,7 +69,7 @@ describe('dispatch-agent', () => {
     const params = rpcParams(fake, 'thread/start')
     expect(params).toMatchObject({
       cwd: expect.stringContaining('codex-workspace'),
-      developerInstructions: expect.stringMatching(/gmail\.(create_draft|send_draft)/),
+      developerInstructions: expect.stringContaining('normal installed Codex tools'),
       serviceName: 'dispatch-agent',
     })
     expect(params).not.toHaveProperty('model')
@@ -77,7 +77,7 @@ describe('dispatch-agent', () => {
     expect(params).not.toHaveProperty('sandboxPolicy')
     expect(params).not.toHaveProperty('sandbox')
     expect(String(params.developerInstructions)).not.toMatch(/Never call gmail\.send/)
-    expect(String(params.developerInstructions)).toMatch(/send_draft|send_email/)
+    expect(String(params.developerInstructions)).toContain('send mail')
     expect(String(params.developerInstructions)).toMatch(/attachment/i)
   })
 
@@ -701,4 +701,16 @@ it('passes a file only with its matching account and conversation context', asyn
   fake.request.mockClear()
   await send({ accountId: 'account-B', threadId: 'mail-B', messageId: 'wrong-email', attachmentId: 'wrong-file' })
   expect(JSON.stringify(rpcParams(fake, 'turn/start'))).not.toContain('wrong-file')
+})
+
+it('updates only draft headers without replacing the MIME body or attachments', async () => {
+  const { base, fake } = await start()
+  fake.request.mockImplementation(async (method: string) => {
+    if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: { 'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } } } }] }
+    if (method === 'thread/start') return { thread: { id: 'connector-task' } }
+    return { structuredContent: { id: 'draft-one' } }
+  })
+  const response = await fetch(`${base}/v1/connectors/gmail/drafts/update`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-one', preserveContent: true, to: 'new@example.com' }) })
+  expect(response.status).toBe(200)
+  expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ arguments: { link_id: 'link-one', draft_id: 'draft-one', to: 'new@example.com' } }))
 })

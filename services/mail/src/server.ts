@@ -24,7 +24,7 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': allowedOrigin,
     'access-control-allow-headers': 'content-type',
-    'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS',
   })
   response.end(JSON.stringify(value))
 }
@@ -36,7 +36,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -417,6 +417,20 @@ export function createMailServer(
       } catch (error) {
         return writeJson(response, draftStatus(error), draftError(error, 'gmail_draft_refresh_failed'))
       }
+    }
+    if (request.method === 'PATCH' && draftMatch?.[1] && gmail.patchGmailDraft) {
+      try {
+        const body = draftObject(await readJson(request))
+        if (!body || typeof body.accountId !== 'string') return writeJson(response, 400, { error: 'gmail_draft_fields_required' })
+        const fields: { to?: string; cc?: string; bcc?: string; subject?: string } = {}
+        for (const key of ['to', 'cc', 'bcc', 'subject'] as const) {
+          if (body[key] !== undefined) {
+            if (typeof body[key] !== 'string') return writeJson(response, 400, { error: 'invalid_draft_header' })
+            fields[key] = body[key] as string
+          }
+        }
+        return writeJson(response, 200, { draft: await gmail.patchGmailDraft(body.accountId, decodeURIComponent(draftMatch[1]), fields) })
+      } catch (error) { return writeJson(response, 502, draftError(error, 'gmail_draft_update_failed')) }
     }
     if (request.method === 'PUT' && draftMatch?.[1] && gmail.updateGmailDraft) {
       try {

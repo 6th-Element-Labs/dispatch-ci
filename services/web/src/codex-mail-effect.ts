@@ -18,6 +18,18 @@ export function codexMailEffect(item: unknown): CodexMailEffect | undefined {
   const result = record(call.result)
   if (!result || result.isError === true || result.error) return undefined
   const args = parseRecord(call.arguments)
+  if (call.server === 'dispatch_mail') {
+    const value = record(result.structuredContent)
+    if (!value || value.error) return undefined
+    const draft = record(value.draft)
+    if (['create_draft', 'update_draft'].includes(text(call.tool)) && text(draft?.id) && text(draft?.accountId)) {
+      return { kind: 'draft', draftId: text(draft?.id), accountId: text(draft?.accountId) }
+    }
+    if (call.tool === 'send_draft' && text(value.id) && text(value.accountId) && text(value.draftId)) {
+      return { kind: 'sent', accountId: text(value.accountId), draftId: text(value.draftId) }
+    }
+    return undefined
+  }
   const candidates = [record(result.structuredContent), result,
     ...(Array.isArray(result.content) ? result.content.map((part) => {
       const block = record(part)

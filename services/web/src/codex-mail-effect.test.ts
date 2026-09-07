@@ -61,3 +61,11 @@ it('does not claim success for connector errors, missing results, or arguments a
   }
   expect(codexMailEffect({ ...call, error: { message: 'Denied' }, result: { structuredContent: { id: 'x' } } })).toBeUndefined()
 })
+
+it('opens and reconciles drafts changed through Dispatch software controls', () => {
+  expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'update_draft', result: { structuredContent: { draft: { id: 'draft-A', accountId: 'account-A' } } } }))
+    .toEqual({ kind: 'draft', draftId: 'draft-A', accountId: 'account-A' })
+  expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'send_draft', result: { structuredContent: { id: 'sent-A', draftId: 'draft-A', accountId: 'account-A' } } }))
+    .toEqual({ kind: 'sent', draftId: 'draft-A', accountId: 'account-A' })
+  expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'send_draft', result: { isError: true, structuredContent: { id: 'sent-A', draftId: 'draft-A', accountId: 'account-A' } } })).toBeUndefined()
+})

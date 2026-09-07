@@ -413,7 +413,8 @@ describe('GmailConnectorProvider', () => {
     ])
   })
 
-  it('opens an existing Gmail draft by its listed message ID', async () => {
+  it.each(['string', 'array'] as const)('opens an existing Gmail draft with %s recipient fields', async (format) => {
+    const recipients = (address: string) => format === 'array' ? [address] : address
     const requests: Array<{ path: string; body: Record<string, unknown> }> = []
     const server = createServer(async (request, response) => {
       response.setHeader('content-type', 'application/json')
@@ -428,7 +429,7 @@ describe('GmailConnectorProvider', () => {
         const second = body.nextPageToken === 'page-2'
         return response.end(JSON.stringify({ structuredContent: {
           drafts: second
-            ? [{ draft_id: 'draft-opened', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1', to: 'client@example.com', cc: 'copy@example.com', bcc: 'audit@example.com', subject: 'Saved draft' }]
+            ? [{ draft_id: 'draft-opened', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1', to: recipients('client@example.com'), cc: recipients('copy@example.com'), bcc: recipients('audit@example.com'), subject: 'Saved draft' }]
             : [{ draft_id: 'other-draft', message_id: 'other-message', thread_id: 'other-thread', to: 'other@example.com', subject: 'Other' }],
           next_page_token: second ? '' : 'page-2',
         } }))

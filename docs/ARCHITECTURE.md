@@ -72,3 +72,8 @@ Mail and agent read `DISPATCH_ALLOWED_ORIGIN` for their CORS origin. The default
 - Agent failure leaves email readable and shows Codex as unavailable.
 - App Server restart does not fabricate successful turns.
 - Demo mail is visibly labeled and never presented as Gmail evidence.
+
+
+### Internal mail controls
+
+The agent service exposes a stateless local MCP endpoint at `/mcp/dispatch-mail` using the MCP TypeScript SDK. It is a transport adapter over the mail service’s existing HTTP commands; it owns no mail records and does not call a second model loop. Codex receives the endpoint as a per-thread configuration override on start and resume, alongside the user’s existing MCP servers. Header-only draft corrections use a partial mail command so omitted recipients, the MIME body, and attachments are preserved. Tool errors are returned as failures; a send reports success only with Gmail’s message ID.

@@ -71,3 +71,9 @@ Attachment context includes its Gmail account, conversation, parent message, and
 A confirmed Gmail draft tool result opens the exact draft and account in the editor. Late responses cannot replace a different selection or newer edits, including edits already saved while the response was pending. A user-edited draft stays in place and the client reports where to find the saved AI version. Connector error results never count as saved or sent. Sending a different draft does not close the active editor.
 
 Transient task-resume failures keep the existing history binding and retry. A new binding is created only for a confirmed missing task. Gmail draft commands retain the strict multipart payload adapter; Codex follows the installed tool schema and the user’s approval policy.
+
+
+Gmail draft recipient fields accept the connector's string arrays as well as legacy strings. To, Cc, and Bcc survive opening and refreshing a draft. The Send button requires at least one To, Cc, or Bcc recipient and does not save an unchanged Gmail draft first; this preserves the provider's original recipients, formatting, and attachments. A changed draft or account invalidates its pending send confirmation.
+
+
+Dispatch embeds the full installed Codex experience, not an email-only agent. It adds no model, sandbox, capability allowlist, or send-button-only policy. The user’s normal Codex configuration and permissions remain authoritative. The internal `dispatch_mail` tools provide an optional path to list accounts, read/create/update drafts, and send the saved draft through Dispatch’s mail service. Header-only updates preserve original MIME content and attachments. These tools are configured for new and resumed conversations, and their confirmed results update the visible editor. The visible draft ID, account, recipients, and unsaved state are supplied as context.

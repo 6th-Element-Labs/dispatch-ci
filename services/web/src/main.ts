@@ -227,6 +227,7 @@ function markDraftDirty(): void { draftDirty = true; draftEditRevision += 1 }
 let draftSaveFlight: Promise<DraftProjection | undefined> | undefined
 // Keep Gmail send confirmation single-flight.
 let draftSendFlight: Promise<void> | undefined
+let sendConfirmationRevision: number | undefined
 let draftDiscarding = false
 
 let conversations: ConversationSummary[] = []
@@ -1405,6 +1406,8 @@ async function reviseDraft(): Promise<void> {
 
 function sendDraft(): void {
   if (!activeDraft || draftSendFlight) return
+  if (![elements.draftTo, elements.draftCc, elements.draftBcc].some(field => recipientValue(field).trim())) { draftError(new Error('Add a recipient before sending.')); return }
+  sendConfirmationRevision = draftEditRevision
   elements.sendConfirmText.textContent = [
     `To: ${recipientValue(elements.draftTo) || '(no recipient)'}`,
     recipientValue(elements.draftCc) ? `Cc: ${recipientValue(elements.draftCc)}` : '',
@@ -1416,8 +1419,24 @@ function sendDraft(): void {
 
 async function confirmSendDraft(): Promise<void> {
   if (!activeDraft || draftSendFlight || draftDiscarding) return
+  const session = draftEditSession
+  const revision = draftEditRevision
+  const originalId = activeDraft.id
+  const originalAccount = activeDraft.id ? activeDraft.accountId : elements.draftAccount.value
+  if (sendConfirmationRevision !== revision || ![elements.draftTo, elements.draftCc, elements.draftBcc].some(field => recipientValue(field).trim())) {
+    elements.sendConfirm.hidden = true
+    throw new Error('The draft changed. Review its recipients before sending again.')
+  }
   const operation = (async () => {
-    await saveDraft()
+    if (draftSaveFlight) await draftSaveFlight
+    if (session !== draftEditSession || revision !== draftEditRevision) throw new Error('The draft changed before sending. Review it again.')
+    // An unchanged Gmail draft already has its exact recipients, MIME body, and files.
+    // Do not rewrite it from the editor's projection as a side effect of Send.
+    if (!activeDraft?.id || draftDirty) await saveDraft()
+    if (session !== draftEditSession || revision !== draftEditRevision
+      || (originalId && activeDraft?.id !== originalId) || activeDraft?.accountId !== originalAccount) {
+      throw new Error('The draft changed before sending. Review it again.')
+    }
     const draft = activeDraft
     if (!draft?.id || !draft.accountId) throw new Error('Save the Gmail draft before sending it.')
     await api.sendDraft(draft.id, draft.accountId)
@@ -2006,15 +2025,16 @@ async function sendPrompt(): Promise<void> {
       ...userChoseModel() ? { model: selectedModelId } : {},
       ...userChoseEffort() ? { effort: selectedEffort } : {},
       appId: gmailAppId(apps),
-      mailContext: selected ? {
-        accountId: selected.accountId,
-        messageId: selected.latestMessageId,
-        threadId: selected.threadId,
-        subject: selected.subject,
-        sender: selected.sender.address,
-        attachment: selectedAttachmentContext?.accountId === selected.accountId
-          && selectedAttachmentContext?.threadId === selected.threadId
-          && selected.messages.some((message) => message.id === selectedAttachmentContext?.messageId
+      mailContext: selected || activeDraft ? {
+        draft: activeDraft ? { id: activeDraft.id, accountId: activeDraft.accountId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, hasUnsavedChanges: draftDirty } : undefined,
+        accountId: selected?.accountId,
+        messageId: selected?.latestMessageId,
+        threadId: selected?.threadId,
+        subject: selected?.subject,
+        sender: selected?.sender.address,
+        attachment: selectedAttachmentContext?.accountId === selected?.accountId
+          && selectedAttachmentContext?.threadId === selected?.threadId
+          && selected?.messages.some((message) => message.id === selectedAttachmentContext?.messageId
             && message.attachments.some((file) => file.id === selectedAttachmentContext?.attachmentId))
           ? selectedAttachmentContext : undefined,
       } : undefined,
@@ -2359,7 +2379,7 @@ elements.draftSubject.addEventListener('input', () => {
   markDraftDirty()
   if (activeDraft?.id) autosaveDraft()
 })
-elements.draftAccount.addEventListener('input', () => { elements.sendConfirm.hidden = true })
+elements.draftAccount.addEventListener('input', () => { markDraftDirty(); elements.sendConfirm.hidden = true })
 app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { void reviseDraft().catch(draftError) })
 elements.readState.addEventListener('click', () => { void toggleReadState() })
 app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })

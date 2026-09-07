@@ -1733,3 +1733,27 @@ for (const intervening of ['edit', 'switch', 'none'] as const) {
     if (intervening === 'switch') await expect(page.locator('[data-draft]')).toBeHidden()
   })
 }
+
+for (const hasRecipient of [true, false]) {
+  test(`Send ${hasRecipient ? 'uses an unchanged Gmail draft without rewriting it' : 'blocks an empty recipient list before any write'}`, async ({ page }) => {
+    const writes: string[] = []
+    const draft = { id: 'send-existing', accountId: 'account-A', inReplyToMessageId: 'm1', to: hasRecipient ? [messages[0]!.sender] : [], cc: '', bcc: '', subject: 'Existing draft', bodyMarkdown: 'Read-only projection', bodyHtml: '<p>Original HTML</p>', bodyText: 'Read-only projection', attachments: [], state: 'draft' }
+    await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft } }))
+    await page.route(/8411\/v1\/drafts\/send-existing/, route => {
+      writes.push(route.request().method() + ':' + new URL(route.request().url()).searchParams.get('action'))
+      return route.fulfill({ json: route.request().method() === 'PUT' ? { draft } : { delivery: { id: 'sent-message' } } })
+    })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Reply', exact: true }).click()
+    await expect(page.locator('[data-draft-body]')).toHaveValue('Read-only projection')
+    await page.locator('[data-send-draft]').click()
+    if (hasRecipient) {
+      await page.locator('[data-send-confirm-go]').click()
+      await expect.poll(() => writes).toEqual(['POST:send'])
+    } else {
+      await expect(page.locator('[data-draft-error]')).toContainText('Add a recipient')
+      await expect(page.locator('[data-send-confirm]')).toBeHidden()
+      expect(writes).toEqual([])
+    }
+  })
+}

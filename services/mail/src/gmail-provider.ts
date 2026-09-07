@@ -108,6 +108,13 @@ function draftConnectorError(error: unknown): Error {
   return error instanceof Error ? error : new Error(detail)
 }
 
+function draftRecipientHeader(value: unknown, field: string): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value) && value.every((address) => typeof address === 'string')) return value.join(', ')
+  throw new Error(`Gmail draft ${field} must be a string or an array of recipient strings`)
+}
+
 function gmailDraftSummary(value: unknown): GmailDraftSummary {
   const draft = record(value) ?? {}
   const draftId = text(draft.draft_id)
@@ -117,9 +124,9 @@ function gmailDraftSummary(value: unknown): GmailDraftSummary {
     draftId,
     messageId,
     threadId: text(draft.thread_id),
-    to: text(draft.to),
-    cc: text(draft.cc),
-    bcc: text(draft.bcc),
+    to: draftRecipientHeader(draft.to, 'To'),
+    cc: draftRecipientHeader(draft.cc, 'Cc'),
+    bcc: draftRecipientHeader(draft.bcc, 'Bcc'),
     subject: text(draft.subject),
     hasAttachment: draft.has_attachment === true,
   }
@@ -741,6 +748,12 @@ export class GmailConnectorProvider {
     } catch (error) {
       throw draftConnectorError(error)
     }
+  }
+
+  async patchGmailDraft(accountId: string, draftId: string, fields: { to?: string; cc?: string; bcc?: string; subject?: string }): Promise<DraftProjection> {
+    if (!accountId || !draftId || !Object.keys(fields).length) throw new Error('Draft identity and at least one header are required')
+    await this.#post('/v1/connectors/gmail/drafts/update', { linkId: accountId, draftId, preserveContent: true, ...fields })
+    return this.readGmailDraft(accountId, draftId)
   }
 
   async readGmailDraft(accountId: string, draftId: string): Promise<DraftProjection> {
