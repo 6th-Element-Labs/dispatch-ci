@@ -152,6 +152,18 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
   const bindings = options.bindings ?? new CodexBindingStore(defaultBindingsPath())
   let gmailInventory: Promise<GmailInventory> | undefined
   const connectorThreadIds = new Map<string, Promise<string>>()
+  // Threads this service drives itself (mail connector calls). The App Server
+  // asks for permission before connector writes on them; the user already
+  // approved the action in Dispatch (Save, Discard, Send), and no UI watches
+  // these threads, so the service answers or the call hangs forever.
+  const serviceThreadIds = new Set<string>()
+  runtime.subscribe((message) => {
+    if (message.id === undefined || !message.method) return
+    const params = message.params as { threadId?: string } | undefined
+    if (!params?.threadId || !serviceThreadIds.has(params.threadId)) return
+    if (message.method === 'mcpServer/elicitation/request') runtime.respond(message.id, { action: 'accept', content: {} })
+    else if (message.method === 'item/permissions/requestApproval' || message.method === 'item/tool/requestApproval') runtime.respond(message.id, { decision: 'accept' })
+  })
 
   const inventory = async (): Promise<GmailInventory> => {
     gmailInventory ??= runtime
@@ -175,6 +187,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     }).then((value) => {
       const result = value as { thread?: { id?: unknown } }
       if (typeof result.thread?.id !== 'string') throw new Error('Codex App Server did not return a connector thread id')
+      serviceThreadIds.add(result.thread.id)
       return result.thread.id
     }).catch((error) => {
       connectorThreadIds.delete(scope)

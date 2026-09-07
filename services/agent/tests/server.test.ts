@@ -19,7 +19,7 @@ function runtime() {
     lastError: vi.fn(() => null),
     lastWarning: vi.fn(() => 'non-fatal diagnostic'),
     request,
-    subscribe: vi.fn(() => () => undefined),
+    subscribe: vi.fn((_next: (message: { id?: number | string; method?: string; params?: unknown }) => void) => () => undefined),
     respond: vi.fn(),
     close: vi.fn(),
   }
@@ -563,5 +563,31 @@ describe('dispatch-agent', () => {
     })
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({ error: 'invalid_binding_key' })
+  })
+})
+
+describe('connector threads', () => {
+  it('answers permission prompts on its own connector threads and leaves user threads alone', async () => {
+    const { base, fake } = await start()
+    const listeners: Array<(message: { id?: number | string; method?: string; params?: unknown }) => void> = []
+    fake.subscribe.mockImplementation((next: (message: { id?: number | string; method?: string; params?: unknown }) => void) => { listeners.push(next); return () => undefined })
+    // subscribe() ran inside createAgentServer before this mock; re-create the server so it registers here.
+    const server = createAgentServer(fake)
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: { 'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } } } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { structuredContent: { id: 'draft-1' } }
+    })
+    expect((await fetch(`${local}/v1/connectors/gmail/drafts/create`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', to: 'a@b.c', subject: 'Hi', bodyMarkdown: 'Hi', bodyHtml: '<p>Hi</p>' }) })).status).toBe(200)
+    for (const listener of listeners) listener({ id: 9, method: 'mcpServer/elicitation/request', params: { threadId: 'connector-thread', message: 'Allow Gmail to run tool "gmail.update_draft"?' } })
+    for (const listener of listeners) listener({ id: 10, method: 'mcpServer/elicitation/request', params: { threadId: 'user-thread', message: 'Allow?' } })
+    for (const listener of listeners) listener({ id: 11, method: 'item/permissions/requestApproval', params: { threadId: 'connector-thread' } })
+    expect(fake.respond).toHaveBeenCalledWith(9, { action: 'accept', content: {} })
+    expect(fake.respond).toHaveBeenCalledWith(11, { decision: 'accept' })
+    expect(fake.respond).not.toHaveBeenCalledWith(10, expect.anything())
+    void base
   })
 })
