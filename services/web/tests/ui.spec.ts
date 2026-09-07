@@ -1518,3 +1518,26 @@ test('answers a connector permission prompt with one click', async ({ page }) =>
   await page.getByRole('button', { name: 'Allow', exact: true }).click()
   await expect.poll(() => answer).toEqual({ id: 7, result: { action: 'accept', content: {} } })
 })
+
+test('reloads the Drafts list when a Codex turn completes', async ({ page }) => {
+  let draftLists = 0
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-test' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-test', created: true, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    await route.fulfill({ contentType: 'text/event-stream', body: 'data: {"method":"turn/completed","params":{"threadId":"thread-test","turn":{"status":"completed"}}}\n\n' })
+  })
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
+    if (new URL(route.request().url()).searchParams.get('mailbox') === 'drafts') draftLists += 1
+    return route.fulfill({ json: { source: 'demo', conversations: [], nextCursor: null, total: 0 } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await expect.poll(() => draftLists).toBeGreaterThanOrEqual(1)
+  const before = draftLists
+  await expect.poll(() => draftLists, { timeout: 5000 }).toBeGreaterThan(before)
+})

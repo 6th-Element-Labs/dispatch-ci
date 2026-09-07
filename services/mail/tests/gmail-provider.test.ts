@@ -684,7 +684,7 @@ describe('stale rows', () => {
         }
         return response.end(JSON.stringify({ structuredContent: { emails: [] } }))
       }
-      if (request.url === '/v1/connectors/gmail/drafts/list') return response.end(JSON.stringify({ structuredContent: { drafts: [], next_page_token: '' } }))
+      if (request.url === '/v1/connectors/gmail/drafts/list') return response.end(JSON.stringify({ structuredContent: { drafts: draftsPresent ? [{ draft_id: 'r-1', message_id: 'draft-msg', thread_id: 't-draft', from_: 'work@example.com', subject: 'Unsent' }] : [], next_page_token: '' } }))
       response.statusCode = 404
       response.end('{}')
     })
@@ -700,5 +700,42 @@ describe('stale rows', () => {
     await provider.syncNow()
     expect(await provider.listMailboxConversations!('drafts', 'all')).toEqual([])
     await expect(provider.openGmailDraft('link-one', 'draft-msg', 't-draft')).rejects.toThrow('no longer exists in Gmail')
+  })
+})
+
+describe('live drafts', () => {
+  it('lists a draft Gmail search has not indexed yet, and drops it once Gmail no longer lists it', async () => {
+    let live = [{ draft_id: 'r-new', message_id: 'fresh-draft-msg', thread_id: 't-fresh', from_: 'steve@example.com', to: ['andy@example.com'], subject: 'Materials for Chris' }]
+    const reads: string[] = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> : {}
+      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail/search-messages') {
+        const labels = (body.labelIds as string[] | undefined) ?? []
+        return response.end(JSON.stringify({ structuredContent: { emails: labels.includes('INBOX') ? [{ id: 'in-1', thread_id: 't-in', from_: 'Ana <ana@example.com>', subject: 'Hello', snippet: '', labels: ['INBOX'], email_ts: '2026-09-04T21:42:00Z' }] : [] } }))
+      }
+      if (request.url === '/v1/connectors/gmail/drafts/list') return response.end(JSON.stringify({ structuredContent: { drafts: live, next_page_token: '' } }))
+      if (request.url === '/v1/connectors/gmail/read') {
+        reads.push(String(body.messageId))
+        return response.end(JSON.stringify({ structuredContent: { ...gmailMessage.structuredContent, id: body.messageId, thread_id: 't-fresh', label_ids: ['DRAFT'], internal_date: '1788486120000', payload: { ...gmailMessage.structuredContent.payload, headers: [{ name: 'From', value: 'Steve <work@example.com>' }, { name: 'To', value: 'Andy <andy@example.com>' }, { name: 'Subject', value: 'Materials for Chris' }] } } }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: ':memory:' })
+    await provider.syncNow()
+    const drafts = await provider.listMailboxConversations!('drafts', 'all')
+    expect(drafts.map((conversation) => [conversation.latestMessageId, conversation.subject])).toEqual([['fresh-draft-msg', 'Materials for Chris']])
+    expect(reads).toEqual(['fresh-draft-msg'])
+    await provider.listMailboxConversations!('drafts', 'all')
+    expect(reads).toEqual(['fresh-draft-msg'])
+    expect((await provider.listMailboxConversations!('inbox', 'all')).map((conversation) => conversation.latestMessageId)).toEqual(['in-1'])
+    live = []
+    expect(await provider.listMailboxConversations!('drafts', 'all')).toEqual([])
   })
 })

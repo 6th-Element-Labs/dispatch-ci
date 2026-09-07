@@ -472,9 +472,70 @@ export class GmailConnectorProvider {
   async listMailboxConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): Promise<readonly ConversationSummary[]> {
     if (!this.#index) throw new Error('Durable Gmail index is required for mailbox lists')
     await this.#ensureIndex()
+    if (mailbox === 'drafts') await this.#syncLiveDrafts(accountId)
     return query
       ? this.#index.searchMailboxConversations(mailbox, query, state, accountId)
       : this.#index.mailboxConversations(mailbox, state, accountId)
+  }
+
+  /**
+   * Gmail search lags minutes behind for a draft that was just created, so
+   * the Drafts folder is refreshed from Gmail's own drafts list, which is
+   * immediate: drafts the index has not seen are read and upserted, and
+   * drafts Gmail no longer lists are dropped. A connector failure leaves the
+   * indexed view as it was.
+   */
+  async #syncLiveDrafts(accountId?: string): Promise<void> {
+    if (!this.#index) return
+    const accounts = (await this.accounts()).filter((account) => !accountId || account.id === accountId)
+    for (const account of accounts) {
+      let summaries: GmailDraftSummary[]
+      try {
+        summaries = await this.#listGmailDrafts(account.id)
+      } catch (error) {
+        process.stderr.write(`dispatch-mail: live drafts unavailable for ${account.email || account.name}: ${error instanceof Error ? error.message : String(error)}\n`)
+        continue
+      }
+      const indexed = new Map(this.#index.messages(account.id).map((message) => [message.id, message]))
+      const rows: IndexedGmailMessage[] = []
+      for (const summary of summaries) {
+        const known = indexed.get(summary.messageId)
+        if (known) {
+          rows.push({ ...known, inDrafts: true, inTrash: false, inSpam: false })
+          continue
+        }
+        try {
+          const message = await this.readMessage(account.id, summary.messageId)
+          rows.push({ ...messageSummaryOf(message), inInbox: false, inSent: false, inDrafts: true, inArchive: false, inSpam: false, inTrash: false })
+        } catch (error) {
+          process.stderr.write(`dispatch-mail: could not read draft ${summary.messageId}: ${error instanceof Error ? error.message : String(error)}\n`)
+        }
+      }
+      const runId = `drafts:${new Date().toISOString()}:${randomUUID()}`
+      this.#index.replaceAccount(account.id, rows, runId, false)
+      this.#index.reconcileStream(account.id, 'drafts', rows.map((row) => row.id), runId)
+    }
+  }
+
+  async #listGmailDrafts(accountId: string): Promise<GmailDraftSummary[]> {
+    const drafts: GmailDraftSummary[] = []
+    let nextPageToken = ''
+    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      let value: unknown
+      try {
+        value = await this.#post('/v1/connectors/gmail/drafts/list', { linkId: accountId, maxResults: 100, nextPageToken })
+      } catch (error) {
+        throw draftConnectorError(error)
+      }
+      const content = structured(value)
+      if (content.error !== undefined || record(value)?.isError === true) throw new Error(`Gmail drafts list failed: ${text(content.error) || 'connector error'}`)
+      drafts.push(...array(content.drafts).map(gmailDraftSummary))
+      const next = text(content.next_page_token)
+      if (!next) return drafts
+      if (next === nextPageToken) throw new Error(`Gmail draft pagination repeated page token ${next}`)
+      nextPageToken = next
+    }
+    throw new Error('Gmail draft pagination exceeded 100 pages')
   }
 
   async #listAccountMessages(account: GmailAccountProjection, maxResults: number, state: MailStateFilter): Promise<readonly MessageSummary[]> {
@@ -809,4 +870,9 @@ export class GmailConnectorProvider {
     if (!response.ok) throw new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`)
     return value
   }
+}
+
+function messageSummaryOf(message: MessageProjection): MessageSummary {
+  const { body: _body, attachments: _attachments, source: _source, to: _to, cc: _cc, ...summary } = message
+  return summary
 }

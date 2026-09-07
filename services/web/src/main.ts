@@ -1724,6 +1724,8 @@ function handleAgentEvent(message: AgentEvent): void {
   if (message.method === 'turn/completed') {
     const turn = params?.turn as Record<string, unknown> | undefined
     const status = String(turn?.status ?? 'completed')
+    // Codex may have created or updated a draft; the Drafts folder is served live, so show it now.
+    if (mailbox === 'drafts') void loadConversations(true)
     if (status === 'failed') {
       const error = turn?.error as Record<string, unknown> | undefined
       setAgentStatus('Failed')
