@@ -248,8 +248,11 @@ describe('dispatch-agent', () => {
     expect(response.status).toBe(200)
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
       arguments: expect.objectContaining({
-        payload: { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p><strong>Hi</strong></p>' } },
-        text_plain: '**Hi**',
+        payload: { mime_type: 'multipart/alternative', parts: [
+          { mime_type: 'text/plain', charset: 'UTF-8', body: { content: '**Hi**' } },
+          { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p><strong>Hi</strong></p>' } },
+        ] },
+        response_fields: ['id', 'message'],
       }),
     }))
 
@@ -298,14 +301,27 @@ describe('dispatch-agent', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-1', subject: 'Hello', bodyMarkdown: 'Hi', bodyHtml: '<p>Hi</p>', attachments }),
     })).status).toBe(200)
-    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
-      tool: 'gmail.create_draft',
-      arguments: expect.objectContaining({ attachments }),
-    }))
-    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
-      tool: 'gmail.update_draft',
-      arguments: expect.objectContaining({ attachments }),
-    }))
+    const calls = (fake.request.mock.calls as unknown as Array<[string, { tool: string; arguments: Record<string, unknown> }]>).filter(([method]) => method === 'mcpServer/tool/call').map(([, params]) => params)
+    expect(calls.map((call) => call.tool)).toEqual(['gmail.create_draft', 'gmail.update_draft'])
+    for (const call of calls) {
+      // Only keys the connector schema declares; text and HTML as alternative parts, files as base64url parts.
+      expect(Object.keys(call.arguments)).toEqual(expect.arrayContaining(['link_id', 'payload', 'response_fields', 'subject', 'to']))
+      expect(call.arguments).not.toHaveProperty('text_plain')
+      expect(call.arguments).not.toHaveProperty('attachments')
+      expect(call.arguments).not.toHaveProperty('cc')
+      expect(call.arguments).not.toHaveProperty('reply_message_id')
+      expect(call.arguments.payload).toEqual({
+        mime_type: 'multipart/mixed',
+        parts: [
+          { mime_type: 'multipart/alternative', parts: [
+            { mime_type: 'text/plain', charset: 'UTF-8', body: { content: 'Hi' } },
+            { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p>Hi</p>' } },
+          ] },
+          { mime_type: 'application/pdf', filename: 'arrival.pdf', content_disposition: 'attachment', body: { base64_url_content: 'cGRm' } },
+        ],
+      })
+    }
+    expect(calls[1]!.arguments.draft_id).toBe('draft-1')
   })
 
   it('updates a Gmail draft with HTML and plain-text payloads', async () => {
@@ -325,8 +341,11 @@ describe('dispatch-agent', () => {
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
       tool: 'gmail.update_draft',
       arguments: expect.objectContaining({
-        payload: { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p><strong>Updated</strong></p>' } },
-        text_plain: '**Updated**',
+        draft_id: 'draft-1',
+        payload: { mime_type: 'multipart/alternative', parts: [
+          { mime_type: 'text/plain', charset: 'UTF-8', body: { content: '**Updated**' } },
+          { mime_type: 'text/html', charset: 'UTF-8', body: { content: '<p><strong>Updated</strong></p>' } },
+        ] },
       }),
     }))
   })
