@@ -15,8 +15,10 @@ export function renderChatMarkdown(value: string): HTMLElement {
     wrapper.append(table)
   })
   root.querySelectorAll('pre').forEach((pre) => pre.classList.add('bg-dark', 'text-white', 'p-3', 'rounded'))
+  // Inline code stays real inline text (tool names, ids, addresses), never a
+  // Tabler badge: badges uppercase and reflow it, and it no longer reads as code.
   root.querySelectorAll('code').forEach((code) => {
-    if (!code.closest('pre')) code.classList.add('badge', 'bg-azure-lt', 'text-azure')
+    if (!code.closest('pre')) code.classList.add('dispatch-inline-code')
   })
   root.querySelectorAll('blockquote').forEach((quote) => quote.classList.add('border-start', 'border-primary', 'border-3', 'ps-3', 'text-secondary'))
   root.querySelectorAll('a').forEach((anchor) => {

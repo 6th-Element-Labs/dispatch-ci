@@ -685,8 +685,13 @@ export class GmailConnectorProvider {
     return draft
   }
 
-  async openGmailDraft(accountId: string, messageId: string): Promise<DraftProjection> {
-    const summary = await this.#findGmailDraft(accountId, (draft) => draft.messageId === messageId || draft.threadId === messageId)
+  /**
+   * Every update_draft gives the draft a new message id, so the id the index
+   * remembers goes stale between syncs. The thread id survives, so the draft is
+   * matched by either.
+   */
+  async openGmailDraft(accountId: string, messageId: string, threadId = ''): Promise<DraftProjection> {
+    const summary = await this.#findGmailDraft(accountId, (draft) => draft.messageId === messageId || draft.threadId === messageId || (threadId !== '' && draft.threadId === threadId))
     if (!summary) {
       throw Object.assign(new Error(`Gmail draft for message ${messageId} was not found`), { code: 'gmail_draft_not_found' })
     }

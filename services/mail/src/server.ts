@@ -375,7 +375,7 @@ export function createMailServer(
       }
       if (!gmail.openGmailDraft) return writeJson(response, 501, { error: 'gmail_draft_open_not_configured' })
       try {
-        return writeJson(response, 201, { draft: await gmail.openGmailDraft(body.accountId, body.messageId) })
+        return writeJson(response, 201, { draft: await gmail.openGmailDraft(body.accountId, body.messageId, typeof body.threadId === 'string' ? body.threadId : '') })
       } catch (error) {
         return writeJson(response, draftStatus(error), draftError(error, 'gmail_draft_update_failed'))
       }

@@ -747,7 +747,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
 
   if (mailbox === 'drafts' && summary.accountId) {
     try {
-      const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId)
+      const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId, summary.threadId)
       if (sequence !== selectionSequence || selectedConversationId !== id) return
       showDraft(draft, false)
       try {
@@ -1593,7 +1593,19 @@ function renderUserInputRequest(card: HTMLElement, params: Record<string, unknow
   card.querySelector('[data-request-actions]')?.append(submit)
 }
 
-function renderElicitationRequest(card: HTMLElement): void {
+/** A connector permission prompt carries an empty schema: one click, no JSON. */
+function isPermissionElicitation(params: Record<string, unknown> | undefined): boolean {
+  const schema = params?.requestedSchema as { properties?: Record<string, unknown> } | undefined
+  const properties = schema?.properties
+  return !properties || Object.keys(properties).length === 0
+}
+
+function renderElicitationRequest(card: HTMLElement, params?: Record<string, unknown>): void {
+  if (isPermissionElicitation(params)) {
+    addRequestButton(card, 'Allow', { action: 'accept', content: {} }, true)
+    addRequestButton(card, 'Decline', { action: 'decline', content: null })
+    return
+  }
   const input = document.createElement('textarea')
   input.className = 'form-control my-3 dispatch-request-json'
   input.value = '{}'
@@ -1660,9 +1672,10 @@ function renderServerRequest(message: AgentEvent): void {
     description.textContent = 'Answer this question to continue the task.'
     renderUserInputRequest(card, params ?? {})
   } else if (message.method === 'mcpServer/elicitation/request') {
-    title.textContent = 'Connector needs information'
-    description.textContent = requestText(params, 'Provide the requested information to continue.')
-    renderElicitationRequest(card)
+    const permission = isPermissionElicitation(params)
+    title.textContent = permission ? 'Allow this connector action?' : 'Connector needs information'
+    description.textContent = requestText(params, permission ? 'Codex wants to run a connector tool.' : 'Provide the requested information to continue.')
+    renderElicitationRequest(card, params)
   } else {
     title.textContent = 'Codex needs attention'
     description.textContent = `Unsupported request: ${message.method}`

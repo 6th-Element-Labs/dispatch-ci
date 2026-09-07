@@ -483,7 +483,7 @@ test('opens a Drafts row in the editor and discards it', async ({ page }) => {
   await page.getByRole('button', { name: 'Drafts', exact: true }).click()
   await expect.poll(() => requestedMailbox).toBe('drafts')
   await page.locator('[data-conversation-id="gmail:draft-thread-9"]').click()
-  await expect.poll(() => openRequest).toEqual({ accountId: 'link-one', messageId: 'draft-message-9' })
+  await expect.poll(() => openRequest).toEqual({ accountId: 'link-one', messageId: 'draft-message-9', threadId: 'draft-thread-9' })
   await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Saved words')
   await page.getByRole('button', { name: 'Discard' }).click()
   await expect.poll(() => discarded).toBe(true)
@@ -1443,7 +1443,10 @@ for (const saveOutcome of ['succeeds', 'fails'] as const) {
     })
     await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...inbox[0]!, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Inbox body' }, attachments: [] }] } } }))
     const draft = { id: 'draft-9', inReplyToMessageId: 'dmsg', to: [{ name: 'Ana', address: 'ana@example.com', initials: 'A' }], cc: '', bcc: '', subject: 'Re: quick call', bodyMarkdown: 'Hi Ana', bodyHtml: '<p>Hi Ana</p>', bodyText: 'Hi Ana', attachments: [], state: 'draft', accountId: 'link-one' }
-    await page.route('http://127.0.0.1:8411/v1/drafts/open', (route) => route.fulfill({ status: 201, json: { draft } }))
+    await page.route('http://127.0.0.1:8411/v1/drafts/open', async (route) => {
+      expect(await route.request().postDataJSON()).toEqual({ accountId: 'link-one', messageId: 'dmsg', threadId: 't9' })
+      await route.fulfill({ status: 201, json: { draft } })
+    })
     let saves = 0
     await page.route('http://127.0.0.1:8411/v1/drafts/draft-9', async (route) => {
       saves += 1
@@ -1469,3 +1472,49 @@ for (const saveOutcome of ['succeeds', 'fails'] as const) {
     else await expect(page.locator('[data-mail-error]')).toBeHidden()
   })
 }
+
+test('renders inline code in Codex replies as readable inline text, not badges', async ({ page }) => {
+  await page.goto('/')
+  const rendered = await page.evaluate(async () => {
+    const { renderChatMarkdown } = await import(/* @vite-ignore */ ('/src/chat-renderer' + '.ts')) as { renderChatMarkdown: (value: string) => HTMLElement }
+    const root = renderChatMarkdown('I can update drafts, but I must never call `gmail.send_draft` or `gmail.send_email`.')
+    document.body.append(root)
+    const codes = [...root.querySelectorAll('code')]
+    return {
+      text: root.textContent,
+      classes: codes.map((code) => code.className),
+      fontFamily: getComputedStyle(codes[0]!).fontFamily,
+      transform: getComputedStyle(codes[0]!).textTransform,
+    }
+  })
+  expect(rendered.text?.trim()).toBe('I can update drafts, but I must never call gmail.send_draft or gmail.send_email.')
+  expect(rendered.classes).toEqual(['dispatch-inline-code', 'dispatch-inline-code'])
+  expect(rendered.fontFamily).toMatch(/mono/i)
+  expect(rendered.transform).toBe('none')
+})
+
+test('answers a connector permission prompt with one click', async ({ page }) => {
+  let answer: unknown
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads', (route) => route.fulfill({ status: 201, json: { thread: { id: 'thread-test' } } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-test', created: true, replaced: false } } }))
+  await page.route('http://127.0.0.1:8412/v1/server-requests/respond', async (route) => {
+    answer = await route.request().postDataJSON()
+    await route.fulfill({ json: { status: 'resolved' } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({
+    contentType: 'text/event-stream',
+    body: [
+      'data: {"method":"turn/started","params":{"threadId":"thread-test","turn":{"status":"inProgress"}}}\n\n',
+      'data: {"id":7,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-test","message":"Allow Gmail to run tool \\"gmail.update_draft\\"?","requestedSchema":{"type":"object","properties":{}}}}\n\n',
+    ].join(''),
+  }))
+  await page.goto('/')
+  await expect(page.getByText('Allow this connector action?')).toBeVisible()
+  await expect(page.getByText('Allow Gmail to run tool "gmail.update_draft"?')).toBeVisible()
+  await expect(page.locator('.dispatch-request-json')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Allow', exact: true }).click()
+  await expect.poll(() => answer).toEqual({ id: 7, result: { action: 'accept', content: {} } })
+})

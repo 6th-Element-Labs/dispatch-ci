@@ -209,6 +209,7 @@ button { cursor: pointer; }
 .ai-response li + li { margin-top: .2rem; }
 .ai-response pre { max-width: 100%; overflow-x: auto; font-size: .74rem; }
 .ai-response code { white-space: normal; }
+.ai-response .dispatch-inline-code { padding: .05em .35em; border-radius: 4px; background: var(--tblr-bg-surface-secondary); color: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; overflow-wrap: anywhere; }
 .ai-response pre code { white-space: pre; }
 .ai-response blockquote { margin: .75rem 0; }
 .ai-response .table-responsive { margin: .75rem 0; border: 1px solid var(--tblr-border-color); border-radius: var(--tblr-border-radius); }

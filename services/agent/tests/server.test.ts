@@ -61,7 +61,7 @@ describe('dispatch-agent', () => {
       model: 'gpt-5.6-sol',
       approvalPolicy: 'on-request',
       sandboxPolicy: expect.objectContaining({ type: 'readOnly' }),
-      developerInstructions: expect.stringContaining('Never call gmail.send_draft'),
+      developerInstructions: expect.stringMatching(/Never call gmail\.send_draft[\s\S]*press Send in Dispatch to send it/),
     }))
     expect(fake.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
       developerInstructions: expect.stringContaining('update that Gmail draft id'),

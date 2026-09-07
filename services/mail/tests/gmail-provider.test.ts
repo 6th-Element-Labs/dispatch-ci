@@ -457,6 +457,9 @@ describe('GmailConnectorProvider', () => {
       '/v1/connectors/gmail/read',
     ])
     expect(requests).not.toContainEqual(expect.objectContaining({ path: '/v1/connectors/gmail/drafts/create' }))
+    // After Codex updates a draft its message id changes; the thread id still finds it.
+    const byThread = await provider.openGmailDraft('link-one', 'stale-message-id-after-codex-update', 'gmail-thread-1')
+    expect(byThread.id).toBe('draft-opened')
   })
 
   it('opens a listed Gmail draft that already has attachments', async () => {

@@ -124,9 +124,9 @@ export const api = {
   async discardDraft(id: string, accountId: string): Promise<void> {
     await request(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=discard&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
   },
-  async openDraftFromMessage(accountId: string, messageId: string): Promise<DraftProjection> {
+  async openDraftFromMessage(accountId: string, messageId: string, threadId?: string): Promise<DraftProjection> {
     const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts/open`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, messageId }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, messageId, threadId }),
     })
     return result.draft
   },
