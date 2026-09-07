@@ -1429,3 +1429,43 @@ test('a wide HTML email scrolls inside its card instead of being clipped', async
   const reader = await page.locator('.dispatch-reader').evaluate((node) => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }))
   expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1)
 })
+
+for (const saveOutcome of ['succeeds', 'fails'] as const) {
+  test(`returning from a draft to the inbox keeps every row selectable when the autosave ${saveOutcome}`, async ({ page }) => {
+    await page.unroute('http://127.0.0.1:8411/v1/accounts')
+    await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+    await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+    const inbox = conversations.map((conversation) => ({ ...conversation, accountId: 'link-one', accountLabel: 'work@example.com' }))
+    const draftRow = { ...inbox[0]!, id: 'link-one:t9', threadId: 't9', latestMessageId: 'dmsg', subject: 'Re: quick call', sender: { name: 'Steve', address: 'work@example.com', initials: 'S' } }
+    await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
+      const mailbox = new URL(route.request().url()).searchParams.get('mailbox')
+      return route.fulfill({ json: { source: 'gmail', conversations: mailbox === 'drafts' ? [draftRow] : inbox, nextCursor: null, total: 1 } })
+    })
+    await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...inbox[0]!, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Inbox body' }, attachments: [] }] } } }))
+    const draft = { id: 'draft-9', inReplyToMessageId: 'dmsg', to: [{ name: 'Ana', address: 'ana@example.com', initials: 'A' }], cc: '', bcc: '', subject: 'Re: quick call', bodyMarkdown: 'Hi Ana', bodyHtml: '<p>Hi Ana</p>', bodyText: 'Hi Ana', attachments: [], state: 'draft', accountId: 'link-one' }
+    await page.route('http://127.0.0.1:8411/v1/drafts/open', (route) => route.fulfill({ status: 201, json: { draft } }))
+    let saves = 0
+    await page.route('http://127.0.0.1:8411/v1/drafts/draft-9', async (route) => {
+      saves += 1
+      if (saveOutcome === 'fails') return route.fulfill({ status: 502, json: { error: 'gmail_draft_update_failed', detail: 'connector refused' } })
+      const fields = await route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ json: { draft: { ...draft, bodyMarkdown: fields.bodyMarkdown, bodyText: fields.bodyText } } })
+    })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+    await page.locator('[data-conversation-id="link-one:t9"]').click()
+    const body = page.getByRole('textbox', { name: 'Draft body' })
+    await expect(body).toHaveValue('Hi Ana')
+    await body.fill('Hi Ana, edited')
+    await page.getByRole('button', { name: 'Inbox', exact: true }).click()
+    await page.locator('[data-conversation-id="demo:t2"]').click()
+    await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible({ timeout: 5000 })
+    await page.locator('[data-conversation-id="demo:t1"]').click()
+    await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+    await expect(page.locator('.dispatch-thread-body').first()).toContainText('Inbox body')
+    await expect(page.getByRole('textbox', { name: 'Draft body' })).toBeHidden()
+    expect(saves).toBeGreaterThanOrEqual(1)
+    if (saveOutcome === 'fails') await expect(page.locator('[data-mail-error]')).toContainText('was not saved: Request failed (502)')
+    else await expect(page.locator('[data-mail-error]')).toBeHidden()
+  })
+}

@@ -703,8 +703,13 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   try {
     await flushDraftAutosave()
   } catch (error) {
-    if (sequence === selectionSequence) draftError(error)
-    return
+    if (sequence !== selectionSequence) return
+    // A draft that will not save must not pin the whole inbox: say so where it
+    // is visible, keep Gmail's last saved copy, and move on.
+    const subject = activeDraft?.subject || '(no subject)'
+    elements.mailError.hidden = false
+    elements.mailError.textContent = `Draft "${subject}" was not saved: ${error instanceof Error ? error.message : String(error)}. Gmail keeps the last saved version.`
+    draftDirty = false
   }
   if (sequence !== selectionSequence) return
   if (options.revealOnMobile && usesMobilePanels()) {
