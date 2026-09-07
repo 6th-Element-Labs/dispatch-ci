@@ -1412,3 +1412,20 @@ test('puts the reader subject on its own row above the actions', async ({ page }
   expect(style.whiteSpace).toBe('nowrap')
   expect(style.fontSize).toBeLessThanOrEqual(16)
 })
+
+test('a wide HTML email scrolls inside its card instead of being clipped', async ({ page }) => {
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2/, (route) => {
+    if (route.request().url().includes('/actions') || route.request().url().includes('/read-state')) return route.fallback()
+    const wide = '<table style="width:1400px"><tr><td style="width:1400px;white-space:nowrap">Our records show that a payment for your subscription was not completed and this sentence keeps going well past the pane.</td></tr></table>'
+    return route.fulfill({ json: { conversation: { ...conversations[1]!, source: 'demo', messages: [{ ...messages[1]!, source: 'demo', body: { kind: 'sanitized-html', content: wide }, attachments: [] }] } } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  const content = page.locator('.dispatch-thread-content').first()
+  await expect(content).toBeVisible()
+  const metrics = await content.evaluate((node) => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth, overflowX: getComputedStyle(node).overflowX }))
+  expect(metrics.overflowX).toBe('auto')
+  expect(metrics.scrollWidth).toBeGreaterThan(metrics.clientWidth)
+  const reader = await page.locator('.dispatch-reader').evaluate((node) => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }))
+  expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1)
+})

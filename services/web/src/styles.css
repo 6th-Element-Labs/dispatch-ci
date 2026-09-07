@@ -111,7 +111,9 @@ button { cursor: pointer; }
 .dispatch-thread-collapsed > header strong { flex: none; }
 .dispatch-thread-collapsed > header small { flex: 1; }
 .dispatch-thread-collapsed:hover { background: var(--tblr-bg-surface-tertiary); }
-.dispatch-thread-content { padding: .875rem 1.25rem 1.125rem 4rem; }
+.dispatch-thread-content { padding: .875rem 1.25rem 1.125rem 4rem; min-width: 0; overflow-x: auto; }
+.dispatch-thread-body table { max-width: 100%; }
+.dispatch-thread-body [width] { max-width: 100%; }
 .dispatch-thread-body { font-size: .875rem; line-height: 1.65; overflow-wrap: anywhere; }
 .dispatch-thread-body p { max-width: 720px; margin: 0 0 1rem; }
 .dispatch-thread-body > p { white-space: pre-wrap; }

@@ -45,7 +45,7 @@ npm --prefix apps/desktop run build:native
 
 `build:native` stages the services itself. To run the Rust unit tests alone, run `npm --prefix apps/desktop run stage` first; Tauri's build script requires the staged resources to exist.
 
-The bundle lands under `apps/desktop/src-tauri/target/release/bundle`. Service output goes to `~/Library/Logs/Dispatch`. If port 8411 or 8412 is already in use, for example by `scripts/dev.sh`, the app reports the conflict and exits instead of attaching to it. `npm --prefix apps/desktop run dev:native` runs the window against the Vite dev server with real sidecars.
+The bundle lands under `apps/desktop/src-tauri/target/release/bundle`. To put a build in the Dock, run `npm --prefix apps/desktop run install:app`: it builds, quits the running Dispatch, replaces `/Applications/Dispatch.app`, and relaunches it (`-- --skip-build` reuses the last build). Service output goes to `~/Library/Logs/Dispatch`. If port 8411 or 8412 is already in use, for example by `scripts/dev.sh`, the app reports the conflict and exits instead of attaching to it. `npm --prefix apps/desktop run dev:native` runs the window against the Vite dev server with real sidecars.
 
 ## Verify
 
