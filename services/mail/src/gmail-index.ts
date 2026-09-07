@@ -16,11 +16,14 @@ export interface IndexedGmailMessage extends MessageSummary {
 export function folderFlagsFromLabels(labels: readonly unknown[]): Pick<
   IndexedGmailMessage, 'inInbox' | 'inSent' | 'inDrafts' | 'inArchive' | 'inSpam' | 'inTrash'
 > {
-  const inInbox = labels.includes('INBOX')
-  const inSent = labels.includes('SENT')
-  const inDrafts = labels.includes('DRAFT')
+  // Gmail keeps INBOX, SENT, and DRAFT labels on messages it has moved to
+  // Trash or Spam; a trashed draft is in Trash, not in Drafts.
   const inSpam = labels.includes('SPAM')
   const inTrash = labels.includes('TRASH')
+  const shelved = inSpam || inTrash
+  const inInbox = !shelved && labels.includes('INBOX')
+  const inSent = !shelved && labels.includes('SENT')
+  const inDrafts = !shelved && labels.includes('DRAFT')
   return {
     inInbox,
     inSent,

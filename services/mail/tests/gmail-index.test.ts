@@ -243,3 +243,12 @@ describe('GmailIndex reconcileStream', () => {
     expect(index.messages('account-1').map((item) => item.id).sort()).toEqual(['d3', 'm1'])
   })
 })
+
+describe('folderFlagsFromLabels', () => {
+  it('keeps a trashed or spammed draft out of Drafts, Inbox, and Sent', () => {
+    expect(folderFlagsFromLabels(['DRAFT', 'TRASH'])).toMatchObject({ inDrafts: false, inTrash: true, inArchive: false })
+    expect(folderFlagsFromLabels(['INBOX', 'UNREAD', 'SPAM'])).toMatchObject({ inInbox: false, inSpam: true })
+    expect(folderFlagsFromLabels(['SENT', 'TRASH'])).toMatchObject({ inSent: false, inTrash: true })
+    expect(folderFlagsFromLabels(['DRAFT'])).toMatchObject({ inDrafts: true, inTrash: false })
+  })
+})
