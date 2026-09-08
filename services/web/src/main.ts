@@ -283,10 +283,31 @@ const conversationCache = new Map<string, Promise<ConversationProjection>>()
 const BINDING_CACHE = 'dispatch.codex.bindings.v1'
 type CodexPaneKey = { kind: 'unbound' } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
 const acceptedReadState = new Map<string, boolean>()
-let threadId: string | undefined = localStorage.getItem('dispatch.codex.threadId') || undefined
+let threadId: string | undefined
+let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
+let bindingSequence = 0
+const pendingCodexPrompts = new Map<string, string>()
 
 function bindingCacheKey(key: CodexPaneKey): string {
   return key.kind === 'unbound' ? 'unbound' : `conversation:${key.accountId}:${key.gmailThreadId}`
+}
+
+function selectCodexContext(key: CodexPaneKey): void {
+  pendingCodexPrompts.set(bindingCacheKey(desiredCodexKey), elements.prompt.value)
+  desiredCodexKey = key
+  bindingSequence += 1
+  paneSequence += 1
+  codexContextReady = false
+  threadId = undefined
+  agentEvents?.close()
+  agentEvents = undefined
+  elements.stream.replaceChildren()
+  elements.prompt.value = pendingCodexPrompts.get(bindingCacheKey(key)) ?? ''
+  activeAgentMessage = undefined
+  activeAgentText = ''
+  activeTurnId = undefined
+  elements.stop.hidden = true
+  setAgentStatus('Connecting')
 }
 
 function readBindingCache(): Record<string, string> {
@@ -814,6 +835,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
   if (!summary) return
   const sequence = ++selectionSequence
+  selectCodexContext(conversationBindingKey({ ...summary, source: summary.accountId ? 'gmail' : summary.id.startsWith('demo:') ? 'demo' : undefined }))
   selectedAttachmentContext = undefined
   codexContextReady = false
   try {
@@ -871,7 +893,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
       showDraft(draft, false)
       try {
         const key = conversationBindingKey({ accountId: summary.accountId, threadId: summary.threadId })
-        await bindAndShowCodex(key, { sequence, clearOnFailure: true })
+        await bindAndShowCodex(key, { sequence })
       } catch (error) {
         if (sequence !== selectionSequence) return
         elements.stream.replaceChildren()
@@ -962,7 +984,8 @@ const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(
     prefetchConversations(id)
     try {
       const key = conversationBindingKey({ accountId: conversation.accountId, threadId: conversation.threadId, source: conversation.source })
-      await bindAndShowCodex(key, { sequence, clearOnFailure: true })
+      if (bindingCacheKey(key) !== bindingCacheKey(desiredCodexKey)) selectCodexContext(key)
+      await bindAndShowCodex(key, { sequence })
     } catch (error) {
       if (sequence !== selectionSequence) return
       elements.stream.replaceChildren()
@@ -1320,6 +1343,7 @@ function renderRecoveryList(): void {
 async function restoreLocalDraft(key: string): Promise<void> {
   if (activeDraft && draftDirty) checkpointDraft()
   const sequence = ++selectionSequence
+  selectCodexContext({ kind: 'unbound' })
   const restored = await recovery.restore(key)
   if (sequence !== selectionSequence) return
   const record = restored.record
@@ -1522,11 +1546,12 @@ function openCompose(): void {
   }
   markReadDwell.cancel()
   const sequence = ++selectionSequence
+  selectCodexContext({ kind: 'unbound' })
   selectedAttachmentContext = undefined
   codexContextReady = false
   selected = undefined
   selectedConversationId = undefined
-  void bindAndShowCodex({ kind: 'unbound' }, { sequence, clearOnFailure: true })
+  void bindAndShowCodex({ kind: 'unbound' }, { sequence })
   if (usesMobilePanels()) {
     mobilePanel = 'reader'
     mobileReturnPanel = 'reader'
@@ -2113,6 +2138,7 @@ async function refreshCodexDraft(draftId: string, accountId: string, createdByCo
 
 async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
   if (!codexContextReady) return
+  const selection = selectionSequence
   if (effect.kind === 'search') {
     if (!effect.search.requestId && !acceptChatSearchResults) return
     if (effect.search.requestId && effect.search.requestId !== searchView?.requestId) return
@@ -2134,8 +2160,9 @@ async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
   }
   try {
     const receipt = await api.recordSend(effect.accountId, effect.messageId, effect.draftId)
+    if (selection !== selectionSequence) return
     showReceipt(receipt)
-  } catch (error) { addAgentMessage('tool', `Gmail accepted message ${effect.messageId}; receipt details could not be loaded: ${String(error)}`) }
+  } catch (error) { if (selection !== selectionSequence) return; addAgentMessage('tool', `Gmail accepted message ${effect.messageId}; receipt details could not be loaded: ${String(error)}`) }
   if (effect.draftId && activeDraft?.id === effect.draftId && activeDraft.accountId === effect.accountId && !draftDirty && !draftSaveFlight) { clearRecovery(); hideDraftEditor() }
   if (!offlineMode) void loadConversations(true)
 }
@@ -2188,33 +2215,41 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   }
   if (sequence !== paneSequence) return
   agentEvents = api.events(nextThreadId)
-  agentEvents.onopen = () => { setAgentStatus('Connected') }
+  agentEvents.onopen = () => { if (sequence === paneSequence && nextThreadId === threadId) setAgentStatus('Connected') }
   agentEvents.onmessage = (event) => {
     if (sequence === paneSequence && nextThreadId === threadId) handleAgentEvent(JSON.parse(event.data) as AgentEvent)
   }
   agentEvents.onerror = () => {
+    if (sequence !== paneSequence || nextThreadId !== threadId) return
     agentEvents?.close()
     setAgentStatus('Reconnecting')
     scheduleAgentReconnect()
   }
 }
 
-async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: string; sequence?: number; clearOnFailure?: boolean } = {}): Promise<boolean> {
+async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: string; sequence?: number } = {}): Promise<boolean> {
+  const request = ++bindingSequence
+  const selection = options.sequence ?? selectionSequence
+  const current = () => request === bindingSequence && selection === selectionSequence && bindingCacheKey(key) === bindingCacheKey(desiredCodexKey)
+  if (!current()) return false
   try {
-    if (!await api.agentReady()) { scheduleAgentReconnect(); return false }
+    if (!await api.agentReady()) { if (current()) scheduleAgentReconnect(); return false }
+    if (!current()) return false
     const binding = await api.bindThread(key, options.adoptThreadId)
-    if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
+    if (!current()) return false
     writeBindingCache(key, binding.threadId)
     await showCodexThread(binding.threadId, binding.created, binding.replaced, binding.detail)
+    if (!current()) return false
     const context = selected ?? (mailbox === 'drafts' ? conversations.find((item) => item.id === selectedConversationId) : undefined)
     const currentKey = context ? conversationBindingKey(context) : !selectedConversationId ? { kind: 'unbound' } : undefined
     if (currentKey && JSON.stringify(key) === JSON.stringify(currentKey) && (options.sequence === undefined || options.sequence === selectionSequence)) codexContextReady = true
     return true
   } catch (error) {
-    if (options.sequence !== undefined && options.sequence !== selectionSequence) return false
+    if (!current()) return false
     const message = error instanceof Error ? error.message : String(error)
     setAgentStatus('Reconnecting')
-    if (options.clearOnFailure) elements.stream.replaceChildren()
+    codexContextReady = false
+    elements.stream.replaceChildren()
     addAgentMessage('error', message)
     scheduleAgentReconnect()
     return false
@@ -2235,14 +2270,11 @@ async function connectAgent(): Promise<void> {
     apps = await api.listApps()
     const gmail = gmailAppId(apps)
     setConnectorStatus(gmail ? 'Gmail available' : 'No Gmail connector', Boolean(gmail))
-    const unbound = { kind: 'unbound' as const }
-    if (!await bindAndShowCodex(unbound, { adoptThreadId: localStorage.getItem('dispatch.codex.threadId') || undefined })) {
-      throw new Error(elements.stream.lastElementChild?.textContent || 'Could not bind the unbound Codex thread.')
-    }
-    if (selected) {
-      const key = conversationBindingKey({ accountId: selected.accountId, threadId: selected.threadId, source: selected.source })
-      await bindAndShowCodex(key)
-    }
+    // Reconnect only the selected context. Never render the general chat as
+    // an intermediate step while an email conversation is selected.
+    const key = desiredCodexKey
+    await bindAndShowCodex(key, { sequence: selectionSequence,
+      adoptThreadId: key.kind === 'unbound' ? readBindingCache().unbound : undefined })
     void refreshModelCatalog()
   } catch (error) {
     setAgentStatus('Reconnecting', error instanceof Error ? error.message : String(error))
@@ -2256,6 +2288,7 @@ async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
   if (!text || !threadId) return
   if (!codexContextReady) { addAgentMessage('error', 'Codex is still connecting to the selected conversation. Please try again.'); return }
+  const selection = selectionSequence
   acceptChatSearchResults = true
   addAgentMessage('user', text)
   setAgentStatus('Working')
@@ -2286,6 +2319,7 @@ async function sendPrompt(): Promise<void> {
       } : undefined,
     })
   } catch (error) {
+    if (selection !== selectionSequence) return
     addAgentMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
@@ -2318,6 +2352,7 @@ async function searchWithCodex(): Promise<void> {
   const requestId = crypto.randomUUID()
   conversationLoadSequence += 1
   const sequence = ++selectionSequence
+  selectCodexContext({ kind: 'unbound' })
   markReadDwell.cancel()
   acceptChatSearchResults = false
   searchView = { query, requestId, results: [], phase: 'pending' }
@@ -2332,7 +2367,7 @@ async function searchWithCodex(): Promise<void> {
   renderPanels(); renderList()
   const account = selectedAccountId ? accounts.find(item => item.id === selectedAccountId) : undefined
   try {
-    if (!await bindAndShowCodex({ kind: 'unbound' }, { sequence, clearOnFailure: true }) || !threadId) throw new Error('Codex is not connected. Try the search again when it is ready.')
+    if (!await bindAndShowCodex({ kind: 'unbound' }, { sequence }) || !threadId) throw new Error('Codex is not connected. Try the search again when it is ready.')
     if (sequence !== selectionSequence || searchView?.requestId !== requestId) return
     addAgentMessage('user', query)
     const prompt = `${query}\n\nSelected Gmail search context: ` + [
@@ -2401,6 +2436,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     selected = undefined
     selectedConversationId = undefined
     selectionSequence += 1
+    selectCodexContext({ kind: 'unbound' })
     elements.reader.hidden = true
     elements.readerEmpty.hidden = false
     elements.readerEmpty.textContent = usedCache && conversations.length > 0 ? 'Select a message' : `Loading ${mailState === 'all' ? '' : `${mailState} `}${mailboxLabels[mailbox].toLowerCase()}…`
@@ -2440,6 +2476,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
       elements.reader.hidden = true
       elements.readerEmpty.hidden = false
       elements.readerEmpty.textContent = defaultEmptyListMessage()
+      void bindAndShowCodex({ kind: 'unbound' }, { sequence: selectionSequence })
     }
   } catch (error) {
     if (loadSequence !== conversationLoadSequence) return

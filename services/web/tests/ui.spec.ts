@@ -2102,3 +2102,66 @@ test('changing folders does not reuse another folder’s thread projection', asy
   await expect(page.locator('[data-body]')).toContainText('trash body')
   expect(reads).toEqual(['inbox', 'trash'])
 })
+
+
+test('clears the previous chat immediately while the next email body loads', async ({ page }) => {
+  await stubAgent(page, { 'conversation:demo:t1': { threadId: 'only-A' }, 'conversation:demo:t2': { threadId: 'only-B' } })
+  let release!: () => void
+  const delayed = new Promise<void>(resolve => { release = resolve })
+  await page.route(/8411\/v1\/conversations\/t2/, async route => {
+    await delayed
+    await route.fulfill({ json: { conversation: { ...conversations[1], source: 'demo', messages: [{ ...messages[1], source: 'demo', body: { kind: 'plain-text', content: 'B' }, attachments: [] }] } } })
+  })
+  await page.goto('/')
+  await expect(page.getByText('History for only-A')).toBeVisible()
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Unsent question for A')
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.getByText('History for only-A')).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: 'Ask Codex' })).toHaveValue('')
+  release()
+  await expect(page.getByText('History for only-B')).toBeVisible()
+})
+
+test('failed email binding never shows general or previous chat during reconnect', async ({ page }) => {
+  await stubAgent(page)
+  let failures = 0
+  const keys: string[] = []
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', async route => {
+    const key = route.request().postDataJSON()
+    keys.push(key.gmailThreadId ?? 'unbound')
+    if (key.gmailThreadId === 't2') {
+      failures++
+      await route.fulfill({ status: 502, json: { error: 'codex_binding_failed', detail: 'The selected task is archived' } })
+    } else await route.fulfill({ json: { binding: { key, threadId: key.gmailThreadId === 't1' ? 'only-A' : 'general', created: false, replaced: false } } })
+  })
+  await page.goto('/')
+  await expect(page.getByText('History for only-A')).toBeVisible()
+  keys.length = 0
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect.poll(() => failures).toBeGreaterThanOrEqual(2)
+  await expect(page.getByText('History for only-A')).toHaveCount(0)
+  await expect(page.getByText('History for general')).toHaveCount(0)
+  expect(keys.every(key => key === 't2')).toBe(true)
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await expect(page.getByText('History for only-A')).toBeVisible()
+})
+
+
+test('late history from a previous selection cannot replace the current chat', async ({ page }) => {
+  await stubAgent(page, { 'conversation:demo:t1': { threadId: 'slow-A' }, 'conversation:demo:t2': { threadId: 'fast-B' } })
+  let release!: () => void
+  let requested = false
+  const delayed = new Promise<void>(resolve => { release = resolve })
+  await page.route('http://127.0.0.1:8412/v1/threads/slow-A', async route => {
+    requested = true
+    await delayed
+    await route.fulfill({ json: { thread: { turns: [{ items: [{ type: 'agentMessage', text: 'Late private history A' }] }] } } })
+  })
+  await page.goto('/')
+  await expect.poll(() => requested).toBe(true)
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.getByText('History for fast-B')).toBeVisible()
+  release()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dispatch.codex.threadId'))).toBe('fast-B')
+  await expect(page.getByText('Late private history A')).toHaveCount(0)
+})
