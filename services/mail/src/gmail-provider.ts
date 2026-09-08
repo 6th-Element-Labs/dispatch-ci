@@ -1,3 +1,4 @@
+import { LocalMailStore, type SendReceipt, type ReceiptDetails, type OfflineDownload } from './local-mail-store.js'
 import { groupConversations, projectConversation } from './conversation.js'
 import { plainBodyFromMessage, projectDraft } from './draft.js'
 import { randomUUID } from 'node:crypto'
@@ -269,6 +270,8 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
     attachments: includeBody ? attachments(payload) : [],
     to: addressList(messageHeaders.get('to') ?? ''),
     cc: addressList(messageHeaders.get('cc') ?? ''),
+    bcc: addressList(messageHeaders.get('bcc') ?? ''),
+    labels: array(message.label_ids).filter((value): value is string => typeof value === 'string'),
     source: 'gmail',
     accountId: account?.id,
     accountLabel: account?.email || account?.name,
@@ -313,6 +316,9 @@ export function projectGmailSearchEmail(value: unknown, account: GmailAccountPro
 export class GmailConnectorProvider {
   readonly #agentBase: string
   readonly #index: GmailIndex | undefined
+  readonly #local: LocalMailStore
+  readonly #sendFlights = new Map<string, Promise<unknown>>()
+  #download: OfflineDownload | undefined
   readonly #syncIntervalMs: number
   readonly #refreshIntervalMs: number
   #syncPromise: Promise<void> | undefined
@@ -325,13 +331,15 @@ export class GmailConnectorProvider {
 
   constructor(
     agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412',
-    options: { indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number } = {},
+    options: { localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number } = {},
   ) {
     this.#agentBase = agentBase
     const indexPath = options.indexPath === false
       ? undefined
       : options.indexPath ?? process.env.DISPATCH_MAIL_DB ?? defaultIndexPath()
     this.#index = indexPath ? new GmailIndex(indexPath) : undefined
+    this.#local = new LocalMailStore(options.localPath ?? (indexPath && indexPath !== ':memory:' ? `${indexPath}.local` : ':memory:'))
+    this.#download = this.#local.download()
     this.#syncIntervalMs = options.syncIntervalMs ?? 300_000
     this.#refreshIntervalMs = options.refreshIntervalMs ?? 60_000
   }
@@ -355,7 +363,9 @@ export class GmailConnectorProvider {
     this.#syncTimer = undefined
     this.#refreshTimer = undefined
     this.#retryTimer = undefined
+    this.cancelOfflineDownload()
     this.#index?.close()
+    this.#local.close()
   }
 
   syncStatus(): (GmailSyncStatus & Partial<GmailSyncProgress>) | undefined {
@@ -395,6 +405,7 @@ export class GmailConnectorProvider {
         }
         this.#syncProgress.currentAccount = null
         this.#index!.pruneAccounts(accounts.map((account) => account.id))
+        this.#local.pruneAccounts(accounts.map((account) => account.id))
         this.#index!.completeSync(new Date().toISOString(), true)
       } catch (error) {
         this.#index!.failSync(error instanceof Error ? error.message : String(error))
@@ -403,6 +414,8 @@ export class GmailConnectorProvider {
     })().finally(() => { this.#syncPromise = undefined })
     return this.#syncPromise
   }
+
+  cachedAccounts(): readonly GmailAccountProjection[] { return this.#index?.accounts() ?? [] }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
     try {
@@ -658,6 +671,7 @@ export class GmailConnectorProvider {
         }
         this.#syncProgress.currentAccount = null
         this.#index!.pruneAccounts(accounts.map((account) => account.id))
+        this.#local.pruneAccounts(accounts.map((account) => account.id))
         this.#index!.completeSync(new Date().toISOString(), completion.every(Boolean))
       } catch (error) {
         this.#index!.failSync(error instanceof Error ? error.message : String(error))
@@ -673,14 +687,60 @@ export class GmailConnectorProvider {
     return projectGmailMessage(value, true, account)
   }
 
-  async readConversation(accountId: string, threadId: string): Promise<ConversationProjection> {
-    const account = await this.#account(accountId)
-    const value = await this.#post('/v1/connectors/gmail/read-thread', { linkId: accountId, threadId, maxMessages: 100 })
-    const thread = structured(value)
-    const messages = array(thread.messages).map((message) => projectGmailMessage({ structuredContent: message }, true, account))
-    if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
-    return projectConversation(messages, 'gmail')
+  async readConversation(accountId: string, threadId: string, downloadedOnly = false): Promise<ConversationProjection> {
+    const cached = this.#local.conversation(accountId, threadId)
+    if (downloadedOnly) {
+      if (!cached) throw Object.assign(new Error('This conversation has not been downloaded. Go online and open it or download the mailbox.'), { code: 'not_downloaded' })
+      return { ...cached.conversation, availability: { mode: 'downloaded', cachedAt: cached.cachedAt } }
+    }
+    try {
+      const account = await this.#account(accountId)
+      const value = await this.#post('/v1/connectors/gmail/read-thread', { linkId: accountId, threadId, maxMessages: 100 })
+      const thread = structured(value)
+      const messages = array(thread.messages).map((message) => projectGmailMessage({ structuredContent: message }, true, account))
+      if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
+      const conversation = projectConversation(messages, 'gmail')
+      const cachedAt = this.#stopped ? new Date().toISOString() : this.#local.cache(conversation)
+      return { ...conversation, availability: { mode: 'live', cachedAt } }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      if (!cached || /not found|unknown account|401|403|404/i.test(detail) || !/timeout|timed out|fetch failed|aborted|ECONN|ENOTFOUND|503|unavailable/i.test(detail)) throw error
+      return { ...cached.conversation, availability: { mode: 'downloaded', cachedAt: cached.cachedAt, reason: 'Gmail could not be reached.' } }
+    }
   }
+
+  offlineStatus() { return { ...this.#local.stats(), download: this.#download } }
+  downloadedConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): readonly ConversationSummary[] {
+    if (!this.#index) return []
+    const keys = this.#local.cachedKeys()
+    const conversations = query ? this.#index.searchMailboxConversations(mailbox, query, state, accountId) : this.#index.mailboxConversations(mailbox, state, accountId)
+    return conversations.map(conversation => ({ ...conversation, downloaded: keys.has(`${conversation.accountId}:${conversation.threadId}`) }))
+  }
+  startOfflineDownload(mailbox: GmailMailbox, accountId?: string): OfflineDownload {
+    if (this.#download?.state === 'running') return this.#download
+    if (!this.#index) throw new Error('The Gmail index is required to download a mailbox')
+    const queue = this.#index.mailboxConversations(mailbox, 'all', accountId)
+    const job: OfflineDownload = { id: randomUUID(), state: 'running', mailbox, accountId, total: queue.length, completed: 0, errors: [], startedAt: new Date().toISOString() }
+    this.#download = job; this.#local.putDownload(job)
+    void (async () => {
+      for (const conversation of queue) {
+        if (job.state !== 'running' || this.#stopped) return
+        try {
+          const cached = this.#local.conversation(conversation.accountId!, conversation.threadId)
+          if (!cached || cached.conversation.latestMessageId !== conversation.latestMessageId || cached.conversation.messages.length < conversation.messageCount) {
+            const loaded = await this.readConversation(conversation.accountId!, conversation.threadId)
+            if (loaded.availability?.mode === 'downloaded') throw new Error('Gmail is offline; the existing saved copy was kept.')
+            if (loaded.messages.length < conversation.messageCount) throw new Error(`Only ${loaded.messages.length} of ${conversation.messageCount} indexed messages were returned. This conversation download is incomplete.`)
+          }
+          job.completed += 1
+        } catch (error) { job.errors.push(`${conversation.subject}: ${error instanceof Error ? error.message : String(error)}`) }
+        if (!this.#stopped && this.#download === job) this.#local.putDownload(job)
+      }
+      if (job.state === 'running' && !this.#stopped && this.#download === job) { job.state = job.errors.length ? 'partial' : 'complete'; this.#local.putDownload(job) }
+    })()
+    return job
+  }
+  cancelOfflineDownload(): void { if (this.#download?.state === 'running') { this.#download.state = 'cancelled'; this.#local.putDownload(this.#download) } }
 
   async setConversationUnread(accountId: string, threadId: string, unread: boolean, suppliedMessageIds?: readonly string[]): Promise<{ messageIds: readonly string[]; unread: boolean }> {
     if (!this.#index) throw new Error('Durable Gmail index is required for read-state mutations')
@@ -798,12 +858,85 @@ export class GmailConnectorProvider {
     }
   }
 
+  sendReceipts(): SendReceipt[] { return this.#local.receipts() }
+  sendReceipt(id: string): SendReceipt | undefined { return this.#local.receipt(id) }
+
+  async verifySendReceipt(id: string): Promise<SendReceipt> {
+    const receipt = this.#local.receipt(id)
+    if (!receipt) throw new Error('Send receipt not found')
+    if (!receipt.messageId || receipt.status === 'verified') return receipt
+    try {
+      const message = await this.readMessage(receipt.accountId, receipt.messageId)
+      if (!message.labels?.includes('SENT')) throw new Error('The returned message is not marked Sent by Gmail.')
+      const details: ReceiptDetails = { to: (message.to ?? []).map(item => item.address), cc: (message.cc ?? []).map(item => item.address), bcc: (message.bcc ?? []).map(item => item.address), subject: message.subject, attachments: message.attachments.map(item => ({ name: item.name, mediaType: item.mediaType, sizeLabel: item.sizeLabel })) }
+      if (!details.to.length && !details.cc.length && !details.bcc.length) throw new Error('The sent copy has no verifiable recipients.')
+      const warnings: string[] = []
+      const expected = receipt.intended
+      const same = (a: string[], b: string[]) => JSON.stringify(a.map(value => value.toLowerCase()).sort()) === JSON.stringify(b.map(value => value.toLowerCase()).sort())
+      if (expected && (!same(expected.to, details.to) || !same(expected.cc, details.cc) || !same(expected.bcc, details.bcc))) warnings.push('Sent recipients differ from the saved draft snapshot.')
+      if (expected && !same(expected.attachments.map(item => item.name), details.attachments.map(item => item.name))) warnings.push('Sent attachments differ from the saved draft snapshot.')
+      const current = this.#stopped ? receipt : this.#local.receipt(id)
+      if (current?.status === 'verified' || current?.messageId !== receipt.messageId) return current ?? receipt
+      const verified: SendReceipt = { ...receipt, status: 'verified', detailsSource: 'sent-message', details, sentAt: message.receivedAt, verifiedAt: new Date().toISOString(), accountLabel: message.accountLabel ?? receipt.accountLabel, error: undefined, warnings }
+      if (!this.#stopped) this.#local.putReceipt(verified)
+      return verified
+    } catch (error) {
+      const current = this.#stopped ? receipt : this.#local.receipt(id)
+      if (current?.status === 'verified' || current?.messageId !== receipt.messageId) return current ?? receipt
+      const pending = { ...receipt, error: `Gmail accepted the send, but sent details could not be verified: ${error instanceof Error ? error.message : String(error)}` }
+      if (!this.#stopped) this.#local.putReceipt(pending)
+      return pending
+    }
+  }
+
+  recordExternalSend(accountId: string, messageId: string, draftId?: string): SendReceipt {
+    if (!accountId || !messageId) throw new Error('Account and Gmail message ID are required')
+    const existing = this.#local.receiptForMessage(accountId, messageId) ?? (draftId ? this.#local.receiptForDraft(accountId, draftId) : undefined)
+    if (existing?.status === 'verified') return existing
+    const now = new Date().toISOString()
+    const receipt: SendReceipt = { id: existing?.id ?? randomUUID(), accountId, accountLabel: existing?.accountLabel ?? this.#index?.accounts().find(account => account.id === accountId)?.email ?? accountId, draftId, requestedAt: existing?.requestedAt ?? now, acceptedAt: now, ...existing, messageId, status: 'accepted', detailsSource: existing?.detailsSource ?? 'unavailable', error: undefined }
+    this.#local.putReceipt(receipt)
+    void this.verifySendReceipt(receipt.id)
+    return receipt
+  }
+
   async sendGmailDraft(accountId: string, draftId: string): Promise<unknown> {
-    const summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId).catch(() => undefined)
-    const result = await this.#post('/v1/connectors/gmail/drafts/send', { linkId: accountId, draftId })
-    if (this.#index && summary) this.#index.markDraftsSent(accountId, [summary.messageId])
-    await this.#refreshIndexedDrafts()
-    return result
+    if (!accountId || !draftId) throw new Error('Account and draft ID are required')
+    const key = `${accountId}:${draftId}`
+    const flight = this.#sendFlights.get(key)
+    if (flight) return flight
+    const previous = this.#local.receiptForDraft(accountId, draftId)
+    if (previous && previous.status !== 'failed') return { structuredContent: { id: previous.messageId ?? null }, receipt: previous }
+    const operation = this.#sendWithReceipt(accountId, draftId)
+    this.#sendFlights.set(key, operation)
+    try { return await operation } finally { this.#sendFlights.delete(key) }
+  }
+
+  async #sendWithReceipt(accountId: string, draftId: string): Promise<unknown> {
+    let receipt: SendReceipt = { id: randomUUID(), accountId, accountLabel: accountId, draftId, requestedAt: new Date().toISOString(), status: 'preparing', detailsSource: 'unavailable' }
+    this.#local.putReceipt(receipt)
+    try {
+      const draft = await this.readGmailDraft(accountId, draftId)
+      const details: ReceiptDetails = { to: draft.to.map(item => item.address), cc: addressList(draft.cc ?? '').map(item => item.address), bcc: addressList(draft.bcc ?? '').map(item => item.address), subject: draft.subject, attachments: draft.attachments.map(item => ({ name: item.name, mediaType: item.mediaType, sizeLabel: item.sizeLabel })) }
+      if (!details.to.length && !details.cc.length && !details.bcc.length) throw new Error('The saved Gmail draft has no recipients.')
+      receipt = { ...receipt, details, intended: details, detailsSource: 'draft', accountLabel: (await this.#account(accountId)).email || accountId, status: 'sending' }
+      // Durable intent is recorded before the provider call. A restart makes it unknown, never a retry.
+      this.#local.putReceipt(receipt)
+      const result = await this.#post('/v1/connectors/gmail/drafts/send', { linkId: accountId, draftId })
+      const messageId = text(structured(result).id)
+      if (record(result)?.isError || structured(result).error || !messageId) throw new Error('Gmail did not return a confirmed sent message ID.')
+      receipt = { ...receipt, messageId, status: 'accepted', acceptedAt: new Date().toISOString() }
+      if (!this.#stopped) {
+        this.#local.putReceipt(receipt)
+        void this.verifySendReceipt(receipt.id)
+        void this.#refreshIndexedDrafts()
+      }
+      return { ...(record(result) ?? {}), receipt }
+    } catch (error) {
+      receipt = { ...receipt, status: receipt.status === 'preparing' ? 'failed' : 'unknown', error: error instanceof Error ? error.message : String(error) }
+      if (!this.#stopped) this.#local.putReceipt(receipt)
+      return { receipt }
+    }
   }
 
   async #refreshIndexedDrafts(): Promise<void> {

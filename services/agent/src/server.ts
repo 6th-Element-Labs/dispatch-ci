@@ -1,3 +1,4 @@
+import { completedGmailSend } from './send-receipt-observer.js'
 import { dispatchMailConfig, handleDispatchMailMcp } from './dispatch-mail-mcp.js'
 import { mkdirSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -199,6 +200,8 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
   // these threads, so the service answers or the call hangs forever.
   const serviceThreadIds = new Set<string>()
   runtime.subscribe((message) => {
+    const sent = completedGmailSend(message)
+    if (sent) void fetch(`${options.mailBase ?? `http://127.0.0.1:${process.env.DISPATCH_MAIL_PORT ?? '8411'}`}/v1/send-receipts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sent), signal: AbortSignal.timeout(5000) }).then(response => { if (!response.ok) throw new Error(`Receipt persistence returned ${response.status}`) }).catch(error => console.error('Send receipt could not be recorded:', error))
     if (message.id === undefined || !message.method) return
     const params = message.params as { threadId?: string } | undefined
     if (!params?.threadId || !serviceThreadIds.has(params.threadId)) return

@@ -43,6 +43,7 @@ export function createDispatchMailMcp(mailBase = `http://127.0.0.1:${process.env
     inputSchema: { query: z.string().min(1).max(2000), requestId: z.string().max(100).optional(), matches: z.array(z.object({ accountId: z.string().min(1), messageId: z.string().min(1), quote: z.string().min(1).max(500), reason: z.string().max(500) })).max(30) },
     annotations: readonly,
   }, input => result(() => request('/v1/search-results', 'POST', input)))
+  server.registerTool('list_send_receipts', { description: 'Read Dispatch’s persisted send outcomes, including unknown outcomes and verified recipients/files. This does not send or retry email.', inputSchema: {}, annotations: readonly }, () => result(() => request('/v1/send-receipts')))
   server.registerTool('read_draft', { description: 'Read the exact Gmail draft through Dispatch, including To, Cc, Bcc, body, and attachments. This does not change or send it.', inputSchema: identity, annotations: readonly }, ({ accountId, draftId }) => result(async () => ({ draft: await read(accountId, draftId) })))
   server.registerTool('create_draft', { description: 'Create a Gmail draft through Dispatch and open the saved draft in the editor. Creating a draft does not send it.', inputSchema: { accountId: identity.accountId, messageId: z.string().optional(), ...fields }, annotations: write }, ({ accountId, messageId, ...input }) => result(() => request('/v1/drafts', 'POST', {
     accountId, messageId: messageId ?? '', ...input, to: input.to?.join(', ') ?? '', cc: input.cc?.join(', ') ?? '', bcc: input.bcc?.join(', ') ?? '', bodyMarkdown: input.bodyMarkdown ?? '',
@@ -72,7 +73,7 @@ export function createDispatchMailMcp(mailBase = `http://127.0.0.1:${process.env
     const delivery = response.delivery as Record<string, unknown> | undefined
     const receipt = (delivery?.structuredContent ?? delivery) as Record<string, unknown> | undefined
     if (!receipt || delivery?.isError || receipt.error || typeof receipt.id !== 'string' || !receipt.id) throw new Error('Dispatch did not receive a confirmed Gmail message ID. Check Sent before retrying.')
-    return { id: receipt.id, accountId, draftId, delivery }
+    return { id: receipt.id, accountId, draftId, delivery, receipt: response.receipt }
   }))
   return server
 }

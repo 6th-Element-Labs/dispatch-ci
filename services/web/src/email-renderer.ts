@@ -15,7 +15,7 @@ function sanitizeEmailNode(node: Element): void {
   if (!allowedImageSrc.test(src)) node.removeAttribute('src')
 }
 
-export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value: string): HTMLElement {
+export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value: string, downloaded = false): HTMLElement {
   const root = document.createElement('div')
   root.className = 'dispatch-thread-body'
   if (kind === 'plain-text') {
@@ -25,9 +25,17 @@ export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value:
     return root
   }
 
-  DOMPurify.addHook('afterSanitizeAttributes', sanitizeEmailNode)
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    sanitizeEmailNode(node)
+    if (downloaded && /url\s*\(|@import/i.test(node.getAttribute('style') ?? '')) node.removeAttribute('style')
+    if (downloaded && node.tagName === 'IMG') {
+      const src = node.getAttribute('src') ?? ''
+      if (src.startsWith('http://127.0.0.1:8411/')) { const url = new URL(src); url.searchParams.set('offline', 'true'); node.setAttribute('src', url.toString()) }
+      else { node.removeAttribute('src'); node.setAttribute('alt', node.getAttribute('alt') || 'Image not downloaded') }
+    }
+  })
   try {
-    root.innerHTML = DOMPurify.sanitize(value, { USE_PROFILES: { html: true } })
+    root.innerHTML = DOMPurify.sanitize(value, { USE_PROFILES: { html: true }, ...(downloaded ? { FORBID_TAGS: ['style', 'link'], FORBID_ATTR: ['srcset', 'background'] } : {}) })
   } finally {
     DOMPurify.removeHook('afterSanitizeAttributes')
   }

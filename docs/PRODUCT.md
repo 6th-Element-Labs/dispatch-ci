@@ -86,3 +86,12 @@ Typing in Search keeps the instant indexed filter. Enter or the adjacent Tabler 
 Codex uses its installed Gmail tools to search and read candidate messages, then publishes a result list through `dispatch_mail.show_search_results`. The mail service verifies every account/message identity and quoted body passage before returning a projection. Codex supplies relevance judgments; unread status is not treated as evidence that a question is unanswered.
 
 Results stay in the message list during background sync. Each row shows a highlighted source excerpt and the reason Codex selected it. Clicking a result loads the full conversation, expands the matched messages, and highlights the passage in the reader. Clear returns to the ordinary mailbox. Superseded results cannot replace a newer search. Empty results, failed searches, and missing source evidence remain distinct.
+
+
+## Everyday reliability
+
+Every editor change has a local recovery copy, including To, Cc, Bcc, account, subject, body, and attachment identities. New file bytes are stored before the attachment appears in the editor. Recovery lists unsaved copies after restart and restores them for review. A matching successful Gmail save removes its recovery copy; a failed or superseded save keeps it. Storage failures remain visible. Recovery does not send mail.
+
+Receipts are available from the left rail. Dispatch persists send intent before the Gmail request and records acknowledgement separately from verification. A verified receipt shows the actual To, Cc, Bcc, subject, files, account, and Gmail message ID read from Sent. Differences from the saved draft are visible. A timeout after sending has an unknown outcome; Dispatch does not automatically resend. Codex Gmail sends also produce receipts from completed tool events. An accepted send is not a delivery or read confirmation from the recipient.
+
+Opening a conversation caches its full message bodies. Offline controls offer Download mailbox for the selected folder and account scope, with progress, cancellation, and partial failures. Use downloaded mail reads only saved bodies and labels their cache time. Undownloaded threads show a clear error. Remote images are blocked in this mode; files are available only if already cached. Bulk download covers message bodies, not all attachment bytes. Users can compose locally while offline, then review and save or send when online. There is no automatic offline send queue.

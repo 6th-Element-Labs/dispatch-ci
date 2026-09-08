@@ -29,7 +29,7 @@ describe('codexMailEffect', () => {
       tool: 'gmail.send_draft',
       arguments: { link_id: 'link-one', draft_id: 'draft-9' },
       result: { structuredContent: { id: 'sent-1' } },
-    })).toEqual({ kind: 'sent', accountId: 'link-one', draftId: 'draft-9' })
+    })).toEqual({ kind: 'sent', accountId: 'link-one', draftId: 'draft-9', messageId: 'sent-1' })
   })
 
   it('ignores failed tool calls and non-Gmail tools', () => {
@@ -66,7 +66,7 @@ it('opens and reconciles drafts changed through Dispatch software controls', () 
   expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'update_draft', result: { structuredContent: { draft: { id: 'draft-A', accountId: 'account-A' } } } }))
     .toEqual({ kind: 'draft', draftId: 'draft-A', accountId: 'account-A' })
   expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'send_draft', result: { structuredContent: { id: 'sent-A', draftId: 'draft-A', accountId: 'account-A' } } }))
-    .toEqual({ kind: 'sent', draftId: 'draft-A', accountId: 'account-A' })
+    .toEqual({ kind: 'sent', draftId: 'draft-A', accountId: 'account-A', messageId: 'sent-A' })
   expect(codexMailEffect({ type: 'mcpToolCall', status: 'completed', server: 'dispatch_mail', tool: 'send_draft', result: { isError: true, structuredContent: { id: 'sent-A', draftId: 'draft-A', accountId: 'account-A' } } })).toBeUndefined()
 })
 

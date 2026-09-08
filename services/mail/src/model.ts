@@ -35,6 +35,8 @@ export interface MessageProjection extends MessageSummary {
   readonly attachments: readonly AttachmentProjection[]
   readonly to?: readonly MailAddress[]
   readonly cc?: readonly MailAddress[]
+  readonly bcc?: readonly MailAddress[]
+  readonly labels?: readonly string[]
   readonly source: 'demo' | 'gmail'
 }
 
@@ -81,9 +83,11 @@ export interface ConversationSummary {
   readonly unread: boolean
   readonly hasAttachment?: boolean
   readonly messageCount: number
+  readonly downloaded?: boolean
 }
 
 export interface ConversationProjection extends ConversationSummary {
+  readonly availability?: { readonly mode: 'live' | 'downloaded'; readonly cachedAt: string; readonly reason?: string }
   readonly messages: readonly MessageProjection[]
   readonly source: 'demo' | 'gmail'
 }

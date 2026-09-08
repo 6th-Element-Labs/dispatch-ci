@@ -77,3 +77,12 @@ Mail and agent read `DISPATCH_ALLOWED_ORIGIN` for their CORS origin. The default
 ### Internal mail controls
 
 The agent service exposes a stateless local MCP endpoint at `/mcp/dispatch-mail` using the MCP TypeScript SDK. It is a transport adapter over the mail service’s existing HTTP commands; it owns no mail records and does not call a second model loop. Codex receives the endpoint as a per-thread configuration override on start and resume, alongside the user’s existing MCP servers. Header-only draft corrections use a partial mail command so omitted recipients, the MIME body, and attachments are preserved. Tool errors are returned as failures; a send reports success only with Gmail’s message ID.
+
+
+### Recovery, send receipts, and downloaded bodies
+
+Mail owns a companion SQLite store at `${DISPATCH_MAIL_DB}.local` (or beside the default index). WAL and FULL synchronization preserve send intent and acknowledgements. In-flight sends become unknown after restart; pre-send preparation becomes failed. Verification reads the Gmail Sent message and cannot downgrade a verified receipt. The optional internal MCP receipt reader and the HTTP receipt API use this same owner. Agent forwards completed Gmail send identities over HTTP even when no browser stream is attached.
+
+The same mail-owned store caches full conversation projections and download progress. The metadata index remains the mailbox list authority. Explicit downloaded reads bypass Gmail; transient read failures can return an explicitly dated downloaded copy. Missing, revoked, or unauthorized remote identities are not hidden behind cached success. Download jobs are interrupted on restart and can be started again without fetching unchanged complete copies.
+
+Web owns the unsaved editor outbox as presentation state: a synchronous localStorage record for text and recipient changes, plus IndexedDB bytes for added files. This is not a second writer of Gmail draft records. Each recovery entry remains until its matching editor revision is saved or discarded. Save completion adopts Gmail identity while preserving newer editor content and file changes.

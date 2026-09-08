@@ -2,7 +2,7 @@ import type { SearchResults } from './contracts.js'
 export type CodexMailEffect =
   | { readonly kind: 'search'; readonly search: SearchResults }
   | { readonly kind: 'draft'; readonly draftId: string; readonly accountId: string }
-  | { readonly kind: 'sent'; readonly accountId: string; readonly draftId?: string }
+  | { readonly kind: 'sent'; readonly messageId: string; readonly accountId: string; readonly draftId?: string }
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -29,7 +29,7 @@ export function codexMailEffect(item: unknown): CodexMailEffect | undefined {
       return { kind: 'draft', draftId: text(draft?.id), accountId: text(draft?.accountId) }
     }
     if (call.tool === 'send_draft' && text(value.id) && text(value.accountId) && text(value.draftId)) {
-      return { kind: 'sent', accountId: text(value.accountId), draftId: text(value.draftId) }
+      return { kind: 'sent', messageId: text(value.id), accountId: text(value.accountId), draftId: text(value.draftId) }
     }
     return undefined
   }
@@ -51,7 +51,8 @@ export function codexMailEffect(item: unknown): CodexMailEffect | undefined {
   }
   if (/(?:^|[._])gmail[._](?:send_draft|send_email)$/.test(tool)) {
     const draftId = /send_draft$/.test(tool) ? text(args?.draft_id) || text(args?.draftId) : ''
-    return { kind: 'sent', accountId, ...draftId ? { draftId } : {} }
+    if (!text(content.id)) return undefined
+    return { kind: 'sent', messageId: text(content.id), accountId, ...draftId ? { draftId } : {} }
   }
   return undefined
 }

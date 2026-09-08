@@ -1,4 +1,4 @@
-import type { AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
+import type { SendReceipt, OfflineStatus, AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
 const MAIL = 'http://127.0.0.1:8411'
 const AGENT = 'http://127.0.0.1:8412'
@@ -29,8 +29,8 @@ function draftFields(fields: Record<string, unknown>): Record<string, unknown> {
 }
 
 export const api = {
-  async listAccounts(): Promise<GmailAccount[]> {
-    const result = await request<{ accounts: GmailAccount[] }>(`${MAIL}/v1/accounts`)
+  async listAccounts(offline = false): Promise<GmailAccount[]> {
+    const result = await request<{ accounts: GmailAccount[] }>(`${MAIL}/v1/accounts${offline ? '?offline=true' : ''}`)
     return result.accounts
   },
   async listRecipients(query: string, accountId?: string): Promise<MailAddress[]> {
@@ -52,16 +52,19 @@ export const api = {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     return request(`${MAIL}/v1/messages${query}`)
   },
-  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string, mailbox: GmailMailbox = 'inbox'): Promise<{ source: 'demo' | 'gmail'; coverage?: 'indexed' | 'recent'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
+  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string, mailbox: GmailMailbox = 'inbox', offline = false): Promise<{ source: 'demo' | 'gmail'; coverage?: 'indexed' | 'recent' | 'downloaded'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
     const params = new URLSearchParams({ state, mailbox, limit: '100' })
     if (accountId) params.set('account', accountId)
+    if (offline) params.set('offline', 'true')
     if (cursor) params.set('cursor', cursor)
     if (search) params.set('q', search)
     return request(`${MAIL}/v1/conversations?${params}`)
   },
-  async readConversation(threadId: string, accountId?: string): Promise<ConversationProjection> {
-    const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
-    const result = await request<{ conversation: ConversationProjection }>(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}${query}`)
+  async readConversation(threadId: string, accountId?: string, offline = false): Promise<ConversationProjection> {
+    const query = new URLSearchParams()
+    if (accountId) query.set('account', accountId)
+    if (offline) query.set('offline', 'true')
+    const result = await request<{ conversation: ConversationProjection }>(`${MAIL}/v1/conversations/${encodeURIComponent(threadId)}${query.size ? `?${query}` : ''}`)
     return result.conversation
   },
   async setConversationUnread(threadId: string, accountId: string, unread: boolean, messageIds: readonly string[] = []): Promise<void> {
@@ -85,9 +88,10 @@ export const api = {
     return result.attachment
   },
   /** URL that streams the cached attachment bytes, for inline images and previews. */
-  attachmentFileUrl(messageId: string, attachmentId: string, accountId: string | undefined, filename: string): string {
+  attachmentFileUrl(messageId: string, attachmentId: string, accountId: string | undefined, filename: string, offline = false): string {
     const params = new URLSearchParams({ filename })
     if (accountId) params.set('account', accountId)
+    if (offline) params.set('offline', 'true')
     return `${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${params}`
   },
   /** Warms the mail cache so a later open or preview does not wait on the connector. */
@@ -96,9 +100,10 @@ export const api = {
     if (accountId) params.set('account', accountId)
     await request(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/cache?${params}`, { method: 'POST' })
   },
-  async openAttachment(messageId: string, attachmentId: string, accountId: string | undefined, filename: string): Promise<void> {
+  async openAttachment(messageId: string, attachmentId: string, accountId: string | undefined, filename: string, offline = false): Promise<void> {
     const params = new URLSearchParams({ filename })
     if (accountId) params.set('account', accountId)
+    if (offline) params.set('offline', 'true')
     await request(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/open?${params}`, { method: 'POST' })
   },
   async createDraft(messageId: string, fields: Record<string, unknown> = {}): Promise<DraftProjection> {
@@ -130,9 +135,16 @@ export const api = {
     })
     return result.draft
   },
-  async sendDraft(id: string, accountId: string): Promise<void> {
-    await request(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=send&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
+  async sendDraft(id: string, accountId: string): Promise<SendReceipt | undefined> {
+    const result = await request<{ receipt?: SendReceipt }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=send&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
+    return result.receipt
   },
+  async receipts(): Promise<SendReceipt[]> { return (await request<{ receipts: SendReceipt[] }>(`${MAIL}/v1/send-receipts`)).receipts },
+  async recordSend(accountId: string, messageId: string, draftId?: string): Promise<SendReceipt> { return (await request<{ receipt: SendReceipt }>(`${MAIL}/v1/send-receipts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, messageId, draftId }) })).receipt },
+  async verifyReceipt(id: string): Promise<SendReceipt> { return (await request<{ receipt: SendReceipt }>(`${MAIL}/v1/send-receipts/${encodeURIComponent(id)}`, { method: 'POST' })).receipt },
+  async offlineStatus(): Promise<OfflineStatus> { return (await request<{ offline: OfflineStatus }>(`${MAIL}/v1/offline`)).offline },
+  async downloadMailbox(mailbox: GmailMailbox, accountId?: string): Promise<void> { await request(`${MAIL}/v1/offline`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mailbox, accountId }) }) },
+  async cancelDownload(): Promise<void> { await request(`${MAIL}/v1/offline`, { method: 'DELETE' }) },
   async agentReady(): Promise<boolean> {
     try { return (await fetch(`${AGENT}/ready`, { signal: AbortSignal.timeout(3_000) })).ok } catch { return false }
   },

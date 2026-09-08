@@ -516,3 +516,17 @@ describe('dispatch-mail', () => {
     expect(bytes.subarray(0, 5).toString()).toBe('%PDF-')
   })
 })
+
+it('serves offline account/list reads without Gmail and refuses attachment cache misses without downloading', async () => {
+  const remote = vi.fn(async () => { throw new Error('No remote calls allowed') })
+  const server = createMailServer({ accounts: remote, cachedAccounts: () => [], listMessages: remote, listUnifiedMessages: remote, readMessage: remote, listConversations: remote, listUnifiedConversations: remote, readConversation: remote, readAttachment: remote, downloadedConversations: () => [], recordExternalSend: () => { throw new Error('Invalid identity') } }, { attachmentCacheDir: await mkdtemp(join(tmpdir(), 'dispatch-offline-test-')) })
+  servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  expect((await fetch(`${base}/v1/accounts?offline=true`)).status).toBe(200)
+  expect((await (await fetch(`${base}/v1/conversations?offline=true&state=all`)).json()).coverage).toBe('downloaded')
+  expect((await fetch(`${base}/v1/messages/missing/attachments/missing?filename=none.txt&account=one&offline=true`)).status).toBe(404)
+  expect(remote).not.toHaveBeenCalled()
+  const invalid = await fetch(`${base}/v1/send-receipts`, { method: 'POST', body: JSON.stringify({ accountId: '', messageId: '' }) })
+  expect(invalid.status).toBe(400)
+  expect((await fetch(`${base}/health`)).status).toBe(200)
+})

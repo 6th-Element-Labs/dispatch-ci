@@ -24,6 +24,8 @@ export interface MessageProjection extends MessageSummary {
   readonly attachments: readonly { readonly id: string; readonly name: string; readonly mediaType: string; readonly sizeLabel: string; readonly contentId?: string }[]
   readonly to?: readonly MailAddress[]
   readonly cc?: readonly MailAddress[]
+  readonly bcc?: readonly MailAddress[]
+  readonly labels?: readonly string[]
   readonly source: 'demo' | 'gmail'
 }
 
@@ -109,9 +111,11 @@ export interface ConversationSummary {
   readonly unread: boolean
   readonly hasAttachment?: boolean
   readonly messageCount: number
+  readonly downloaded?: boolean
 }
 
 export interface ConversationProjection extends ConversationSummary {
+  readonly availability?: { readonly mode: 'live' | 'downloaded'; readonly cachedAt: string; readonly reason?: string }
   readonly messages: readonly MessageProjection[]
   readonly source: 'demo' | 'gmail'
 }
@@ -120,3 +124,16 @@ export interface ConversationProjection extends ConversationSummary {
 export interface SearchHit { readonly messageId: string; readonly quote: string; readonly excerpt: string; readonly matchStart: number; readonly matchEnd: number; readonly reason: string }
 export interface SearchResult { readonly conversation: ConversationSummary; readonly hits: readonly SearchHit[] }
 export interface SearchResults { readonly query: string; readonly requestId?: string; readonly results: readonly SearchResult[] }
+
+export interface ReceiptDetails { to: string[]; cc: string[]; bcc: string[]; subject: string; attachments: { name: string; mediaType: string; sizeLabel?: string }[] }
+export interface SendReceipt {
+  id: string; accountId: string; accountLabel: string; draftId?: string; messageId?: string
+  status: 'preparing' | 'sending' | 'accepted' | 'verified' | 'failed' | 'unknown'
+  requestedAt: string; acceptedAt?: string; verifiedAt?: string; sentAt?: string
+  detailsSource: 'draft' | 'sent-message' | 'unavailable'; details?: ReceiptDetails; intended?: ReceiptDetails
+  error?: string; warnings?: string[]
+}
+export interface OfflineDownload { id: string; state: 'running' | 'complete' | 'partial' | 'cancelled' | 'interrupted'; mailbox: string; accountId?: string; total: number; completed: number; errors: string[]; startedAt: string }
+
+
+export interface OfflineStatus { conversations: number; bytes: number; download?: OfflineDownload }

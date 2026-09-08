@@ -37,6 +37,8 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route(/8411\/v1\/send-receipts/, route => route.fulfill({ json: { receipts: [] } }))
+  await page.route(/8411\/v1\/offline/, route => route.fulfill({ json: { offline: { conversations: 0, bytes: 0 } } }))
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
   await page.route('http://127.0.0.1:8411/v1/sync/status', (route) => route.fulfill({ json: { sync: { state: 'ready', startedAt: '2026-09-04T09:00:00+12:00', completedAt: '2026-09-04T09:01:00+12:00', error: null, messageCount: 2 } } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/, (route) => {
@@ -737,7 +739,7 @@ test('edits, saves, and sends a Gmail draft from the middle panel', async ({ pag
   await page.route('http://127.0.0.1:8411/v1/drafts/draft-1', async (route) => route.fulfill({ json: { draft: { id: 'draft-1', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: 'manager@example.com', bcc: 'audit@example.com', subject: 'Re: Opua berth confirmation', bodyText: 'Approved reply', state: 'draft', accountId: 'link-one' } } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/draft-1\?action=send.*/, async (route) => {
     sendCount += 1
-    await route.fulfill({ json: { delivery: { id: 'sent-1' } } })
+    await route.fulfill({ json: { receipt: { id: 'receipt-1', draftId: 'draft-1', accountId: 'link-one', accountLabel: 'work@example.com', messageId: 'sent-1', status: 'accepted', requestedAt: '2026-09-08T01:00:00Z', detailsSource: 'draft', details: { to: ['ana@example.com'], cc: ['manager@example.com'], bcc: ['audit@example.com'], subject: 'Re: Opua berth confirmation', attachments: [] } } } })
   })
   await page.goto('/')
   await page.getByRole('button', { name: 'Reply', exact: true }).click()
@@ -753,7 +755,7 @@ test('edits, saves, and sends a Gmail draft from the middle panel', async ({ pag
   expect(sendCount).toBe(0)
   await page.getByRole('button', { name: 'Send now' }).click()
   await expect.poll(() => sendCount).toBe(1)
-  await expect(page.getByText('Gmail confirmed that the draft was sent.')).toBeVisible()
+  await expect(page.locator('[data-receipts-dialog]')).toContainText('Gmail accepted — details pending')
 })
 
 test('allows one, two, or three adjustable panels while keeping one visible', async ({ page }) => {
@@ -1250,7 +1252,7 @@ test('marks a conversation selected before its full thread finishes loading', as
   await expect(page.locator('[data-conversation-id="demo:t2"]')).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
   await expect(page.getByText('Loading conversation…')).toBeVisible()
-  await expect(page.getByText('Loaded.')).toBeVisible()
+  await expect(page.getByText('Loaded.', { exact: true })).toBeVisible()
 })
 
 test('forwards source message attachments and lists them on the draft', async ({ page }) => {
@@ -1839,4 +1841,84 @@ test('a search requested in ordinary Codex chat can also publish the mail list',
   await publishSearch(page, { query: 'Related correspondence', results: [] })
   await expect(page.locator('[data-search-summary]')).toHaveText('0 matching threads · Codex search')
   await expect(page.getByRole('textbox', { name: 'Search mail' })).toHaveValue('Related correspondence')
+})
+
+test('recovers unsaved recipients, text and file bytes after a reload without sending', async ({ page }) => {
+  const writes: string[] = []
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.route(/8411\/v1\/drafts(?:$|\/[^p])/, route => { writes.push(route.request().method()); return route.fulfill({ status: 503, json: { error: 'Gmail unavailable' } }) })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.locator('[data-draft-to]').fill('ana@example.com')
+  await page.locator('[data-draft-cc]').fill('cc@example.com')
+  await page.locator('[data-draft-bcc]').fill('bcc@example.com')
+  await page.locator('[data-draft-subject]').fill('Unsaved recovery proof')
+  await page.locator('[data-draft-body]').fill('Text entered before Gmail can save it.')
+  await page.locator('[data-draft-files]').setInputFiles({ name: 'proof.txt', mimeType: 'text/plain', buffer: Buffer.from('Persist these bytes') })
+  await expect(page.locator('[data-draft-attachments]')).toContainText('proof.txt')
+  await expect(page.locator('[data-draft-error]')).toContainText('Gmail unavailable')
+  await page.reload()
+  await page.locator('[data-recovery-open]').click()
+  await page.getByRole('button', { name: 'Restore local draft' }).click()
+  await expect(page.locator('[data-draft-body]')).toHaveValue('Text entered before Gmail can save it.')
+  await expect(page.locator('[data-draft-subject]')).toHaveValue('Unsaved recovery proof')
+  await expect(page.locator('[data-draft]')).toContainText('cc@example.com')
+  await expect(page.locator('[data-draft]')).toContainText('bcc@example.com')
+  await expect(page.locator('[data-draft-account]')).toHaveValue('one')
+  const bytes = await page.evaluate(async () => {
+    const modulePath = '/src/draft-recovery.ts'; const { DraftRecovery } = await import(modulePath)
+    const recovery = new DraftRecovery(); return (await recovery.restore(recovery.list()[0]!.key)).attachments[0]?.contentBase64
+  })
+  expect(Buffer.from(bytes!, 'base64').toString()).toBe('Persist these bytes')
+  expect(writes).toEqual(['POST'])
+  await page.locator('[data-discard-draft]').click()
+  await expect(page.locator('[data-recovery-open]')).toBeHidden()
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!))).toEqual([])
+})
+
+test('keeps a newer recovery copy while an older Gmail save is pending', async ({ page }) => {
+  let pending: import('@playwright/test').Route | undefined
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => { pending = route })
+  await page.goto('/'); await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.locator('[data-draft-body]').fill('Older text')
+  await page.locator('[data-save-draft]').click(); await expect.poll(() => Boolean(pending)).toBe(true)
+  await page.locator('[data-draft-body]').fill('Newer text')
+  await pending!.fulfill({ json: { draft: { id: 'saved', accountId: 'one', inReplyToMessageId: '', to: [], subject: '', bodyMarkdown: 'Older text', bodyText: 'Older text', bodyHtml: '<p>Older text</p>', attachments: [], state: 'draft' } } })
+  await expect(page.locator('[data-draft-body]')).toHaveValue('Newer text')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!)[0].bodyMarkdown)).toBe('Newer text')
+})
+
+test('shows actual send details and locks edits until Gmail responds', async ({ page }) => {
+  const draft = { id: 'd-receipt', accountId: 'one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Delivery', bodyMarkdown: 'Hello', bodyText: 'Hello', bodyHtml: '<p>Hello</p>', attachments: [], state: 'draft' }
+  let pending: import('@playwright/test').Route | undefined
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft } }))
+  await page.route(/8411\/v1\/drafts\/d-receipt/, route => { pending = route })
+  await page.goto('/'); await page.getByRole('button', { name: 'Reply', exact: true }).click()
+  await page.locator('[data-send-draft]').click(); await page.locator('[data-send-confirm-go]').click()
+  await expect(page.locator('[data-draft-body]')).toBeDisabled()
+  await expect.poll(() => Boolean(pending)).toBe(true)
+  await pending!.fulfill({ json: { receipt: { id: 'receipt-proof', accountId: 'one', accountLabel: 'work@example.com', draftId: draft.id, messageId: 'provider-id', status: 'verified', requestedAt: '2026-09-08T01:00:00Z', detailsSource: 'sent-message', details: { to: ['ana@example.com'], cc: ['cc@example.com'], bcc: ['audit@example.com'], subject: 'Delivery', attachments: [{ name: 'contract.pdf', mediaType: 'application/pdf', sizeLabel: '10 KB' }] } } } })
+  const dialog = page.locator('[data-receipts-dialog]')
+  await expect(dialog).toBeVisible(); await expect(dialog).toContainText('Sent — details verified')
+  for (const text of ['ana@example.com', 'cc@example.com', 'audit@example.com', 'contract.pdf', 'provider-id', 'Verified from Gmail Sent']) await expect(dialog).toContainText(text)
+  await expect(page.locator('[data-draft]')).toBeHidden()
+})
+
+test('reads downloaded mail with a visible timestamp and blocks remote images', async ({ page }) => {
+  const requests: string[] = []
+  await page.addInitScript(() => localStorage.setItem('dispatch.offline-mode', 'true'))
+  await page.route(/8411\/v1\/accounts/, route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.route(/8411\/v1\/conversations\?/, route => { requests.push(route.request().url()); return route.fulfill({ json: { source: 'gmail', coverage: 'downloaded', conversations: [{ ...conversations[0], accountId: 'one', downloaded: true }] } }) })
+  await page.route(/8411\/v1\/conversations\/t1/, route => { requests.push(route.request().url()); return route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', availability: { mode: 'downloaded', cachedAt: '2026-09-08T01:00:00Z' }, messages: [{ ...messages[0], accountId: 'one', source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Full downloaded body</p><img src="https://tracker.example/pixel" srcset="https://tracker.example/high 2x"><div style="background-image:url(https://tracker.example/bg)">No remote background</div>' }, attachments: [] }] } } }) })
+  await page.goto('/')
+  await expect(page.locator('[data-body]')).toContainText('Full downloaded body')
+  await expect(page.locator('[data-copy-status]')).toContainText('Downloaded copy')
+  await expect(page.locator('[data-body] img')).not.toHaveAttribute('src')
+  await expect(page.locator('[data-body] img')).not.toHaveAttribute('srcset')
+  await expect(page.locator('[data-body] [style*=tracker]')).toHaveCount(0)
+  expect(requests.length).toBeGreaterThanOrEqual(2)
+  expect(requests.every(url => new URL(url).searchParams.get('offline') === 'true')).toBe(true)
+  await page.locator('[data-offline-open]').click()
+  await expect(page.locator('[data-download-mailbox]')).toBeDisabled()
 })

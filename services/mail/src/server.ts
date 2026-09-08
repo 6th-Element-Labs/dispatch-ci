@@ -25,7 +25,7 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': allowedOrigin,
     'access-control-allow-headers': 'content-type',
-    'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
   })
   response.end(JSON.stringify(value))
 }
@@ -37,7 +37,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -156,6 +156,33 @@ export function createMailServer(
         return writeJson(response, 503, { service: 'dispatch-mail', status: 'not_ready', error: 'gmail_connection_failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
+    if (url.pathname === '/v1/offline') {
+      if (request.method === 'GET') return writeJson(response, 200, { offline: gmail.offlineStatus?.() ?? { conversations: 0, bytes: 0 } })
+      try {
+        if (request.method === 'POST' && gmail.startOfflineDownload) {
+          const body = draftObject(await readJson(request))
+          const mailbox = mailboxFilter(typeof body?.mailbox === 'string' ? body.mailbox : null)
+          if (!mailbox) return writeJson(response, 400, { error: 'invalid_mailbox' })
+          return writeJson(response, 202, { download: gmail.startOfflineDownload(mailbox, typeof body?.accountId === 'string' ? body.accountId : undefined) })
+        }
+        if (request.method === 'DELETE') { gmail.cancelOfflineDownload?.(); return writeJson(response, 200, { offline: gmail.offlineStatus?.() }) }
+      } catch (error) { return writeJson(response, 502, { error: 'offline_download_failed', detail: String(error) }) }
+    }
+    if (url.pathname === '/v1/send-receipts') {
+      if (request.method === 'GET') return writeJson(response, 200, { receipts: gmail.sendReceipts?.() ?? [] })
+      if (request.method === 'POST' && gmail.recordExternalSend) {
+        try {
+          const body = draftObject(await readJson(request))
+          if (!body || typeof body.accountId !== 'string' || !body.accountId.trim() || typeof body.messageId !== 'string' || !body.messageId.trim()) return writeJson(response, 400, { error: 'receipt_identity_required' })
+          return writeJson(response, 200, { receipt: gmail.recordExternalSend(body.accountId, body.messageId, typeof body.draftId === 'string' ? body.draftId : undefined) })
+        } catch (error) { return writeJson(response, 400, { error: 'receipt_record_failed', detail: String(error) }) }
+      }
+    }
+    const receiptMatch = /^\/v1\/send-receipts\/([^/]+)$/.exec(url.pathname)
+    if (request.method === 'POST' && receiptMatch?.[1] && gmail.verifySendReceipt) {
+      try { return writeJson(response, 200, { receipt: await gmail.verifySendReceipt(decodeURIComponent(receiptMatch[1])) }) }
+      catch (error) { return writeJson(response, 404, { error: 'receipt_not_found', detail: String(error) }) }
+    }
     if (request.method === 'GET' && url.pathname === '/v1/conversations') {
       const state = stateFilter(url.searchParams.get('state'))
       if (!state) return writeJson(response, 400, { error: 'invalid_state_filter' })
@@ -168,6 +195,11 @@ export function createMailServer(
       }
       const accountId = url.searchParams.get('account')
       const query = url.searchParams.get('q')?.trim() ?? ''
+      if (url.searchParams.get('offline') === 'true' && gmail.downloadedConversations) {
+        const all = gmail.downloadedConversations(mailbox, state, accountId ?? undefined, query)
+        const page = all.slice(cursorValue, cursorValue + limitValue)
+        return writeJson(response, 200, { source: 'gmail', coverage: 'downloaded', conversations: page, total: all.length, nextCursor: cursorValue + page.length < all.length ? String(cursorValue + page.length) : null })
+      }
       try {
         const accounts = await gmail.accounts()
         if (accounts.length > 0) {
@@ -218,9 +250,9 @@ export function createMailServer(
       const accountId = url.searchParams.get('account')
       if (accountId) {
         try {
-          return writeJson(response, 200, { conversation: await gmail.readConversation(accountId, threadId) })
+          return writeJson(response, 200, { conversation: await gmail.readConversation(accountId, threadId, url.searchParams.get('offline') === 'true') })
         } catch (error) {
-          return writeJson(response, 502, { error: 'gmail_conversation_read_failed', detail: error instanceof Error ? error.message : String(error) })
+          return writeJson(response, (error as { code?: string }).code === 'not_downloaded' ? 404 : 502, { error: (error as { code?: string }).code ?? 'gmail_conversation_read_failed', detail: error instanceof Error ? error.message : String(error) })
         }
       }
       if (!demoEnabled) return writeJson(response, 400, { error: 'gmail_account_required' })
@@ -266,6 +298,7 @@ export function createMailServer(
         : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
     }
     if (request.method === 'GET' && url.pathname === '/v1/accounts') {
+      if (url.searchParams.get('offline') === 'true' && gmail.cachedAccounts) return writeJson(response, 200, { accounts: gmail.cachedAccounts() })
       try {
         return writeJson(response, 200, { accounts: await gmail.accounts() })
       } catch (error) {
@@ -328,7 +361,7 @@ export function createMailServer(
           messageId,
           attachmentId,
           filename,
-          loadPayload: () => attachmentPayload(accountId, messageId, attachmentId, filename),
+          loadPayload: () => { if (url.searchParams.get('offline') === 'true') throw Object.assign(new Error('This attachment has not been downloaded.'), { code: 'attachment_not_found' }); return attachmentPayload(accountId, messageId, attachmentId, filename) },
           cacheDir: attachmentCacheDir,
           openPath,
         })
@@ -344,7 +377,7 @@ export function createMailServer(
       const messageId = decodeURIComponent(attachmentCacheMatch[1])
       const attachmentId = decodeURIComponent(attachmentCacheMatch[2])
       try {
-        const file = await ensureAttachmentFile({ messageId, attachmentId, filename, loadPayload: () => attachmentPayload(accountId, messageId, attachmentId, filename), cacheDir: attachmentCacheDir })
+        const file = await ensureAttachmentFile({ messageId, attachmentId, filename, loadPayload: () => { if (url.searchParams.get('offline') === 'true') throw Object.assign(new Error('This attachment has not been downloaded.'), { code: 'attachment_not_found' }); return attachmentPayload(accountId, messageId, attachmentId, filename) }, cacheDir: attachmentCacheDir })
         return writeJson(response, 200, { cached: true, reused: file.cached, filename: file.filename, mediaType: file.mediaType })
       } catch (error) {
         return writeAttachmentError(response, 'gmail_attachment_cache_failed', error)
@@ -358,9 +391,10 @@ export function createMailServer(
       const attachmentId = decodeURIComponent(attachmentMatch[2])
       const wantsJson = (request.headers.accept ?? '').includes('application/json')
       try {
+        if (wantsJson && url.searchParams.get('offline') === 'true') return writeJson(response, 409, { error: 'Use the cached attachment file endpoint in downloaded mode.' })
         if (wantsJson) return writeJson(response, 200, { attachment: await attachmentPayload(accountId, messageId, attachmentId, filename) })
         // Browsers (inline cid: images, previews) get the cached bytes themselves.
-        const file = await ensureAttachmentFile({ messageId, attachmentId, filename, loadPayload: () => attachmentPayload(accountId, messageId, attachmentId, filename), cacheDir: attachmentCacheDir })
+        const file = await ensureAttachmentFile({ messageId, attachmentId, filename, loadPayload: () => { if (url.searchParams.get('offline') === 'true') throw Object.assign(new Error('This attachment has not been downloaded.'), { code: 'attachment_not_found' }); return attachmentPayload(accountId, messageId, attachmentId, filename) }, cacheDir: attachmentCacheDir })
         const bytes = await readFile(file.path)
         response.writeHead(200, {
           'content-type': file.mediaType,
@@ -480,7 +514,7 @@ export function createMailServer(
         : writeJson(response, 404, { error: 'draft_not_found' })
     }
     if (request.method === 'POST' && draftMatch?.[1] && url.searchParams.get('action') === 'send' && gmail.sendGmailDraft) {
-      try { return writeJson(response, 200, { delivery: await gmail.sendGmailDraft(String(url.searchParams.get('account') ?? ''), decodeURIComponent(draftMatch[1])) }) }
+      try { const delivery = await gmail.sendGmailDraft(String(url.searchParams.get('account') ?? ''), decodeURIComponent(draftMatch[1])); return writeJson(response, 200, { delivery, receipt: (delivery as { receipt?: unknown })?.receipt }) }
       catch (error) { return writeJson(response, 502, { error: 'gmail_draft_send_failed', detail: error instanceof Error ? error.message : String(error) }) }
     }
     return writeJson(response, 404, { error: 'not_found' })

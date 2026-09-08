@@ -5,13 +5,13 @@
       "name": "web",
       "port": 8410,
       "store": null,
-      "owns": ["static-client", "presentation-state"]
+      "owns": ["static-client", "presentation-state", "unsaved-editor-recovery"]
     },
     {
       "name": "mail",
       "port": 8411,
       "store": "gmail-index-sqlite",
-      "owns": ["gmail-sync-state", "gmail-message-index", "message-projections", "draft-state", "attachment-open-cache"]
+      "owns": ["gmail-sync-state", "gmail-message-index", "message-projections", "draft-state", "attachment-open-cache", "downloaded-conversations", "send-receipts", "mailbox-download-state"]
     },
     {
       "name": "agent",
