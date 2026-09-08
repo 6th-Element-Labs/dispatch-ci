@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 
+const localProxy = process.env.DISPATCH_LOCAL_PREVIEW === '1'
+
 export default defineConfig({
+  define: { __DISPATCH_LOCAL_PROXY__: JSON.stringify(localProxy) },
   plugins: [{
     name: 'dispatch-service-probes',
     configureServer(server) {
@@ -11,6 +14,9 @@ export default defineConfig({
       })
     },
   }],
-  server: { host: '127.0.0.1', port: 8410, strictPort: true },
+  server: { host: '127.0.0.1', port: 8410, strictPort: true, ...(localProxy ? { proxy: {
+    '/mail': { target: 'http://127.0.0.1:8411', rewrite: path => path.replace(/^\/mail/, '') },
+    '/agent': { target: 'http://127.0.0.1:8412', rewrite: path => path.replace(/^\/agent/, '') },
+  } } : {}) },
   preview: { host: '127.0.0.1', port: 8410, strictPort: true },
 })

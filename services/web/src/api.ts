@@ -1,7 +1,8 @@
 import type { SendReceipt, OfflineStatus, AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
 
-const MAIL = 'http://127.0.0.1:8411'
-const AGENT = 'http://127.0.0.1:8412'
+declare const __DISPATCH_LOCAL_PROXY__: boolean
+const MAIL = __DISPATCH_LOCAL_PROXY__ ? `${location.origin}/mail` : 'http://127.0.0.1:8411'
+const AGENT = __DISPATCH_LOCAL_PROXY__ ? `${location.origin}/agent` : 'http://127.0.0.1:8412'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const endpoint = new URL(url).pathname

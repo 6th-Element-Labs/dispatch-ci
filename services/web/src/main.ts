@@ -5,6 +5,7 @@ import { renderThreadAttachments } from './thread-attachments'
 import '@tabler/core/dist/css/tabler.min.css'
 import '@tabler/icons-webfont/dist/tabler-icons.min.css'
 import './styles.css'
+import './apple-ui.css'
 import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent } from './email-renderer.js'
@@ -27,7 +28,7 @@ app.innerHTML = `
   <div class="page dispatch-window">
     <header class="dispatch-toolbar" data-tauri-drag-region>
       <div class="dispatch-toolbar-cluster dispatch-toolbar-messages" data-toolbar-messages data-tauri-drag-region>
-        <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-pane-collapse" type="button" data-collapse-messages aria-label="Collapse thread list" aria-keyshortcuts="Control+Backquote" title="Toggle thread list (Control + &#96;)"><i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i></button>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-mailboxes-toggle aria-label="Show mailboxes" aria-expanded="false" title="Show mailboxes"><i class="ti ti-layout-sidebar" aria-hidden="true"></i></button><button class="btn btn-sm btn-ghost-secondary dispatch-sidebar-options" data-sidebar-options aria-label="Folder rail style" aria-haspopup="menu" aria-expanded="false"><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
         <button class="btn btn-icon btn-ghost-primary btn-sm" type="button" data-compose aria-label="Compose" title="Compose"><i class="ti ti-pencil" aria-hidden="true"></i></button>
         <div class="dispatch-folder">
           <button class="btn btn-ghost-secondary btn-sm dispatch-folder-button" type="button" data-folder-toggle aria-haspopup="menu" aria-expanded="false"><h1 class="dispatch-folder-title" data-mailbox-title>Inbox</h1><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
@@ -37,6 +38,7 @@ app.innerHTML = `
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="drafts"><i class="ti ti-file-pencil dropdown-item-icon" aria-hidden="true"></i>Drafts</button>
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="archive"><i class="ti ti-archive dropdown-item-icon" aria-hidden="true"></i>Archive</button>
             <div class="dropdown-divider"></div>
+            <button class="dropdown-item" type="button" role="menuitem" data-collapse-messages aria-label="Collapse thread list">Hide message list <span class="ms-auto">⌃&#96;</span></button>
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="spam"><i class="ti ti-alert-octagon dropdown-item-icon" aria-hidden="true"></i>Spam</button>
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="trash"><i class="ti ti-trash dropdown-item-icon" aria-hidden="true"></i>Trash</button>
           </div>
@@ -45,8 +47,7 @@ app.innerHTML = `
         <span class="dispatch-toolbar-spacer" data-tauri-drag-region></span>
       </div>
       <div class="dispatch-toolbar-cluster dispatch-toolbar-reader" data-tauri-drag-region>
-        <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
-        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button>
+
         <span class="dispatch-toolbar-spacer" data-tauri-drag-region></span>
         <label class="input-icon dispatch-search"><span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span><input class="form-control form-control-sm" data-search placeholder="Search" aria-label="Search mail" title="Type to filter; press Enter to search with Codex"><kbd class="dispatch-search-kbd" aria-hidden="true">⌘K</kbd></label><button class="btn btn-sm btn-icon btn-ghost-primary" type="button" data-ai-search aria-label="Search with Codex" title="Search with Codex (Enter)"><i class="ti ti-sparkles" aria-hidden="true"></i></button>
       </div>
@@ -60,12 +61,15 @@ app.innerHTML = `
       </div>
     </header>
     <div class="dispatch-workspace">
-      <nav class="dispatch-rail nav nav-pills flex-column bg-white" aria-label="Mail folders"><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><button type="button" class="nav-link" data-recovery-open hidden><i class="ti ti-history" aria-hidden="true"></i><span>Recovery</span></button><button type="button" class="nav-link" data-receipts-open><i class="ti ti-receipt" aria-hidden="true"></i><span>Receipts</span></button><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
+      <nav class="dispatch-rail nav nav-pills flex-column" aria-label="Mail folders" hidden><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
-        <nav class="dispatch-mail-tabs" aria-label="Message state"><button class="dispatch-mail-tab active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="dispatch-mail-tab" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="dispatch-mail-tab" type="button" data-mail-state="read" aria-pressed="false">Read</button></nav>
+        <nav class="dispatch-mail-tabs" aria-label="Message state"><button class="dispatch-mail-tab active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="dispatch-mail-tab" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="dispatch-mail-tab" type="button" data-mail-state="read" aria-pressed="false">Read</button><button class="btn btn-sm btn-icon ms-auto" data-density aria-label="Use comfortable message list" aria-pressed="true" title="Message density"><i class="ti ti-list-details" aria-hidden="true"></i></button></nav>
+        <div class="dispatch-recovery-banner" hidden><span data-recovery-count>Unsaved drafts on this Mac</span><button type="button" class="nav-link" data-recovery-open hidden><i class="ti ti-history" aria-hidden="true"></i><span>Recovery</span></button></div>
         <div class="dispatch-search-status" data-search-status hidden><span data-search-summary role="status"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-clear-search aria-label="Return to mailbox">Clear</button></div>
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
+        <footer class="dispatch-mail-activity"><div class="dispatch-activity-status">        <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button></div><button class="btn btn-sm" data-activity-toggle aria-expanded="false" aria-controls="dispatch-activity"><i class="ti ti-activity" aria-hidden="true"></i><span>Mail activity</span></button><div class="dispatch-activity-popover" id="dispatch-activity" hidden><strong>Mail activity</strong><div class="dispatch-activity-options"><button type="button" class="nav-link" data-receipts-open><i class="ti ti-receipt" aria-hidden="true"></i><span>Receipts</span></button><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button></div><p class="small text-secondary mb-0">Send history and downloaded mail</p></div></footer>
       </aside>
       <div class="dispatch-divider" data-divider="messages" role="separator" tabindex="0" aria-label="Resize messages panel" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="640"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <main class="card rounded-0 border-0 dispatch-reader" aria-label="Selected email">
@@ -75,7 +79,7 @@ app.innerHTML = `
             <h2 class="dispatch-reader-subject" data-subject></h2>
             <div class="dispatch-reader-toolbar">
               <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-mobile-back" type="button" data-mobile-back aria-label="Back to Inbox"><i class="ti ti-arrow-left" aria-hidden="true"></i></button>
-              <button class="btn btn-primary btn-sm" type="button" data-reply><i class="ti ti-arrow-back-up me-1" aria-hidden="true"></i>Reply</button>
+              <button class="btn btn-outline-secondary btn-sm" type="button" data-reply><i class="ti ti-arrow-back-up me-1" aria-hidden="true"></i>Reply</button>
               <div class="btn-group" role="group" aria-label="Reply options">
                 <button class="btn btn-icon btn-sm" type="button" data-reply-all aria-label="Reply all" title="Reply all"><i class="ti ti-arrow-back-up-double" aria-hidden="true"></i></button>
                 <button class="btn btn-icon btn-sm" type="button" data-forward aria-label="Forward" title="Forward"><i class="ti ti-arrow-forward-up" aria-hidden="true"></i></button>
@@ -124,7 +128,7 @@ app.innerHTML = `
       <aside class="card rounded-0 border-0 dispatch-agent" aria-label="Codex">
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
-          <div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
+          <p class="dispatch-agent-state-text" data-agent-state-text role="status" hidden></p><div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
           <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span></span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
         </footer>
       </aside>
@@ -132,6 +136,7 @@ app.innerHTML = `
   </div>`
 
 app.insertAdjacentHTML('beforeend', `
+  <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
   <dialog class="dispatch-utility-dialog" data-recovery-dialog aria-label="Local draft recovery"><div class="d-flex justify-content-between"><h2>Local draft recovery</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>These local copies are not saved to Gmail. Review a copy before saving it.</p><div data-recovery-list></div></dialog>
   <dialog class="dispatch-utility-dialog" data-receipts-dialog aria-label="Send receipts"><div class="d-flex justify-content-between"><h2>Send receipts</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><div data-receipts-list></div></dialog>
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
@@ -211,6 +216,10 @@ function setAgentStatus(status: string, label = status): void {
   elements.agentStatus.dataset.status = status
   elements.agentStatus.title = label
   elements.agentStatus.setAttribute('aria-label', label)
+  const stateText = app.querySelector<HTMLElement>('[data-agent-state-text]')!
+  stateText.dataset.state = status
+  stateText.hidden = status === 'Connected'
+  stateText.textContent = label
   renderServiceStatus()
 }
 
@@ -355,12 +364,27 @@ function loadPanelState(): PanelState {
 }
 
 const panels = loadPanelState()
+type SidebarStyle = 'compact' | 'expanded'
+const savedSidebar = localStorage.getItem('dispatch.ui.sidebar')
+let mailboxesVisible = savedSidebar !== 'hidden'
+let sidebarStyle: SidebarStyle = (savedSidebar === 'expanded' || (savedSidebar === 'hidden' && localStorage.getItem('dispatch.ui.sidebar.last-visible') === 'expanded')) ? 'expanded' : 'compact'
+let compactMessages = localStorage.getItem('dispatch.ui.density') !== 'comfortable'
+document.documentElement.classList.toggle('dispatch-compact', compactMessages)
 
 function usesMobilePanels(): boolean {
   return window.matchMedia('(max-width: 820px)').matches
 }
 
 function renderPanels(): void {
+  const showMailboxes = mailboxesVisible && !usesMobilePanels()
+  const displayedSidebarStyle = window.innerWidth < 1000 ? 'compact' : sidebarStyle
+  app.querySelector<HTMLElement>('.dispatch-rail')!.hidden = !showMailboxes
+  app.querySelector<HTMLElement>('.dispatch-rail')!.dataset.style = displayedSidebarStyle
+  app.querySelectorAll('[data-sidebar-style]').forEach(button => button.setAttribute('aria-checked', String((button as HTMLElement).dataset.sidebarStyle === sidebarStyle)))
+  const mailboxToggle = app.querySelector<HTMLButtonElement>('[data-mailboxes-toggle]')!
+  mailboxToggle.setAttribute('aria-expanded', String(showMailboxes))
+  mailboxToggle.setAttribute('aria-label', showMailboxes ? 'Hide mailboxes' : 'Show mailboxes')
+  mailboxToggle.title = showMailboxes ? 'Hide mailboxes' : 'Show mailboxes'
   if (usesMobilePanels()) {
     elements.messagesPanel.hidden = mobilePanel !== 'messages'
     elements.readerPanel.hidden = mobilePanel !== 'reader'
@@ -387,10 +411,10 @@ function renderPanels(): void {
 
   let messagesWidth = panels.messagesWidth
   let agentWidth = panels.agentWidth
-  const railWidth = window.innerWidth <= 1100 ? 0 : 72
-  const minimumReaderWidth = window.innerWidth <= 1100 ? 320 : 360
+  const railWidth = mailboxesVisible ? (displayedSidebarStyle === 'compact' ? 64 : 140) : 0
+  const minimumReaderWidth = Math.max(220, Math.min(window.innerWidth <= 1100 ? 320 : 360, elements.workspace.clientWidth - railWidth - 518))
   if (panels.messages && panels.reader && panels.agent) {
-    const sideWidth = Math.max(500, window.innerWidth - railWidth - 18 - minimumReaderWidth)
+    const sideWidth = Math.max(500, elements.workspace.clientWidth - railWidth - 18 - minimumReaderWidth)
     if (messagesWidth + agentWidth > sideWidth) {
       const scale = sideWidth / (messagesWidth + agentWidth)
       messagesWidth = Math.max(220, Math.round(messagesWidth * scale))
@@ -398,7 +422,7 @@ function renderPanels(): void {
       if (messagesWidth + agentWidth > sideWidth) messagesWidth = Math.max(220, sideWidth - agentWidth)
     }
   }
-  const columns: string[] = railWidth ? ['72px'] : []
+  const columns: string[] = railWidth ? [`${railWidth}px`] : []
   if (panels.messages) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${messagesWidth}px`)
   if (!elements.messagesDivider.hidden) columns.push('9px')
   if (panels.reader) columns.push(`minmax(${minimumReaderWidth}px, 1fr)`)
@@ -663,6 +687,26 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
       }
     })
     return article
+  }
+  if (message.accountId && message.labels?.includes('SENT')) {
+    const receiptDisclosure = document.createElement('details')
+    receiptDisclosure.className = 'dispatch-message-receipt'
+    const summary = document.createElement('summary'); summary.textContent = 'Sent details'
+    const content = document.createElement('div')
+    receiptDisclosure.append(summary, content)
+    let loaded = false
+    receiptDisclosure.addEventListener('toggle', () => {
+      if (!receiptDisclosure.open || loaded) return
+      loaded = true; content.textContent = 'Loading sent details…'
+      const show = (receipt: SendReceipt) => content.replaceChildren(receiptView(receipt, () => {
+        void api.verifyReceipt(receipt.id).then(show).catch(error => { content.textContent = String(error); loaded = false })
+      }))
+      const known = receipts.find(item => item.accountId === message.accountId && item.messageId === message.id)
+      if (known) show(known)
+      else if (offlineMode) { content.textContent = 'No saved receipt for this message. Go online to verify it.'; loaded = false }
+      else void api.recordSend(message.accountId!, message.id).then(receipt => api.verifyReceipt(receipt.id)).then(show).catch(error => { content.textContent = String(error); loaded = false })
+    })
+    article.append(receiptDisclosure)
   }
   const content = renderEmailContent(message.body.kind, message.body.content, offlineMode || selected?.availability?.mode === 'downloaded')
   content.classList.add('dispatch-thread-content')
@@ -1254,6 +1298,8 @@ function renderRecoveryList(): void {
   try {
     const records = recovery.list()
     button.hidden = records.length === 0
+    app.querySelector<HTMLElement>('.dispatch-recovery-banner')!.hidden = records.length === 0
+    app.querySelector<HTMLElement>('[data-recovery-count]')!.textContent = `${records.length} recovered ${records.length === 1 ? 'draft' : 'drafts'}`
     button.setAttribute('aria-label', `Local draft recovery (${records.length})`)
     list.replaceChildren(...records.map(record => {
       const row = document.createElement('section'); row.className = 'dispatch-recovery-row'
@@ -1263,7 +1309,7 @@ function renderRecoveryList(): void {
       restore.addEventListener('click', () => { void restoreLocalDraft(record.key).catch(draftError) })
       row.append(title, detail, restore); return row
     }))
-  } catch (error) { button.hidden = false; button.setAttribute('aria-label', 'Local recovery needs attention'); list.textContent = String(error) }
+  } catch (error) { button.hidden = false; app.querySelector<HTMLElement>('.dispatch-recovery-banner')!.hidden = false; button.setAttribute('aria-label', 'Local recovery needs attention'); list.textContent = String(error) }
 }
 async function restoreLocalDraft(key: string): Promise<void> {
   if (activeDraft && draftDirty) checkpointDraft()
@@ -1698,14 +1744,14 @@ function addAgentMessage(kind: 'user' | 'agent' | 'tool' | 'error', text: string
   if (kind === 'user') {
     item.classList.add('d-flex', 'justify-content-end')
     const bubble = document.createElement('div')
-    bubble.className = 'card bg-primary text-white dispatch-chat-bubble'
+    bubble.className = 'card dispatch-chat-bubble'
     const body = document.createElement('div')
     body.className = 'card-body p-3'
     const content = document.createElement('div')
-    content.className = 'text-white dispatch-chat-plain'
+    content.className = 'dispatch-chat-plain'
     content.textContent = text
     const time = document.createElement('time')
-    time.className = 'd-block text-white opacity-75 small mt-2'
+    time.className = 'd-block text-secondary small mt-2'
     time.textContent = timestamp
     body.append(content, time)
     bubble.append(body)
@@ -2523,7 +2569,7 @@ function showReceipt(receipt: SendReceipt): void {
   receipts = [receipt, ...receipts.filter(item => item.id !== receipt.id)]
   renderReceipts()
   const dialog = app.querySelector<HTMLDialogElement>('[data-receipts-dialog]')!
-  if (!dialog.open) dialog.showModal()
+  if (!dialog.open) dialog.show()
 }
 function renderOfflineStatus(): void {
   const checkbox = app.querySelector<HTMLInputElement>('[data-offline-mode]')!
@@ -2553,10 +2599,61 @@ function setDownloadedMode(value: boolean): void {
   clearSearchView(); conversationCache.clear(); renderOfflineStatus()
   void connectMail()
 }
+function persistSidebar(): void {
+  localStorage.setItem('dispatch.ui.sidebar', mailboxesVisible ? sidebarStyle : 'hidden')
+  localStorage.setItem('dispatch.ui.sidebar.last-visible', sidebarStyle)
+}
+function setSidebarMenu(open: boolean): void {
+  const menu = app.querySelector<HTMLElement>('[data-sidebar-menu]')!
+  const button = app.querySelector<HTMLButtonElement>('[data-sidebar-options]')!
+  menu.hidden = !open; menu.classList.toggle('show', open); button.setAttribute('aria-expanded', String(open))
+  if (open) {
+    const rect = button.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 188))}px`
+    menu.style.top = `${rect.bottom + 4}px`
+    menu.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus()
+  }
+}
+app.querySelector('[data-sidebar-options]')?.addEventListener('click', event => { event.stopPropagation(); setSidebarMenu(app.querySelector<HTMLElement>('[data-sidebar-menu]')!.hidden) })
+app.querySelectorAll<HTMLButtonElement>('[data-sidebar-style]').forEach(button => button.addEventListener('click', () => {
+  sidebarStyle = button.dataset.sidebarStyle as SidebarStyle; mailboxesVisible = true; persistSidebar(); renderPanels(); setSidebarMenu(false)
+  app.querySelector<HTMLButtonElement>('[data-sidebar-options]')!.focus()
+}))
+app.querySelector('[data-sidebar-menu]')?.addEventListener('keydown', event => {
+  const key = (event as KeyboardEvent).key
+  if (!['ArrowDown','ArrowUp','Home','End'].includes(key)) return
+  event.preventDefault()
+  const buttons = [...app.querySelectorAll<HTMLButtonElement>('[data-sidebar-style]')]
+  const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
+  buttons[key === 'Home' ? 0 : key === 'End' ? buttons.length - 1 : (current + (key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
+})
+app.querySelector('[data-mailboxes-toggle]')?.addEventListener('click', () => {
+  if (usesMobilePanels()) { setFolderMenu(elements.folderMenu.hidden); return }
+  mailboxesVisible = !mailboxesVisible; persistSidebar(); renderPanels()
+})
+function renderDensity(): void {
+  document.documentElement.classList.toggle('dispatch-compact', compactMessages)
+  const button = app.querySelector<HTMLButtonElement>('[data-density]')!
+  button.setAttribute('aria-pressed', String(compactMessages))
+  button.setAttribute('aria-label', compactMessages ? 'Use comfortable message list' : 'Use compact message list')
+}
+app.querySelector('[data-density]')?.addEventListener('click', () => { compactMessages = !compactMessages; localStorage.setItem('dispatch.ui.density', compactMessages ? 'compact' : 'comfortable'); renderDensity() })
+renderDensity()
+function closeActivity(): void { app.querySelector<HTMLElement>('#dispatch-activity')!.hidden = true; app.querySelector('[data-activity-toggle]')!.setAttribute('aria-expanded', 'false') }
+app.querySelector('[data-activity-toggle]')?.addEventListener('click', () => {
+  const panel = app.querySelector<HTMLElement>('#dispatch-activity')!; panel.hidden = !panel.hidden
+  app.querySelector('[data-activity-toggle]')!.setAttribute('aria-expanded', String(!panel.hidden))
+})
+for (const selector of ['[data-receipts-open]', '[data-offline-open]']) app.querySelector(selector)?.addEventListener('click', closeActivity)
+document.addEventListener('click', event => { if (!(event.target as Element).closest('.dispatch-mail-activity')) closeActivity() })
+for (const name of ['receipts', 'offline', 'recovery']) {
+  const dialog = app.querySelector<HTMLDialogElement>(`[data-${name}-dialog]`)!
+  dialog.addEventListener('close', () => app.querySelector<HTMLButtonElement>(name === 'recovery' ? '[data-recovery-open]' : '[data-activity-toggle]')?.focus())
+}
 app.querySelectorAll<HTMLButtonElement>('[data-dialog-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog')!.close()))
 app.querySelector('[data-recovery-open]')?.addEventListener('click', () => { renderRecoveryList(); app.querySelector<HTMLDialogElement>('[data-recovery-dialog]')!.showModal() })
-app.querySelector('[data-receipts-open]')?.addEventListener('click', () => { renderReceipts(); app.querySelector<HTMLDialogElement>('[data-receipts-dialog]')!.showModal(); void refreshUtilities() })
-app.querySelector('[data-offline-open]')?.addEventListener('click', () => { renderOfflineStatus(); app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.showModal(); void refreshUtilities() })
+app.querySelector('[data-receipts-open]')?.addEventListener('click', () => { renderReceipts(); app.querySelector<HTMLDialogElement>('[data-receipts-dialog]')!.show(); void refreshUtilities() })
+app.querySelector('[data-offline-open]')?.addEventListener('click', () => { renderOfflineStatus(); app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.show(); void refreshUtilities() })
 app.querySelector<HTMLInputElement>('[data-offline-mode]')?.addEventListener('change', event => setDownloadedMode((event.target as HTMLInputElement).checked))
 app.querySelector('[data-download-mailbox]')?.addEventListener('click', () => { void api.downloadMailbox(mailbox, selectedAccountId).then(refreshUtilities).catch(error => { app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = String(error) }) })
 app.querySelector('[data-cancel-download]')?.addEventListener('click', () => { void api.cancelDownload().then(refreshUtilities).catch(error => { app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = String(error) }) })
@@ -2856,12 +2953,16 @@ elements.readerMore.addEventListener('click', (event) => {
 })
 elements.readerMenu.addEventListener('click', () => setReaderMenu(false))
 document.addEventListener('click', (event) => {
+  if (!(event.target as Element).closest('[data-sidebar-menu], [data-sidebar-options]')) setSidebarMenu(false)
   if (!elements.folderMenu.hidden && !elements.folderMenu.contains(event.target as Node)) setFolderMenu(false)
   if (!elements.readerMenu.hidden && !elements.readerMenu.contains(event.target as Node)) setReaderMenu(false)
   if (!elements.modelMenu.hidden && !elements.modelMenu.contains(event.target as Node)) setModelMenu(false)
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
+  if (!app.querySelector<HTMLElement>('[data-sidebar-menu]')!.hidden) { setSidebarMenu(false); app.querySelector<HTMLButtonElement>('[data-sidebar-options]')!.focus() }
+  closeActivity()
+  app.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach(dialog => dialog.close())
   setFolderMenu(false)
   setReaderMenu(false)
   setModelMenu(false)
