@@ -3,7 +3,7 @@
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Loopback ports that already accept a TCP connection. A Dispatch port that is
 /// open before we start means another Dispatch or `scripts/dev.sh` owns it.
@@ -16,6 +16,16 @@ pub fn open_ports(ports: &[u16]) -> Vec<u16> {
             TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok()
         })
         .collect()
+}
+
+/// Give orphan watchdogs a bounded grace period; never stop unknown port owners.
+pub fn wait_for_ports(ports: &[u16], timeout: Duration) -> Vec<u16> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let open = open_ports(ports);
+        if open.is_empty() || Instant::now() >= deadline { return open; }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Paths that are not regular files.
@@ -55,6 +65,16 @@ mod tests {
         assert_eq!(open_ports(&[port]), vec![port]);
         drop(listener);
         assert!(open_ports(&[port]).is_empty());
+    }
+
+    #[test]
+    fn waits_for_exiting_owners_without_stopping_other_listeners() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(wait_for_ports(&[port], Duration::from_millis(10)), vec![port]);
+        let thread = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(50)); drop(listener); });
+        assert!(wait_for_ports(&[port], Duration::from_secs(1)).is_empty());
+        thread.join().unwrap();
     }
 
     #[test]

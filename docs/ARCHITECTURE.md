@@ -92,3 +92,9 @@ Web owns the unsaved editor outbox as presentation state: a synchronous localSto
 The shell creates the mail window with navigation and new-window guards. It keeps the configured local mail entry point loaded and routes HTTP(S) pages to a separate native window. That window contains a local `browser.html` toolbar, owned by web, and a separate remote child webview. Tauri's multiwebview API is enabled for this composition. Window resize events keep the remote view below the toolbar.
 
 Only `main` may request a new web link. Only the local `link-toolbar` webview may invoke browser state/action commands; `link-content` has no capabilities. Command handlers additionally validate caller label and local URL. The remote view rejects navigation into local application documents. macOS Back and Forward use WKWebView history through native calls. The shell's Navigate menu provides controls independently of either page. Closing the viewer focuses the existing mail window and does not recreate it or restart services.
+
+### Native service lifetime
+
+The shell supplies its PID to its own mail and agent children. Each service watches that PID and the parent's stdin pipe, shutting down if its owner disappears. The pipe also handles PID reuse. Direct standalone service runs without this marker are unchanged. Agent removes the ownership marker from the Codex child environment and terminates that child on service shutdown, escalating after a bounded grace period.
+
+On startup the shell waits up to five seconds for exiting services to release their ports. It never kills an unknown listener. This prevents an abruptly closed app from leaving orphan services that block its next launch. Normal service shutdown closes HTTP connections and has a bounded exit deadline.

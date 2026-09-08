@@ -58,14 +58,14 @@ impl Service {
     }
 }
 
-/// Environment handed to one service. Pure so the contract is unit-tested.
+/// Environment handed to one service, including its native process owner.
 pub fn service_env(
     service: Service,
     codex: Option<&Path>,
     dev: bool,
     inherited_path: &str,
 ) -> Vec<(String, String)> {
-    let mut env = vec![
+    let mut env = vec![("DISPATCH_PARENT_PID".to_string(), std::process::id().to_string()),
         (
             match service {
                 Service::Mail => "DISPATCH_MAIL_PORT",
@@ -210,6 +210,7 @@ mod tests {
     #[test]
     fn mail_release_env_targets_the_native_origin_and_omits_codex() {
         let env = service_env(Service::Mail, Some(Path::new("/x/codex")), false, "/usr/bin");
+        assert_eq!(value(&env, "DISPATCH_PARENT_PID"), Some(std::process::id().to_string().as_str()));
         assert_eq!(value(&env, "DISPATCH_MAIL_PORT"), Some("8411"));
         assert_eq!(value(&env, "DISPATCH_ALLOWED_ORIGIN"), Some("tauri://localhost"));
         assert_eq!(value(&env, "PATH"), Some("/usr/bin:/opt/homebrew/bin:/usr/local/bin"));

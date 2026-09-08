@@ -1,3 +1,4 @@
+import { watchParent } from './parent-watch.js'
 import { projectSearchResults, type SearchMatch } from './search-results.js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
@@ -247,12 +248,14 @@ export function createMailServer(
     const conversationMatch = /^\/v1\/conversations\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && conversationMatch?.[1]) {
       const threadId = decodeURIComponent(conversationMatch[1])
+      const mailbox = mailboxFilter(url.searchParams.get('mailbox'))
+      if (!mailbox) return writeJson(response, 400, { error: 'invalid_mailbox' })
       const accountId = url.searchParams.get('account')
       if (accountId) {
         try {
-          return writeJson(response, 200, { conversation: await gmail.readConversation(accountId, threadId, url.searchParams.get('offline') === 'true') })
+          return writeJson(response, 200, { conversation: await gmail.readConversation(accountId, threadId, url.searchParams.get('offline') === 'true', mailbox) })
         } catch (error) {
-          return writeJson(response, (error as { code?: string }).code === 'not_downloaded' ? 404 : 502, { error: (error as { code?: string }).code ?? 'gmail_conversation_read_failed', detail: error instanceof Error ? error.message : String(error) })
+          return writeJson(response, ['not_downloaded', 'conversation_not_in_mailbox'].includes((error as { code?: string }).code ?? '') ? 404 : 502, { error: (error as { code?: string }).code ?? 'gmail_conversation_read_failed', detail: error instanceof Error ? error.message : String(error) })
         }
       }
       if (!demoEnabled) return writeJson(response, 400, { error: 'gmail_account_required' })
@@ -527,7 +530,16 @@ export function createMailServer(
 const isEntrypoint = process.argv[1] === fileURLToPath(import.meta.url)
 if (isEntrypoint) {
   const port = Number(process.env.DISPATCH_MAIL_PORT ?? 8411)
-  createMailServer().listen(port, '127.0.0.1', () => {
+  const server = createMailServer()
+  server.listen(port, '127.0.0.1', () => {
     process.stdout.write(`dispatch-mail ready on http://127.0.0.1:${port}\n`)
   })
+  let closing = false
+  const close = () => {
+    if (closing) return
+    closing = true; server.close(); server.closeAllConnections()
+    setTimeout(() => process.exit(0), 2500).unref()
+  }
+  process.once('SIGINT', close); process.once('SIGTERM', close)
+  watchParent(process.env.DISPATCH_PARENT_PID, close)
 }

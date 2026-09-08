@@ -105,3 +105,15 @@ Opening a conversation caches its full message bodies. Offline controls offer Do
 Opening an HTTP or HTTPS link keeps the mail view, selected conversation, draft and Codex session loaded. Desktop links open in a separate web window. Dispatch owns a persistent toolbar with Back, Forward, Reload, Open in Browser and Return to Mail. The toolbar shows the current host. Closing the web window, pressing Command-W, or choosing Navigate → Return to Mail brings the existing mail window forward. Command-[ and Command-] use the page's actual history. Browser development opens links in a separate browser tab.
 
 The main native webview also rejects external navigation and new-window requests, so target=_blank and navigation outside the normal click handler cannot replace mail. Remote pages have no Dispatch capability. The toolbar is a separate local webview; it is never injected into website content. Mailto links open through the system handler.
+
+## Reply responsiveness
+
+Reply and Reply All open an editable local draft from the already-loaded conversation immediately. Gmail persistence runs in the background, with local recovery kept until the matching save is confirmed. Typing during creation stays in the editor and is saved afterward. Switching conversations does not let a late create response replace the selected thread; recovery learns the saved Gmail draft identity. Repeated clicks while the first create is pending do not create duplicate drafts.
+
+A confirmed draft create, update or discard returns without waiting for mailbox synchronization. The index refresh continues separately.
+
+When the installed connector does not provide draft deletion, Discard resolves the exact Gmail draft message, moves only that message to Trash, and checks that the draft no longer appears in Gmail's draft list. It does not trash the conversation or report success for a rejected per-message result.
+
+Quoted-history folding wraps the actual blockquote/Gmail quote, not its ancestors. New text before or after a quote remains visible, even inside Outlook/Word layout wrappers. Outlook reply-header markers fold only their following siblings in the same container. Reply and forward text is extracted from sanitized source content without adding the UI's disclosure labels.
+
+The thread reader applies the selected mailbox context to raw Gmail thread results. Inbox, Sent and Archive reading exclude unsent drafts, Trash and Spam messages. Explicit Drafts, Trash and Spam views show the matching messages. Subject, latest message, reply source and attachment count are recomputed from that visible set. Downloaded bodies and in-memory views retain the same folder boundary.

@@ -54,6 +54,13 @@ export class DraftRecovery {
     })
     this.storage.setItem(KEY, JSON.stringify([{ ...value, attachments: files }, ...records]))
   }
+  bindGmailIdentity(key: string, accountId: string, draftId: string): void {
+    const records = this.list()
+    const record = records.find(item => item.key === key && item.accountId === accountId)
+    if (!record || (record.gmailDraftId && record.gmailDraftId !== draftId)) return
+    record.gmailDraftId = draftId
+    this.storage.setItem(KEY, JSON.stringify(records))
+  }
   remove(key: string): void { this.storage.setItem(KEY, JSON.stringify(this.list().filter(item => item.key !== key))) }
   async restore(key: string): Promise<{ record: RecoveryDraft; attachments: Attachment[]; missing: string[] }> {
     const record = this.list().find(item => item.key === key)

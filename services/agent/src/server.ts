@@ -1,3 +1,4 @@
+import { watchParent } from './parent-watch.js'
 import { completedGmailSend } from './send-receipt-observer.js'
 import { dispatchMailConfig, handleDispatchMailMcp } from './dispatch-mail-mcp.js'
 import { mkdirSync } from 'node:fs'
@@ -664,10 +665,15 @@ if (isEntrypoint) {
   server.listen(port, '127.0.0.1', () => {
     process.stdout.write(`dispatch-agent listening on http://127.0.0.1:${port}\n`)
   })
+  let closing = false
   const close = () => {
-    server.close()
+    if (closing) return
+    closing = true
+    server.close(); server.closeAllConnections()
     runtime.close()
+    setTimeout(() => process.exit(0), 2500).unref()
   }
+  watchParent(process.env.DISPATCH_PARENT_PID, close)
   process.once('SIGINT', close)
   process.once('SIGTERM', close)
 }

@@ -49,7 +49,7 @@ pub fn run() {
                 fatal(&handle, &preflight::describe_missing(&missing));
             }
             let ports: Vec<u16> = Service::ALL.iter().map(|service| service.port()).collect();
-            let open = preflight::open_ports(&ports);
+            let open = preflight::wait_for_ports(&ports, std::time::Duration::from_secs(5));
             if !open.is_empty() {
                 fatal(&handle, &preflight::describe_port_conflict(&open));
             }

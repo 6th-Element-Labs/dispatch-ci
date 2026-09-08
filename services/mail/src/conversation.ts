@@ -1,4 +1,4 @@
-import type { ConversationProjection, ConversationSummary, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
+import type { ConversationProjection, ConversationSummary, GmailMailbox, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
 function key(message: MessageSummary): string {
   return `${message.accountId ?? 'demo'}:${message.threadId}`
@@ -48,4 +48,17 @@ export function replySourceMessage(conversation: ConversationProjection): Messag
   const latest = conversation.messages.find((message) => message.id === conversation.latestMessageId)
   if (!latest) throw new Error('Conversation is missing its latest message')
   return latest
+}
+
+/** A raw Gmail thread can contain drafts and trashed messages. They are not inbox mail. */
+export function conversationForMailbox(conversation: ConversationProjection, mailbox: GmailMailbox): ConversationProjection {
+  const visible = conversation.messages.filter(message => {
+    const labels = new Set(message.labels ?? [])
+    if (mailbox === 'trash') return labels.has('TRASH')
+    if (mailbox === 'drafts') return labels.has('DRAFT') && !labels.has('TRASH')
+    if (mailbox === 'spam') return labels.has('SPAM') && !labels.has('TRASH')
+    return !labels.has('TRASH') && !labels.has('SPAM') && !labels.has('DRAFT')
+  })
+  if (!visible.length) throw Object.assign(new Error(`No messages in this conversation are available in ${mailbox}. Refresh the mailbox.`), { code: 'conversation_not_in_mailbox' })
+  return projectConversation(visible, conversation.source)
 }

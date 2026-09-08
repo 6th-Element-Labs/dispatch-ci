@@ -1,5 +1,5 @@
 import { LocalMailStore, type SendReceipt, type ReceiptDetails, type OfflineDownload } from './local-mail-store.js'
-import { groupConversations, projectConversation } from './conversation.js'
+import { groupConversations, projectConversation, conversationForMailbox } from './conversation.js'
 import { plainBodyFromMessage, projectDraft } from './draft.js'
 import { randomUUID } from 'node:crypto'
 import { resolveAttachmentBytes } from './open-attachment.js'
@@ -687,11 +687,11 @@ export class GmailConnectorProvider {
     return projectGmailMessage(value, true, account)
   }
 
-  async readConversation(accountId: string, threadId: string, downloadedOnly = false): Promise<ConversationProjection> {
+  async readConversation(accountId: string, threadId: string, downloadedOnly = false, mailbox: GmailMailbox = 'inbox'): Promise<ConversationProjection> {
     const cached = this.#local.conversation(accountId, threadId)
     if (downloadedOnly) {
       if (!cached) throw Object.assign(new Error('This conversation has not been downloaded. Go online and open it or download the mailbox.'), { code: 'not_downloaded' })
-      return { ...cached.conversation, availability: { mode: 'downloaded', cachedAt: cached.cachedAt } }
+      return { ...conversationForMailbox(cached.conversation, mailbox), availability: { mode: 'downloaded', cachedAt: cached.cachedAt } }
     }
     try {
       const account = await this.#account(accountId)
@@ -701,11 +701,11 @@ export class GmailConnectorProvider {
       if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
       const conversation = projectConversation(messages, 'gmail')
       const cachedAt = this.#stopped ? new Date().toISOString() : this.#local.cache(conversation)
-      return { ...conversation, availability: { mode: 'live', cachedAt } }
+      return { ...conversationForMailbox(conversation, mailbox), availability: { mode: 'live', cachedAt } }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       if (!cached || /not found|unknown account|401|403|404/i.test(detail) || !/timeout|timed out|fetch failed|aborted|ECONN|ENOTFOUND|503|unavailable/i.test(detail)) throw error
-      return { ...cached.conversation, availability: { mode: 'downloaded', cachedAt: cached.cachedAt, reason: 'Gmail could not be reached.' } }
+      return { ...conversationForMailbox(cached.conversation, mailbox), availability: { mode: 'downloaded', cachedAt: cached.cachedAt, reason: 'Gmail could not be reached.' } }
     }
   }
 
@@ -727,8 +727,10 @@ export class GmailConnectorProvider {
         if (job.state !== 'running' || this.#stopped) return
         try {
           const cached = this.#local.conversation(conversation.accountId!, conversation.threadId)
-          if (!cached || cached.conversation.latestMessageId !== conversation.latestMessageId || cached.conversation.messages.length < conversation.messageCount) {
-            const loaded = await this.readConversation(conversation.accountId!, conversation.threadId)
+          let saved: ConversationProjection | undefined
+          if (cached) { try { saved = conversationForMailbox(cached.conversation, mailbox) } catch {} }
+          if (!saved || saved.latestMessageId !== conversation.latestMessageId || saved.messages.length < conversation.messageCount) {
+            const loaded = await this.readConversation(conversation.accountId!, conversation.threadId, false, mailbox)
             if (loaded.availability?.mode === 'downloaded') throw new Error('Gmail is offline; the existing saved copy was kept.')
             if (loaded.messages.length < conversation.messageCount) throw new Error(`Only ${loaded.messages.length} of ${conversation.messageCount} indexed messages were returned. This conversation download is incomplete.`)
           }
@@ -783,7 +785,7 @@ export class GmailConnectorProvider {
       if (!id) throw new Error('Gmail did not return a draft ID')
       const saved = { ...draft, id }
       this.#drafts.set(`${accountId}:${id}`, saved)
-      await this.#refreshIndexedDrafts()
+      void this.#refreshIndexedDrafts()
       return saved
     } catch (error) {
       throw draftConnectorError(error)
@@ -803,7 +805,7 @@ export class GmailConnectorProvider {
         ...attachments.length > 0 ? { attachments: connectorAttachments(attachments) } : {},
       })
       this.#drafts.set(`${draft.accountId}:${draft.id}`, saved)
-      await this.#refreshIndexedDrafts()
+      void this.#refreshIndexedDrafts()
       return saved
     } catch (error) {
       throw draftConnectorError(error)
@@ -849,10 +851,21 @@ export class GmailConnectorProvider {
   async discardGmailDraft(accountId: string, draftId: string): Promise<void> {
     const summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId).catch(() => undefined)
     try {
-      await this.#post('/v1/connectors/gmail/drafts/discard', { linkId: accountId, draftId })
+      try {
+        const result = await this.#post('/v1/connectors/gmail/drafts/discard', { linkId: accountId, draftId })
+        if (record(result)?.isError || structured(result).error) throw new Error('Gmail did not confirm discarding the draft')
+      } catch (error) {
+        // Some installed connectors expose message Trash but no delete_draft.
+        // Resolve the exact draft message first; never trash the whole thread.
+        if (!summary || !String(error).includes('gmail_draft_discard_unavailable')) throw error
+        const result = await this.#post('/v1/connectors/gmail/delete', { linkId: accountId, messageIds: [summary.messageId] })
+        const confirmed = array(structured(result).responses).some(item => record(item)?.message_id === summary.messageId && record(item)?.success === true)
+        if (record(result)?.isError || !confirmed) throw new Error('Gmail did not confirm moving the draft to Trash')
+        if (await this.#findGmailDraft(accountId, candidate => candidate.draftId === draftId)) throw new Error('The draft was moved to Trash but Gmail still lists it. Refresh before retrying.')
+      }
       this.#drafts.delete(`${accountId}:${draftId}`)
       if (this.#index && summary) this.#index.discardDraftMessages(accountId, [summary.messageId])
-      await this.#refreshIndexedDrafts()
+      void this.#refreshIndexedDrafts()
     } catch (error) {
       throw draftConnectorError(error)
     }
@@ -1014,6 +1027,7 @@ export class GmailConnectorProvider {
     })
     const value = await response.json() as unknown
     if (!response.ok) throw new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`)
+    if (record(value)?.isError || structured(value).error) throw new Error(`Gmail connector rejected the request: ${JSON.stringify(value)}`)
     return value
   }
 }

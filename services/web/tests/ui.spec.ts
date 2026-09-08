@@ -2021,3 +2021,84 @@ test('web toolbar uses native history and its close action returns to mail', asy
   await page.getByRole('button', { name: 'Return to Mail' }).click()
   expect(await page.evaluate(() => (window as unknown as { __actions: string[] }).__actions)).toEqual(['back', 'close'])
 })
+
+test('Reply opens before Gmail responds, keeps typing, and prevents duplicate creation', async ({ page }) => {
+  let pending: import('@playwright/test').Route | undefined
+  let creates = 0
+  const updates: Record<string, unknown>[] = []
+  const draft = { id: 'fast-reply', accountId: 'one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyMarkdown: '> Original', bodyHtml: '<p>Original</p>', bodyText: '> Original', attachments: [], state: 'draft' }
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', messages: [{ ...messages[0], accountId: 'one', source: 'gmail', body: { kind: 'plain-text', content: 'Original' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => { creates++; pending = route })
+  await page.route(/8411\/v1\/drafts\/fast-reply$/, route => { const body = route.request().postDataJSON(); updates.push(body); return route.fulfill({ json: { draft: { ...draft, bodyMarkdown: body.bodyMarkdown, bodyText: body.bodyMarkdown } } }) })
+  await page.goto('/'); await expect(page.locator('[data-body]')).toContainText('Original')
+  await page.locator('[data-reply]').click()
+  await expect(page.locator('[data-draft-body]')).toBeVisible()
+  await expect.poll(() => Boolean(pending)).toBe(true)
+  await page.locator('[data-draft-body]').fill('My immediate edit')
+  await page.locator('[data-reply]').click()
+  expect(creates).toBe(1)
+  await expect(page.locator('[data-draft-body]')).toHaveValue('My immediate edit')
+  await pending!.fulfill({ json: { draft } })
+  await expect(page.locator('[data-draft-body]')).toHaveValue('My immediate edit')
+  await expect.poll(() => updates.at(-1)?.bodyMarkdown).toBe('My immediate edit')
+  await expect(page.locator('[data-recovery-open]')).toBeHidden()
+})
+
+test('switching away from a pending reply keeps its recovery identity without replacing the new thread', async ({ page }) => {
+  let pending: import('@playwright/test').Route | undefined
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', messages: [{ ...messages[0], accountId: 'one', source: 'gmail', body: { kind: 'plain-text', content: 'Original' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => { pending = route })
+  await page.goto('/'); await expect(page.locator('[data-body]')).toContainText('Original')
+  await page.locator('[data-reply]').click(); await expect.poll(() => Boolean(pending)).toBe(true)
+  await page.locator('[data-draft-body]').fill('Keep my unsaved words')
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.locator('[data-subject]')).toHaveText('Services agreement')
+  await pending!.fulfill({ json: { draft: { id: 'late-reply', accountId: 'one', inReplyToMessageId: 'm1', to: [], cc: '', bcc: '', subject: 'Reply', bodyMarkdown: 'Original', bodyText: 'Original', bodyHtml: '', attachments: [], state: 'draft' } } })
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!)[0]?.gmailDraftId)).toBe('late-reply')
+  await expect(page.locator('[data-subject]')).toHaveText('Services agreement')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!)[0]?.bodyMarkdown)).toBe('Keep my unsaved words')
+})
+
+test('Word mail shows new paragraphs normally and folds only the actual quote', async ({ page }) => {
+  const html = '<div class="WordSection1"><p>Hi Steve,</p><p>I will ask the guys and get more feedback soon.</p><blockquote><div>Earlier email<blockquote>Even older</blockquote></div></blockquote><p>A new inline closing note.</p></div>'
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], source: 'demo', messages: [{ ...messages[0], source: 'demo', body: { kind: 'sanitized-html', content: html }, attachments: [] }] } } }))
+  await page.goto('/')
+  await expect(page.getByText('I will ask the guys and get more feedback soon.', { exact: true })).toBeVisible()
+  await expect(page.getByText('A new inline closing note.', { exact: true })).toBeVisible()
+  const history = page.locator('.dispatch-quoted-history')
+  await expect(history).toHaveCount(1)
+  await expect(history).not.toContainText('I will ask the guys')
+  await expect(page.getByText('Even older', { exact: true })).toBeHidden()
+  await history.locator('summary').click()
+  await expect(page.getByText('Even older', { exact: true })).toBeVisible()
+  const sourceText = await page.evaluate(async (html) => {
+    const path = '/src/email-renderer.ts'; const { emailPlainText } = await import(path)
+    return emailPlainText('sanitized-html', html)
+  }, html)
+  expect(sourceText).toContain('I will ask the guys')
+  expect(sourceText).toContain('Earlier email')
+  expect(sourceText).not.toContain('Quoted history')
+})
+
+test('an Outlook reply header does not hide new text in its shared wrapper', async ({ page }) => {
+  const html = '<div><p>Newest message</p><div id="divRplyFwdMsg">From: Earlier sender</div><p>Old message body</p></div>'
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], source: 'demo', messages: [{ ...messages[0], source: 'demo', body: { kind: 'sanitized-html', content: html }, attachments: [] }] } } }))
+  await page.goto('/')
+  await expect(page.getByText('Newest message', { exact: true })).toBeVisible()
+  await expect(page.getByText('Old message body', { exact: true })).toBeHidden()
+  await page.locator('.dispatch-quoted-history summary').click()
+  await expect(page.getByText('Old message body', { exact: true })).toBeVisible()
+})
+
+test('changing folders does not reuse another folder’s thread projection', async ({ page }) => {
+  const reads: string[] = []
+  await page.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'gmail', conversations: [{ ...conversations[0], accountId: 'one' }] } }))
+  await page.route(/8411\/v1\/conversations\/t1/, route => {
+    const mailbox = new URL(route.request().url()).searchParams.get('mailbox') ?? 'inbox'; reads.push(mailbox)
+    return route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', messages: [{ ...messages[0], accountId: 'one', source: 'gmail', body: { kind: 'plain-text', content: `${mailbox} body` }, attachments: [] }] } } })
+  })
+  await page.goto('/'); await expect(page.locator('[data-body]')).toContainText('inbox body')
+  await page.getByRole('button', { name: 'Trash', exact: true }).click()
+  await expect(page.locator('[data-body]')).toContainText('trash body')
+  expect(reads).toEqual(['inbox', 'trash'])
+})

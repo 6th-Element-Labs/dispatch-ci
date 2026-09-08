@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupConversations, projectConversation, replySourceMessage } from '../src/conversation.js'
+import { groupConversations, projectConversation, replySourceMessage, conversationForMailbox } from '../src/conversation.js'
 import type { MessageProjection, MessageSummary } from '../src/model.js'
 
 const base: MessageSummary = {
@@ -62,4 +62,14 @@ it('keeps the attachment indicator when only an earlier email has a file', () =>
   ], 'all')
   expect(summary).toMatchObject({ latestMessageId: 'new', hasAttachment: true })
   expect(groupConversations([base], 'all')[0]?.hasAttachment).toBe(false)
+})
+
+it('keeps discarded and unsent drafts out of the inbox reply source while retaining explicit folder views', () => {
+  const message = { ...base, labels: ['INBOX'], body: { kind: 'plain-text' as const, content: 'New received text' }, attachments: [], source: 'gmail' as const }
+  const raw = projectConversation([message, { ...message, id: 'draft', subject: 'Unsent draft', labels: ['DRAFT'], receivedAt: '2026-09-04T10:00:00Z' }, { ...message, id: 'discarded', subject: 'Discarded draft', labels: ['TRASH'], receivedAt: '2026-09-04T11:00:00Z' }, { ...message, id: 'spam', labels: ['SPAM'], receivedAt: '2026-09-04T12:00:00Z' }], 'gmail')
+  expect(conversationForMailbox(raw, 'inbox')).toMatchObject({ subject: 'Hello', latestMessageId: 'm1', messageCount: 1 })
+  expect(conversationForMailbox(raw, 'drafts').latestMessageId).toBe('draft')
+  expect(conversationForMailbox(raw, 'trash').latestMessageId).toBe('discarded')
+  expect(conversationForMailbox(raw, 'spam').latestMessageId).toBe('spam')
+  expect(() => conversationForMailbox(projectConversation([{ ...message, labels: ['TRASH'] }], 'gmail'), 'inbox')).toThrow('No messages')
 })

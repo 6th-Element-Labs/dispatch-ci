@@ -15,7 +15,7 @@ function sanitizeEmailNode(node: Element): void {
   if (!allowedImageSrc.test(src)) node.removeAttribute('src')
 }
 
-export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value: string, downloaded = false): HTMLElement {
+function renderRoot(kind: 'sanitized-html' | 'plain-text', value: string, downloaded: boolean): HTMLElement {
   const root = document.createElement('div')
   root.className = 'dispatch-thread-body'
   if (kind === 'plain-text') {
@@ -39,22 +39,32 @@ export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value:
   } finally {
     DOMPurify.removeHook('afterSanitizeAttributes')
   }
-  const quote = root.querySelector<HTMLElement>(quoteSelector)
-  if (!quote) return root
+  return root
+}
 
-  let boundary: HTMLElement = quote
-  while (boundary.parentElement && boundary.parentElement !== root) boundary = boundary.parentElement
-  const details = document.createElement('details')
-  details.className = 'dispatch-quoted-history'
-  const summary = document.createElement('summary')
-  summary.textContent = 'Quoted history'
-  details.append(summary)
-  let node: ChildNode | null = boundary
-  while (node) {
-    const next: ChildNode | null = node.nextSibling
-    details.append(node)
-    node = next
+/** Extract source text without disclosure labels or remote-image requests. */
+export function emailPlainText(kind: 'sanitized-html' | 'plain-text', value: string): string {
+  return renderRoot(kind, value, true).textContent?.trim() ?? ''
+}
+
+export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value: string, downloaded = false): HTMLElement {
+  const root = renderRoot(kind, value, downloaded)
+  for (const quote of root.querySelectorAll<HTMLElement>(quoteSelector)) {
+    if (quote.closest('details.dispatch-quoted-history')) continue
+    const details = document.createElement('details')
+    details.className = 'dispatch-quoted-history'
+    const summary = document.createElement('summary')
+    summary.textContent = 'Quoted history'
+    details.append(summary)
+    quote.before(details)
+    if (quote.matches('blockquote, .gmail_quote')) {
+      // Wrap the quote itself, never an ancestor shared with the new message.
+      details.append(quote)
+    } else {
+      // Outlook's reply header marks a boundary; its following siblings are history.
+      let node: ChildNode | null = quote
+      while (node) { const next: ChildNode | null = node.nextSibling; details.append(node); node = next }
+    }
   }
-  root.append(details)
   return root
 }

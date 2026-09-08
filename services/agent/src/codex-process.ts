@@ -40,7 +40,9 @@ export class CodexProcess {
   }
 
   async #launch(): Promise<void> {
-    const process = spawn(this.#command, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const env = { ...globalThis.process.env }
+    delete env.DISPATCH_PARENT_PID
+    const process = spawn(this.#command, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], env })
     const rpc = new JsonLineRpc(process.stdin)
     let terminated = false
     this.#process = process
@@ -120,6 +122,8 @@ export class CodexProcess {
   close(): void {
     this.#closed = true
     if (this.#restartTimer) clearTimeout(this.#restartTimer)
-    this.#process?.kill('SIGTERM')
+    const child = this.#process
+    child?.kill('SIGTERM')
+    if (child) setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }, 2000).unref()
   }
 }
