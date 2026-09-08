@@ -5,6 +5,10 @@ use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Runtime};
 
 pub const RESTART_SERVICES: &str = "restart-services";
+pub const RETURN_TO_MAIL: &str = "return-to-mail";
+pub const WEB_BACK: &str = "web-back";
+pub const WEB_FORWARD: &str = "web-forward";
+pub const WEB_RELOAD: &str = "web-reload";
 pub const OPEN_LOGS: &str = "open-logs";
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
@@ -33,6 +37,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .paste()
         .select_all()
         .build()?;
+    let back = MenuItemBuilder::with_id(WEB_BACK, "Back").accelerator("CmdOrCtrl+[").build(app)?;
+    let forward = MenuItemBuilder::with_id(WEB_FORWARD, "Forward").accelerator("CmdOrCtrl+]").build(app)?;
+    let reload = MenuItemBuilder::with_id(WEB_RELOAD, "Reload Web Page").accelerator("CmdOrCtrl+R").build(app)?;
+    let mail = MenuItemBuilder::with_id(RETURN_TO_MAIL, "Return to Mail").accelerator("CmdOrCtrl+Shift+M").build(app)?;
+    let navigation = SubmenuBuilder::new(app, "Navigate").item(&back).item(&forward).item(&reload).separator().item(&mail).build()?;
     let window = SubmenuBuilder::new(app, "Window")
         .minimize()
         .maximize()
@@ -40,5 +49,5 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .close_window()
         .build()?;
-    MenuBuilder::new(app).items(&[&application, &edit, &window]).build()
+    MenuBuilder::new(app).items(&[&application, &edit, &navigation, &window]).build()
 }

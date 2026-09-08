@@ -1,8 +1,10 @@
 import { defineConfig } from 'vite'
+import { fileURLToPath } from 'node:url'
 
 const localProxy = process.env.DISPATCH_LOCAL_PREVIEW === '1'
 
 export default defineConfig({
+  build: { rollupOptions: { input: { mail: fileURLToPath(new URL('./index.html', import.meta.url)), browser: fileURLToPath(new URL('./browser.html', import.meta.url)) } } },
   define: { __DISPATCH_LOCAL_PROXY__: JSON.stringify(localProxy) },
   plugins: [{
     name: 'dispatch-service-probes',

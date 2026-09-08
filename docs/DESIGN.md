@@ -46,3 +46,7 @@ DISPATCH_LOCAL_PREVIEW=1 npm --prefix services/web run dev -- --port 8414 --stri
 Open `http://127.0.0.1:8414`. The development-only Vite proxy uses the installed mail and agent services at ports 8411 and 8412. It starts no service, reads no private database and adds no credentials. Mail actions in this preview are real; use synthetic fixtures for automated sends and destructive-operation tests. This origin has its own presentation preferences and local editor recovery storage.
 
 Normal builds and automated tests keep the existing direct service addresses. Opening the local preview does not change the installed app.
+
+## Web pages
+
+Mail links must never replace the workbench. A separate web window has permanent Dispatch-owned navigation, a readable current host and an explicit Return to Mail action. The website cannot draw over or remove these controls. Standard window close and keyboard commands work. Returning preserves the selected email and any unsaved draft; it does not reload mail. Use a real child webview for websites, because many sites reject iframe embedding.

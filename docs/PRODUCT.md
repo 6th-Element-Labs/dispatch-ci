@@ -99,3 +99,9 @@ Opening a conversation caches its full message bodies. Offline controls offer Do
 ## Current workbench design
 
 `docs/DESIGN.md` defines the current presentation. Mailboxes use a compact icon-and-label rail by default, with expanded and hidden states remembered locally. Compact message rows are the default. Recovery appears beside the message list, and send history/download controls move to Mail activity. Sent details can be read inline beside a sent message. Utilities use nonmodal panels. Existing mail commands, Codex permissions, editor semantics and service ownership remain unchanged.
+
+## Web links
+
+Opening an HTTP or HTTPS link keeps the mail view, selected conversation, draft and Codex session loaded. Desktop links open in a separate web window. Dispatch owns a persistent toolbar with Back, Forward, Reload, Open in Browser and Return to Mail. The toolbar shows the current host. Closing the web window, pressing Command-W, or choosing Navigate → Return to Mail brings the existing mail window forward. Command-[ and Command-] use the page's actual history. Browser development opens links in a separate browser tab.
+
+The main native webview also rejects external navigation and new-window requests, so target=_blank and navigation outside the normal click handler cannot replace mail. Remote pages have no Dispatch capability. The toolbar is a separate local webview; it is never injected into website content. Mailto links open through the system handler.

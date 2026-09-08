@@ -9,6 +9,7 @@ mod context_menu;
 mod menu;
 mod preflight;
 mod sidecars;
+mod web_links;
 
 use std::path::PathBuf;
 
@@ -30,7 +31,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(context_menu::ContextMenuPending::default())
-        .invoke_handler(tauri::generate_handler![context_menu::popup_context_menu])
+        .manage(web_links::WebLinks::default())
+        .invoke_handler(tauri::generate_handler![context_menu::popup_context_menu, web_links::open_web_link, web_links::web_link_state, web_links::web_link_action])
         .setup(|app| {
             let handle = app.handle().clone();
             let resources = handle.path().resource_dir()?;
@@ -68,6 +70,7 @@ pub fn run() {
             }
             app.manage(supervisor);
 
+            web_links::create_mail_window(&handle)?;
             handle.set_menu(menu::build(&handle)?)?;
             handle.on_menu_event(|app, event| match event.id().as_ref() {
                 menu::RESTART_SERVICES => {
@@ -81,6 +84,12 @@ pub fn run() {
                     if let Err(error) = app.opener().open_path(logs.to_string_lossy(), None::<&str>) {
                         show_error(app, "Dispatch could not open its log folder", &error.to_string());
                     }
+                }
+                menu::RETURN_TO_MAIL => web_links::return_to_mail(app),
+                menu::WEB_BACK | menu::WEB_FORWARD | menu::WEB_RELOAD => {
+                    let action = match event.id().as_ref() { menu::WEB_BACK => "back", menu::WEB_FORWARD => "forward", _ => "reload" };
+                    let app = app.clone();
+                    tauri::async_runtime::spawn_blocking(move || { if let Err(error) = web_links::perform_action(&app, action) { show_error(&app, "Web navigation unavailable", &error); } });
                 }
                 id => context_menu::record_choice(app, id),
             });

@@ -86,3 +86,9 @@ Mail owns a companion SQLite store at `${DISPATCH_MAIL_DB}.local` (or beside the
 The same mail-owned store caches full conversation projections and download progress. The metadata index remains the mailbox list authority. Explicit downloaded reads bypass Gmail; transient read failures can return an explicitly dated downloaded copy. Missing, revoked, or unauthorized remote identities are not hidden behind cached success. Download jobs are interrupted on restart and can be started again without fetching unchanged complete copies.
 
 Web owns the unsaved editor outbox as presentation state: a synchronous localStorage record for text and recipient changes, plus IndexedDB bytes for added files. This is not a second writer of Gmail draft records. Each recovery entry remains until its matching editor revision is saved or discarded. Save completion adopts Gmail identity while preserving newer editor content and file changes.
+
+### Web navigation composition
+
+The shell creates the mail window with navigation and new-window guards. It keeps the configured local mail entry point loaded and routes HTTP(S) pages to a separate native window. That window contains a local `browser.html` toolbar, owned by web, and a separate remote child webview. Tauri's multiwebview API is enabled for this composition. Window resize events keep the remote view below the toolbar.
+
+Only `main` may request a new web link. Only the local `link-toolbar` webview may invoke browser state/action commands; `link-content` has no capabilities. Command handlers additionally validate caller label and local URL. The remote view rejects navigation into local application documents. macOS Back and Forward use WKWebView history through native calls. The shell's Navigate menu provides controls independently of either page. Closing the viewer focuses the existing mail window and does not recreate it or restart services.

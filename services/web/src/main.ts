@@ -1,3 +1,4 @@
+import { installWebLinks } from './web-links.js'
 import { DraftRecovery, type RecoveryDraft } from './draft-recovery.js'
 import { receiptView } from './receipt-view.js'
 import { resultExcerpt, highlightPassage } from './search-highlights.js'
@@ -211,6 +212,11 @@ const elements = {
   trash: app.querySelector<HTMLButtonElement>('[data-trash]')!,
   moveInbox: app.querySelector<HTMLButtonElement>('[data-move-inbox]')!,
 }
+
+installWebLinks(app, window as { isTauri?: unknown }, error => {
+  elements.mailError.hidden = false
+  elements.mailError.textContent = `Could not open link: ${error instanceof Error ? error.message : String(error)}`
+})
 
 function setAgentStatus(status: string, label = status): void {
   elements.agentStatus.dataset.status = status

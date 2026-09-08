@@ -1975,3 +1975,49 @@ test('sent details verify the exact account and message inline without opening a
   await expect(page.locator('[data-receipts-dialog]')).toBeHidden()
   expect(calls).toEqual([{ accountId: 'one', messageId: 'm1' }])
 })
+
+test('email web links open through native controls and never replace the mail view', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { isTauri: boolean; __links: unknown[]; __TAURI__: unknown }
+    w.isTauri = true; w.__links = []
+    w.__TAURI__ = { core: { invoke: async (command: string, args: unknown) => { w.__links.push({ command, args }); return null } } }
+  })
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], source: 'demo', messages: [{ ...messages[0], source: 'demo', body: { kind: 'sanitized-html', content: '<p><a href="https://example.com/page?source=mail">Read the website</a> <a target="_blank" href="https://example.com/other">Another page</a></p>' }, attachments: [] }] } } }))
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Read the website' }).click()
+  await page.getByRole('link', { name: 'Another page' }).click()
+  expect(await page.evaluate(() => (window as unknown as { __links: unknown[] }).__links)).toEqual([
+    { command: 'open_web_link', args: { url: 'https://example.com/page?source=mail' } },
+    { command: 'open_web_link', args: { url: 'https://example.com/other' } },
+  ])
+  expect(new URL(page.url()).pathname).toBe('/')
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+})
+
+test('a failed native link open keeps mail visible and reports the failure', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { isTauri: boolean; __TAURI__: unknown }; w.isTauri = true
+    w.__TAURI__ = { core: { invoke: async () => { throw new Error('Web window unavailable') } } }
+  })
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], source: 'demo', messages: [{ ...messages[0], source: 'demo', body: { kind: 'sanitized-html', content: '<a href="https://example.com">Website</a>' }, attachments: [] }] } } }))
+  await page.goto('/'); await page.getByRole('link', { name: 'Website', exact: true }).click()
+  await expect(page.locator('[data-mail-error]')).toContainText('Web window unavailable')
+  await expect(page.locator('[data-subject]')).toHaveText('Opua berth confirmation')
+})
+
+test('web toolbar uses native history and its close action returns to mail', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __actions: string[]; __TAURI__: unknown }; w.__actions = []
+    w.__TAURI__ = { core: { invoke: async (command: string, args?: { action: string }) => {
+      if (command === 'web_link_state') return { url: 'https://example.com/article', canGoBack: true, canGoForward: false }
+      if (command === 'web_link_action') { w.__actions.push(args!.action); return null }
+      throw new Error('Unexpected command')
+    } } }
+  })
+  await page.goto('/browser.html')
+  await expect(page.locator('[data-address]')).toHaveText('example.com')
+  await expect(page.getByRole('button', { name: 'Forward', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await page.getByRole('button', { name: 'Return to Mail' }).click()
+  expect(await page.evaluate(() => (window as unknown as { __actions: string[] }).__actions)).toEqual(['back', 'close'])
+})
