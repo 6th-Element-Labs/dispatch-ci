@@ -462,6 +462,16 @@ export function createMailServer(
         : provider.createDraft(messageId)
       return draft ? writeJson(response, 201, { draft }) : writeJson(response, 404, { error: 'message_not_found' })
     }
+    const attachMatch = /^\/v1\/drafts\/([^/]+)\/attachments$/.exec(url.pathname)
+    if (request.method === 'POST' && attachMatch?.[1]) {
+      const attachmentProvider = gmail as typeof gmail & { attachDraftFiles?: GmailConnectorProvider['attachDraftFiles'] }
+      if (!attachmentProvider.attachDraftFiles) return writeJson(response, 501, { error: 'draft_attachments_unavailable' })
+      try {
+        const input = await readJson(request) as { accountId?: unknown; paths?: unknown }
+        if (typeof input.accountId !== 'string' || !Array.isArray(input.paths) || !input.paths.length || !input.paths.every(path => typeof path === 'string')) return writeJson(response, 400, { error: 'account_and_file_paths_required' })
+        return writeJson(response, 200, await attachmentProvider.attachDraftFiles(input.accountId, decodeURIComponent(attachMatch[1]), input.paths))
+      } catch (error) { return writeJson(response, 502, { error: 'draft_attachment_failed', detail: String(error) }) }
+    }
     const draftMatch = /^\/v1\/drafts\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && draftMatch?.[1]) {
       const draftId = decodeURIComponent(draftMatch[1])

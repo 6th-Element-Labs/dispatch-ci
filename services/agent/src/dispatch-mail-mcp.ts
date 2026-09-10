@@ -75,6 +75,10 @@ export function createDispatchMailMcp(mailBase = `http://127.0.0.1:${process.env
     if (!receipt || delivery?.isError || receipt.error || typeof receipt.id !== 'string' || !receipt.id) throw new Error('Dispatch did not receive a confirmed Gmail message ID. Check Sent before retrying.')
     return { id: receipt.id, accountId, draftId, delivery, receipt: response.receipt }
   }))
+  server.registerTool('attach_files', {
+    description: 'Attach local files to an existing Gmail draft using absolute paths. Appends to existing attachments, preserves the formatted body and recipients, and verifies saved file bytes in Gmail. Returns verified filenames, sizes, and SHA-256 hashes. Does not send. If verification fails, inspect the saved draft before retrying.',
+    inputSchema: { ...identity, paths: z.array(z.string().min(1)).min(1) }, annotations: write,
+  }, ({ accountId, draftId, paths }) => result(() => request(`/v1/drafts/${encodeURIComponent(draftId)}/attachments`, 'POST', { accountId, paths })))
   return server
 }
 

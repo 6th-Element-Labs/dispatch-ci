@@ -41,6 +41,7 @@ export interface MessageProjection extends MessageSummary {
 }
 
 export interface DraftAttachment {
+  readonly contentId?: string
   readonly id?: string
   readonly name: string
   readonly mediaType: string

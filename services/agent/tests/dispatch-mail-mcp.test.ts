@@ -36,6 +36,12 @@ it('exposes software controls and changes an address without rewriting MIME or f
   expect(writes).toEqual([{ method: 'PATCH', url: '/v1/drafts/draft-A?account=account-A', body: { accountId: 'account-A', to: 'new@example.com' } }])
   expect(result.structuredContent).toMatchObject({ draft: { to: [{ address: 'new@example.com' }], cc: 'copy@example.com', bodyMarkdown: 'Original body', attachments: [{ name: 'original.pdf' }] } })
 })
+it('routes absolute attachment paths to the mail owner', async () => {
+  const { client, writes } = await setup()
+  const result = await client.callTool({ name: 'attach_files', arguments: { accountId: 'account-A', draftId: 'draft-A', paths: ['/tmp/proposal.pdf'] } })
+  expect(result.isError).not.toBe(true)
+  expect(writes).toEqual([{ method: 'POST', url: '/v1/drafts/draft-A/attachments', body: { accountId: 'account-A', paths: ['/tmp/proposal.pdf'] } }])
+})
 it('sends the saved draft through software and returns the actual receipt without rewriting', async () => {
   const { client, writes } = await setup()
   const result = await client.callTool({ name: 'send_draft', arguments: { accountId: 'account-A', draftId: 'draft-A' } })

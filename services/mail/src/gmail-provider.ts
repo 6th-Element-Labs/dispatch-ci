@@ -1,10 +1,11 @@
 import { LocalMailStore, type SendReceipt, type ReceiptDetails, type OfflineDownload } from './local-mail-store.js'
 import { groupConversations, projectConversation, conversationForMailbox } from './conversation.js'
 import { plainBodyFromMessage, projectDraft } from './draft.js'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 import { resolveAttachmentBytes } from './open-attachment.js'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, isAbsolute, basename, extname } from 'node:path'
 import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage, type IndexStreamFlag } from './gmail-index.js'
 import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
 
@@ -145,10 +146,10 @@ async function attachmentBytes(value: unknown): Promise<string> {
   }
 }
 
-function connectorAttachments(items: readonly DraftAttachment[]): Array<{ filename: string; mime_type: string; data: string }> {
+function connectorAttachments(items: readonly DraftAttachment[]): Array<{ filename: string; mime_type: string; data: string; contentId?: string }> {
   return items.map((item) => {
     if (!item.contentBase64) throw missingAttachmentBytes()
-    return { filename: item.name, mime_type: item.mediaType, data: item.contentBase64 }
+    return { filename: item.name, mime_type: item.mediaType, data: item.contentBase64, ...item.contentId ? { contentId: item.contentId } : {} }
   })
 }
 
@@ -159,6 +160,7 @@ function draftAttachmentsFromMessage(message: MessageProjection): readonly Draft
     mediaType: item.mediaType,
     sizeLabel: item.sizeLabel,
     sourceMessageId: message.id,
+    ...item.contentId ? { contentId: item.contentId } : {},
   }))
 }
 
@@ -818,6 +820,39 @@ export class GmailConnectorProvider {
     if (!accountId || !draftId || !Object.keys(fields).length) throw new Error('Draft identity and at least one header are required')
     await this.#post('/v1/connectors/gmail/drafts/update', { linkId: accountId, draftId, preserveContent: true, ...fields })
     return this.readGmailDraft(accountId, draftId)
+  }
+
+  async attachDraftFiles(accountId: string, draftId: string, paths: readonly string[]) {
+    if (!paths.length || paths.some(path => !isAbsolute(path))) throw new Error('Supply absolute file paths to attach.')
+    const media: Record<string, string> = { '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }
+    const additions: DraftAttachment[] = []
+    for (const path of paths) {
+      const info = await stat(path)
+      if (!info.isFile() || info.size > 25_000_000) throw new Error(`Not an attachable file (maximum 25 MB): ${basename(path)}`)
+      additions.push({ name: basename(path), mediaType: media[extname(path).toLowerCase()] ?? 'application/octet-stream', contentBase64: (await readFile(path)).toString('base64') })
+    }
+    const summary = await this.#findGmailDraft(accountId, item => item.draftId === draftId)
+    if (!summary) throw new Error('The draft no longer exists. Nothing was attached.')
+    const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: summary.messageId, format: 'full' })
+    const message = projectGmailMessage(raw, true, await this.#account(accountId))
+    const originalBody = body(record(structured(raw).payload) ?? {})
+    const existing = await this.#resolveDraftAttachments(accountId, draftAttachmentsFromMessage(message))
+    const attachments = [...existing, ...additions]
+    if (attachments.reduce((total, file) => total + Buffer.from(file.contentBase64!, 'base64').length, 0) > 25_000_000) throw new Error('Combined attachments exceed 25 MB. Nothing was attached.')
+    const draft = this.#projectGmailDraft(summary, message, '', accountId)
+    await this.updateGmailDraft({ ...draft, attachments, bodyHtml: originalBody.kind === 'sanitized-html' ? originalBody.content : draft.bodyHtml })
+    const savedSummary = await this.#findGmailDraft(accountId, item => item.draftId === draftId)
+    if (!savedSummary) throw new Error('Attachment update returned, but the saved draft could not be verified. Check Drafts before retrying.')
+    const savedMessage = await this.readMessage(accountId, savedSummary.messageId)
+    const savedFiles = await this.#resolveDraftAttachments(accountId, draftAttachmentsFromMessage(savedMessage))
+    const hash = (file: DraftAttachment) => createHash('sha256').update(Buffer.from(file.contentBase64!, 'base64')).digest('hex')
+    const remaining = [...savedFiles]
+    for (const file of attachments) {
+      const match = remaining.findIndex(saved => saved.name === file.name && hash(saved) === hash(file))
+      if (match < 0) throw new Error(`The saved attachment bytes could not be verified for ${file.name}. Check Drafts before retrying.`)
+      remaining.splice(match, 1)
+    }
+    return { draft: { ...this.#projectGmailDraft(savedSummary, savedMessage, '', accountId), attachments: savedFiles.map(({ contentBase64: _bytes, ...file }) => file) }, verifiedFiles: additions.map(file => ({ name: file.name, bytes: Buffer.from(file.contentBase64!, 'base64').length, sha256: hash(file) })) }
   }
 
   async readGmailDraft(accountId: string, draftId: string): Promise<DraftProjection> {

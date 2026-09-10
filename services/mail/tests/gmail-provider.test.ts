@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createServer } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -40,6 +40,38 @@ const gmailDraftMessage = {
 }
 
 describe('GmailConnectorProvider', () => {
+  it.each([false, true])('appends local file bytes and verifies the saved provider copy (corrupt=%s)', async corrupt => {
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-local-attach-')); directories.push(directory)
+    const path = join(directory, 'new.txt'); writeFileSync(path, 'new file bytes')
+    let files = [{ filename: 'arrival.pdf', mime_type: 'application/pdf', data: Buffer.from('old bytes').toString('base64') }]
+    let written: Record<string, unknown> | undefined
+    const server = createServer(async (req, res) => {
+      res.setHeader('content-type', 'application/json')
+      const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
+      const input = JSON.parse(Buffer.concat(chunks).toString() || '{}')
+      if (req.url === '/v1/connectors/gmail') return res.end(JSON.stringify({ accounts: [{ linkId: 'one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }] }))
+      if (req.url === '/v1/connectors/gmail/drafts/list') return res.end(JSON.stringify({ structuredContent: { drafts: [{ draft_id: 'draft', message_id: 'gmail-message-1', thread_id: 'gmail-thread-1', subject: 'Keep', to: ['work@example.com'] }] } }))
+      if (req.url === '/v1/connectors/gmail/read') return res.end(JSON.stringify({ structuredContent: { ...gmailMessage.structuredContent, payload: { ...gmailMessage.structuredContent.payload, parts: [
+        { mime_type: 'text/html', filename: '', body: { content: '<p><strong>Keep formatting</strong></p>' } },
+        ...files.map((file, index) => ({ mime_type: file.mime_type, filename: file.filename, body: { attachment_id: String(index), size: 20 } })),
+      ] } } }))
+      if (req.url === '/v1/connectors/gmail/attachment') return res.end(JSON.stringify({ structuredContent: { data: corrupt && written && input.attachmentId === '1' ? Buffer.from('wrong bytes').toString('base64') : files[Number(input.attachmentId)]?.data } }))
+      if (req.url === '/v1/connectors/gmail/drafts/update') { written = input; files = input.attachments; return res.end(JSON.stringify({ structuredContent: { draft_id: 'draft' } })) }
+      res.statusCode = 404; res.end('{}')
+    })
+    servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+    if (corrupt) await expect(provider.attachDraftFiles('one', 'draft', [path])).rejects.toThrow('saved attachment bytes could not be verified')
+    else {
+      const result = await provider.attachDraftFiles('one', 'draft', [path])
+      expect(result.verifiedFiles).toEqual([{ name: 'new.txt', bytes: 14, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }])
+      expect(result.draft.attachments.map(file => file.name)).toEqual(['arrival.pdf', 'new.txt'])
+    }
+    expect(written?.bodyHtml).toBe('<p><strong>Keep formatting</strong></p>')
+    expect(files.map(file => file.filename)).toEqual(['arrival.pdf', 'new.txt'])
+    provider.stopBackgroundSync()
+  })
+
   it('projects Gmail headers, MIME, attachments, and stable identity', () => {
     expect(projectGmailMessage(gmailMessage, true)).toMatchObject({
       id: 'gmail-message-1', threadId: 'gmail-thread-1', subject: 'Berth confirmation', unread: true,

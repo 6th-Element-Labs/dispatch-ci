@@ -286,6 +286,48 @@ let threadId: string | undefined
 let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
 let bindingSequence = 0
 const pendingCodexPrompts = new Map<string, string>()
+type TaskStatus = { threadId: string; status: string; turnId?: string }
+const taskStatuses = new Map<string, TaskStatus>()
+const restoredMailEffects = new Map<string, string>()
+const pendingMailEffects = new Map<string, { effect: CodexMailEffect; token: string }>()
+let activityEvents: EventSource | undefined
+const backgroundTasks = document.createElement('div')
+backgroundTasks.dataset.backgroundTasks = ''
+elements.prompt.closest('.dispatch-prompt')!.before(backgroundTasks)
+
+function renderBackgroundTasks(): void {
+  const bindings = readBindingCache()
+  backgroundTasks.replaceChildren()
+  for (const task of taskStatuses.values()) {
+    if (task.threadId === threadId || !['Working', 'Needs attention', 'Failed'].includes(task.status)) continue
+    const entry = Object.entries(bindings).find(([, id]) => id === task.threadId)
+    if (!entry) continue
+    const summary = conversations.find(c => bindingCacheKey(conversationBindingKey({ ...c, source: c.accountId ? 'gmail' : 'demo' })) === entry[0])
+    if (!summary && entry[0] !== 'unbound') continue
+    const button = document.createElement('button')
+    button.className = 'btn btn-sm btn-ghost-secondary w-100 text-truncate'
+    button.textContent = `${task.status} · ${summary?.subject ?? 'New email / general chat'}`
+    button.title = button.textContent
+    button.onclick = () => { if (summary) void selectConversation(summary.id); else openCompose() }
+    backgroundTasks.append(button)
+  }
+  backgroundTasks.hidden = !backgroundTasks.childElementCount
+}
+
+function connectTaskActivity(): void {
+  if (activityEvents && activityEvents.readyState !== EventSource.CLOSED) return
+  activityEvents = api.activity()
+  activityEvents.onmessage = event => {
+    for (const task of JSON.parse(event.data) as TaskStatus[]) taskStatuses.set(task.threadId, task)
+    const current = threadId && taskStatuses.get(threadId)
+    if (current && codexContextReady) {
+      activeTurnId = current.turnId
+      elements.stop.hidden = !activeTurnId
+      setAgentStatus(current.status === 'Complete' ? 'Connected' : current.status)
+    }
+    renderBackgroundTasks()
+  }
+}
 
 function bindingCacheKey(key: CodexPaneKey): string {
   return key.kind === 'unbound' ? 'unbound' : `conversation:${key.accountId}:${key.gmailThreadId}`
@@ -307,6 +349,7 @@ function selectCodexContext(key: CodexPaneKey): void {
   activeTurnId = undefined
   elements.stop.hidden = true
   setAgentStatus('Connecting')
+  renderBackgroundTasks()
 }
 
 function readBindingCache(): Record<string, string> {
@@ -2109,7 +2152,10 @@ function handleAgentEvent(message: AgentEvent): void {
       activeAgentText = ''
     }
     const effect = codexMailEffect(item)
-    if (effect) void applyCodexMailEffect(effect)
+    if (effect) {
+      if (threadId) restoredMailEffects.set(threadId, JSON.stringify(item))
+      void applyCodexMailEffect(effect)
+    }
   }
   if (message.method === 'error') {
     const error = params?.error as Record<string, unknown> | undefined
@@ -2201,7 +2247,7 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   if (replaced) console.info(detail ? `Codex thread replaced · ${detail}` : 'Codex thread replaced')
   if (!created) {
     try {
-      const history = await api.readThread(nextThreadId) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } }
+      const history = await api.readThread(nextThreadId) as { dispatchActivity?: TaskStatus & { requests: AgentEvent[] }; thread?: { turns?: Array<{ id?: string; status?: string; items?: Array<Record<string, unknown>> }> } }
       if (sequence !== paneSequence) return
       const restored = history.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? []
       for (const item of restored) {
@@ -2209,6 +2255,21 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
         if (text && item.type === 'userMessage') addAgentMessage('user', visibleUserPrompt(text))
         if (text && item.type === 'agentMessage') addAgentMessage('agent', text)
       }
+      const running = history.thread?.turns?.findLast(turn => turn.status === 'inProgress')
+      const state = history.dispatchActivity ?? { threadId: nextThreadId, status: running ? 'Working' : 'Connected', turnId: running?.id, requests: [] }
+      taskStatuses.set(nextThreadId, state)
+      activeTurnId = state.turnId
+      elements.stop.hidden = !activeTurnId
+      const lastItem = restored.at(-1)
+      if (activeTurnId && lastItem?.type === 'agentMessage') {
+        activeAgentMessage = [...elements.stream.querySelectorAll<HTMLElement>('.dispatch-agent-agent')].at(-1)
+        activeAgentText = agentHistoryText(lastItem)
+      }
+      requestIds.clear()
+      for (const request of state.requests) renderServerRequest(request)
+      const latest = [...restored].reverse().find(item => { const effect = codexMailEffect(item); return effect?.kind === 'draft' || effect?.kind === 'sent' })
+      const effect = latest && codexMailEffect(latest)
+      if (effect?.kind === 'draft' && restoredMailEffects.get(nextThreadId) !== JSON.stringify(latest)) pendingMailEffects.set(nextThreadId, { effect, token: JSON.stringify(latest) })
     } catch (error) {
       if (sequence !== paneSequence) return
       addAgentMessage('error', `Could not restore Codex history: ${error instanceof Error ? error.message : String(error)}`)
@@ -2216,7 +2277,10 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   }
   if (sequence !== paneSequence) return
   agentEvents = api.events(nextThreadId)
-  agentEvents.onopen = () => { if (sequence === paneSequence && nextThreadId === threadId) setAgentStatus('Connected') }
+  agentEvents.onopen = () => { if (sequence === paneSequence && nextThreadId === threadId) {
+    const state = taskStatuses.get(nextThreadId)
+    setAgentStatus(state?.status === 'Complete' ? 'Connected' : state?.status ?? 'Connected')
+  } }
   agentEvents.onmessage = (event) => {
     if (sequence === paneSequence && nextThreadId === threadId) handleAgentEvent(JSON.parse(event.data) as AgentEvent)
   }
@@ -2244,6 +2308,13 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
     const context = selected ?? (mailbox === 'drafts' ? conversations.find((item) => item.id === selectedConversationId) : undefined)
     const currentKey = context ? conversationBindingKey(context) : !selectedConversationId ? { kind: 'unbound' } : undefined
     if (currentKey && JSON.stringify(key) === JSON.stringify(currentKey) && (options.sequence === undefined || options.sequence === selectionSequence)) codexContextReady = true
+    const restore = pendingMailEffects.get(binding.threadId)
+    if (codexContextReady && restore) {
+      pendingMailEffects.delete(binding.threadId)
+      restoredMailEffects.set(binding.threadId, restore.token)
+      void applyCodexMailEffect(restore.effect)
+    }
+    renderBackgroundTasks()
     return true
   } catch (error) {
     if (!current()) return false
@@ -2268,6 +2339,7 @@ async function connectAgent(): Promise<void> {
     return
   }
   try {
+    connectTaskActivity()
     apps = await api.listApps()
     const gmail = gmailAppId(apps)
     setConnectorStatus(gmail ? 'Gmail available' : 'No Gmail connector', Boolean(gmail))

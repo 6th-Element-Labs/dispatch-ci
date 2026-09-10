@@ -37,6 +37,7 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('http://127.0.0.1:8412/v1/activity', route => route.fulfill({ contentType: 'text/event-stream', body: 'data: []\n\n' }))
   await page.route(/8411\/v1\/send-receipts/, route => route.fulfill({ json: { receipts: [] } }))
   await page.route(/8411\/v1\/offline/, route => route.fulfill({ json: { offline: { conversations: 0, bytes: 0 } } }))
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
@@ -2145,6 +2146,48 @@ test('failed email binding never shows general or previous chat during reconnect
   await expect(page.getByText('History for only-A')).toBeVisible()
 })
 
+
+test('restores an ongoing compose turn after working on another email', async ({ page }) => {
+  await stubAgent(page, { unbound: { threadId: 'compose-task' } })
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/compose-task', route => route.fulfill({ json: {
+    thread: { turns: [{ id: 'running-turn', status: 'inProgress', items: [{ type: 'agentMessage', text: 'Still preparing the draft' }] }] },
+    dispatchActivity: { threadId: 'compose-task', status: 'Working', turnId: 'running-turn', requests: [] },
+  } }))
+  let interruptions = 0
+  let steering: unknown
+  await page.route(/8412\/v1\/threads\/.+\/interrupt/, route => { interruptions++; return route.fulfill({ json: {} }) })
+  await page.route(/8412\/v1\/threads\/compose-task\/steer/, route => { steering = route.request().postDataJSON(); return route.fulfill({ json: {} }) })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await expect(page.getByText('Still preparing the draft')).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.getByText('Still preparing the draft')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Working · New email / general chat', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
+  await page.getByLabel('Ask Codex').fill('Use the shorter version')
+  await page.locator('[data-send]').click()
+  await expect.poll(() => steering).toEqual({ expectedTurnId: 'running-turn', text: 'Use the shorter version' })
+  expect(interruptions).toBe(0)
+})
+
+test('opens a draft completed in the background when returning to compose', async ({ page }) => {
+  await stubAgent(page, { unbound: { threadId: 'compose-task' } })
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  let completed = false
+  await page.route('http://127.0.0.1:8412/v1/threads/compose-task', route => route.fulfill({ json: {
+    thread: { turns: [{ id: 'turn', status: completed ? 'completed' : 'inProgress', items: completed ? [{ type: 'mcpToolCall', status: 'completed', tool: 'gmail.create_draft', arguments: { link_id: 'one' }, result: { structuredContent: { draft_id: 'background-draft' } } }] : [] }] },
+  } }))
+  await page.route(/8411\/v1\/drafts\/background-draft/, route => route.fulfill({ json: { draft: { id: 'background-draft', accountId: 'one', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: 'Background result', bodyMarkdown: 'Finished while away', bodyText: 'Finished while away', bodyHtml: '<p>Finished while away</p>', attachments: [], state: 'draft' } } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  completed = true
+  await page.getByRole('button', { name: 'Working · New email / general chat', exact: true }).click()
+  await expect(page.getByLabel('Draft subject')).toHaveValue('Background result')
+  await expect(page.getByLabel('Draft body')).toHaveValue('Finished while away')
+})
 
 test('late history from a previous selection cannot replace the current chat', async ({ page }) => {
   await stubAgent(page, { 'conversation:demo:t1': { threadId: 'slow-A' }, 'conversation:demo:t2': { threadId: 'fast-B' } })

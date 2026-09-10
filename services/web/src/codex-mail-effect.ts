@@ -25,7 +25,7 @@ export function codexMailEffect(item: unknown): CodexMailEffect | undefined {
     if (!value || value.error) return undefined
     if (call.tool === 'show_search_results' && record(value.searchResults) && Array.isArray(record(value.searchResults)?.results)) return { kind: 'search', search: value.searchResults as unknown as SearchResults }
     const draft = record(value.draft)
-    if (['create_draft', 'update_draft'].includes(text(call.tool)) && text(draft?.id) && text(draft?.accountId)) {
+    if (['create_draft', 'update_draft', 'attach_files'].includes(text(call.tool)) && text(draft?.id) && text(draft?.accountId)) {
       return { kind: 'draft', draftId: text(draft?.id), accountId: text(draft?.accountId) }
     }
     if (call.tool === 'send_draft' && text(value.id) && text(value.accountId) && text(value.draftId)) {
