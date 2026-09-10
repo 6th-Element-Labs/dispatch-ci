@@ -759,16 +759,18 @@ export class GmailConnectorProvider {
   }
 
   async mutateConversation(accountId: string, threadId: string, messageIds: readonly string[], action: GmailConversationAction): Promise<void> {
-    if (!accountId || !threadId || messageIds.length === 0) throw new Error('Gmail conversation action requires account, thread, and message identities')
+    if (!accountId || !threadId) throw new Error('Gmail conversation action requires account and thread identity')
+    const effectiveMessageIds = messageIds.length ? messageIds : this.#index?.threadMessageIds(accountId, threadId) ?? []
+    if (action !== 'archive' && effectiveMessageIds.length === 0) throw new Error('Gmail conversation action found no indexed messages for this thread. Refresh Gmail and retry.')
     if (action === 'archive') await this.#post('/v1/connectors/gmail/archive', { linkId: accountId, threadIds: [threadId] })
-    else if (action === 'trash') await this.#post('/v1/connectors/gmail/delete', { linkId: accountId, messageIds })
+    else if (action === 'trash') await this.#post('/v1/connectors/gmail/delete', { linkId: accountId, messageIds: effectiveMessageIds })
     else await this.#post('/v1/connectors/gmail/modify', {
       linkId: accountId,
-      messageIds,
+      messageIds: effectiveMessageIds,
       addLabels: action === 'spam' ? ['SPAM'] : ['INBOX'],
       removeLabels: action === 'spam' ? ['INBOX'] : ['SPAM', 'TRASH'],
     })
-    if (this.#index) this.#index.applyConversationAction(accountId, messageIds, action)
+    if (this.#index && effectiveMessageIds.length) this.#index.applyConversationAction(accountId, effectiveMessageIds, action)
     this.#scheduleSync(1_000)
   }
 

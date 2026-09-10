@@ -92,7 +92,7 @@ Results stay in the message list during background sync. Each row shows a highli
 
 Every editor change has a local recovery copy, including To, Cc, Bcc, account, subject, body, and attachment identities. New file bytes are stored before the attachment appears in the editor. Recovery lists unsaved copies after restart and restores them for review. A matching successful Gmail save removes its recovery copy; a failed or superseded save keeps it. Storage failures remain visible. Recovery does not send mail.
 
-Send history is available from Mail activity, and sent messages offer an inline Sent details disclosure. Dispatch persists send intent before the Gmail request and records acknowledgement separately from verification. A verified receipt shows the actual To, Cc, Bcc, subject, files, account, and Gmail message ID read from Sent. Differences from the saved draft are visible. A timeout after sending has an unknown outcome; Dispatch does not automatically resend. Codex Gmail sends also produce receipts from completed tool events. An accepted send is not a delivery or read confirmation from the recipient.
+Sent Items is the normal send confirmation. Dispatch keeps durable internal send intent and acknowledgement for recovery, but has no receipt interface. A timeout after sending has an uncertain outcome; show that failure clearly and never automatically resend.
 
 Opening a conversation caches its full message bodies. Offline controls offer Download mailbox for the selected folder and account scope, with progress, cancellation, and partial failures. Use downloaded mail reads only saved bodies and labels their cache time. Undownloaded threads show a clear error. Remote images are blocked in this mode; files are available only if already cached. Bulk download covers message bodies, not all attachment bytes. Users can compose locally while offline, then review and save or send when online. There is no automatic offline send queue.
 
@@ -117,3 +117,8 @@ When the installed connector does not provide draft deletion, Discard resolves t
 Quoted-history folding wraps the actual blockquote/Gmail quote, not its ancestors. New text before or after a quote remains visible, even inside Outlook/Word layout wrappers. Outlook reply-header markers fold only their following siblings in the same container. Reply and forward text is extracted from sanitized source content without adding the UI's disclosure labels.
 
 The thread reader applies the selected mailbox context to raw Gmail thread results. Inbox, Sent and Archive reading exclude unsent drafts, Trash and Spam messages. Explicit Drafts, Trash and Spam views show the matching messages. Subject, latest message, reply source and attachment count are recomputed from that visible set. Downloaded bodies and in-memory views retain the same folder boundary.
+
+
+## Sending feedback
+
+Sent Items is the normal confirmation that an email was sent. Do not show a receipt window, receipt controls, or automatic success messages in Codex chat. Keep send failures and uncertain outcomes visible. Internal durable send records support recovery and duplicate prevention; they are not a separate user workflow.

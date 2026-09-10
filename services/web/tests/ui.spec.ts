@@ -162,6 +162,8 @@ test('renders a connector-selected Gmail account without trusting list markup', 
 test('navigates native Gmail folders and routes accepted message actions', async ({ page }) => {
   let requestedMailbox = ''
   let action: unknown
+  let releaseAction!: () => void
+  const actionGate = new Promise<void>((resolve) => { releaseAction = resolve })
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
@@ -173,6 +175,7 @@ test('navigates native Gmail folders and routes accepted message actions', async
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
   await page.route('http://127.0.0.1:8411/v1/conversations/t1/actions', async (route) => {
     action = await route.request().postDataJSON()
+    await actionGate
     await route.fulfill({ status: 202, json: { accepted: true } })
   })
   await page.goto('/')
@@ -181,7 +184,9 @@ test('navigates native Gmail folders and routes accepted message actions', async
   await expect.poll(() => requestedMailbox).toBe('sent')
   await page.getByRole('button', { name: 'Inbox', exact: true }).click()
   await page.locator('[data-archive]').click()
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveCount(0)
   await expect.poll(() => action).toEqual({ accountId: 'link-one', messageIds: ['m1'], action: 'archive' })
+  releaseAction()
 })
 
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {
@@ -755,7 +760,7 @@ test('edits, saves, and sends a Gmail draft from the middle panel', async ({ pag
   expect(sendCount).toBe(0)
   await page.getByRole('button', { name: 'Send now' }).click()
   await expect.poll(() => sendCount).toBe(1)
-  await expect(page.locator('[data-receipts-dialog]')).toContainText('Gmail accepted — details pending')
+  await expect(page.locator('[data-receipts-dialog]')).toBeHidden()
 })
 
 test('allows one, two, or three adjustable panels while keeping one visible', async ({ page }) => {
@@ -1890,7 +1895,7 @@ test('keeps a newer recovery copy while an older Gmail save is pending', async (
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!)[0].bodyMarkdown)).toBe('Newer text')
 })
 
-test('shows actual send details and locks edits until Gmail responds', async ({ page }) => {
+test('keeps sending quiet and locks edits until Gmail responds', async ({ page }) => {
   const draft = { id: 'd-receipt', accountId: 'one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Delivery', bodyMarkdown: 'Hello', bodyText: 'Hello', bodyHtml: '<p>Hello</p>', attachments: [], state: 'draft' }
   let pending: import('@playwright/test').Route | undefined
   await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft } }))
@@ -1900,9 +1905,7 @@ test('shows actual send details and locks edits until Gmail responds', async ({ 
   await expect(page.locator('[data-draft-body]')).toBeDisabled()
   await expect.poll(() => Boolean(pending)).toBe(true)
   await pending!.fulfill({ json: { receipt: { id: 'receipt-proof', accountId: 'one', accountLabel: 'work@example.com', draftId: draft.id, messageId: 'provider-id', status: 'verified', requestedAt: '2026-09-08T01:00:00Z', detailsSource: 'sent-message', details: { to: ['ana@example.com'], cc: ['cc@example.com'], bcc: ['audit@example.com'], subject: 'Delivery', attachments: [{ name: 'contract.pdf', mediaType: 'application/pdf', sizeLabel: '10 KB' }] } } } })
-  const dialog = page.locator('[data-receipts-dialog]')
-  await expect(dialog).toBeVisible(); await expect(dialog).toContainText('Sent — details verified')
-  for (const text of ['ana@example.com', 'cc@example.com', 'audit@example.com', 'contract.pdf', 'provider-id', 'Verified from Gmail Sent']) await expect(dialog).toContainText(text)
+  await expect(page.locator('[data-receipts-dialog]')).toHaveCount(0)
   await expect(page.locator('[data-draft]')).toBeHidden()
 })
 
@@ -1951,29 +1954,22 @@ test('trial sidebar and density persist while utilities stay out of mailbox navi
   await expect(page.locator('.dispatch-rail')).toHaveAttribute('data-style', 'compact')
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900)
   await page.locator('[data-activity-toggle]').click()
-  await page.locator('[data-receipts-open]').click()
-  await expect(page.locator('[data-receipts-dialog]')).toBeVisible()
-  expect(await page.locator('[data-receipts-dialog]').evaluate(node => node.matches(':modal'))).toBe(false)
+  await page.locator('[data-offline-open]').click()
+  await expect(page.locator('[data-offline-dialog]')).toBeVisible()
+  expect(await page.locator('[data-offline-dialog]').evaluate(node => node.matches(':modal'))).toBe(false)
   await page.keyboard.press('Escape')
-  await expect(page.locator('[data-receipts-dialog]')).toBeHidden()
+  await expect(page.locator('[data-offline-dialog]')).toBeHidden()
   await expect(page.locator('[data-activity-toggle]')).toBeFocused()
 })
 
-test('sent details verify the exact account and message inline without opening a dialog', async ({ page }) => {
-  const calls: unknown[] = []
-  const receipt = { id: 'r1', accountId: 'one', accountLabel: 'work@example.com', messageId: 'm1', status: 'verified', requestedAt: '2026-09-08T00:00:00Z', detailsSource: 'sent-message', details: { to: ['ana@example.com'], cc: [], bcc: [], subject: 'Receipt evidence', attachments: [{ name: 'proof.pdf', mediaType: 'application/pdf' }] } }
-  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', messages: [{ ...messages[0], accountId: 'one', labels: ['SENT'], source: 'gmail', body: { kind: 'plain-text', content: 'Sent content' }, attachments: [] }] } } }))
-  await page.route(/8411\/v1\/send-receipts$/, route => {
-    if (route.request().method() === 'POST') calls.push(route.request().postDataJSON())
-    return route.fulfill({ json: route.request().method() === 'POST' ? { receipt } : { receipts: [] } })
-  })
-  await page.route(/8411\/v1\/send-receipts\/r1$/, route => route.fulfill({ json: { receipt } }))
+test('sent mail has no receipt controls or background receipt requests', async ({ page }) => {
+  let receiptRequests = 0
+  await page.route(/8411\/v1\/send-receipts/, route => { receiptRequests++; return route.fulfill({ json: { receipts: [] } }) })
+  await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', messages: [{ ...messages[0], accountId: 'one', labels: ['SENT'], body: { kind: 'plain-text', content: 'Sent message content' }, attachments: [] }] } } }))
   await page.goto('/')
-  await page.locator('.dispatch-message-receipt summary').click()
-  await expect(page.locator('.dispatch-message-receipt')).toContainText('proof.pdf')
-  await expect(page.locator('.dispatch-message-receipt')).toContainText('ana@example.com')
-  await expect(page.locator('[data-receipts-dialog]')).toBeHidden()
-  expect(calls).toEqual([{ accountId: 'one', messageId: 'm1' }])
+  await expect(page.locator('[data-body]')).toContainText('Sent message content')
+  await expect(page.locator('[data-receipts-open], [data-receipts-dialog], .dispatch-message-receipt')).toHaveCount(0)
+  expect(receiptRequests).toBe(0)
 })
 
 test('email web links open through native controls and never replace the mail view', async ({ page }) => {

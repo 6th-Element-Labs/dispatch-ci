@@ -1,6 +1,5 @@
 import { installWebLinks } from './web-links.js'
 import { DraftRecovery, type RecoveryDraft } from './draft-recovery.js'
-import { receiptView } from './receipt-view.js'
 import { resultExcerpt, highlightPassage } from './search-highlights.js'
 import { renderThreadAttachments } from './thread-attachments'
 import '@tabler/core/dist/css/tabler.min.css'
@@ -11,7 +10,7 @@ import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent, emailPlainText } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
-import type { SendReceipt, OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import type { OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
@@ -70,7 +69,7 @@ app.innerHTML = `
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
         <footer class="dispatch-mail-activity"><div class="dispatch-activity-status">        <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
-        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button></div><button class="btn btn-sm" data-activity-toggle aria-expanded="false" aria-controls="dispatch-activity"><i class="ti ti-activity" aria-hidden="true"></i><span>Mail activity</span></button><div class="dispatch-activity-popover" id="dispatch-activity" hidden><strong>Mail activity</strong><div class="dispatch-activity-options"><button type="button" class="nav-link" data-receipts-open><i class="ti ti-receipt" aria-hidden="true"></i><span>Receipts</span></button><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button></div><p class="small text-secondary mb-0">Send history and downloaded mail</p></div></footer>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button></div><button class="btn btn-sm" data-activity-toggle aria-expanded="false" aria-controls="dispatch-activity"><i class="ti ti-activity" aria-hidden="true"></i><span>Mail activity</span></button><div class="dispatch-activity-popover" id="dispatch-activity" hidden><strong>Mail activity</strong><div class="dispatch-activity-options"><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button></div><p class="small text-secondary mb-0">Downloaded mail</p></div></footer>
       </aside>
       <div class="dispatch-divider" data-divider="messages" role="separator" tabindex="0" aria-label="Resize messages panel" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="640"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <main class="card rounded-0 border-0 dispatch-reader" aria-label="Selected email">
@@ -139,7 +138,7 @@ app.innerHTML = `
 app.insertAdjacentHTML('beforeend', `
   <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
   <dialog class="dispatch-utility-dialog" data-recovery-dialog aria-label="Local draft recovery"><div class="d-flex justify-content-between"><h2>Local draft recovery</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>These local copies are not saved to Gmail. Review a copy before saving it.</p><div data-recovery-list></div></dialog>
-  <dialog class="dispatch-utility-dialog" data-receipts-dialog aria-label="Send receipts"><div class="d-flex justify-content-between"><h2>Send receipts</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><div data-receipts-list></div></dialog>
+
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
 `)
 
@@ -263,7 +262,6 @@ let draftDiscarding = false
 const recovery = new DraftRecovery()
 let recoveryKey: string | undefined
 let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true' || navigator.onLine === false
-let receipts: SendReceipt[] = []
 let offlineStatus: OfflineStatus | undefined
 
 let conversations: ConversationSummary[] = []
@@ -275,6 +273,7 @@ let selectedAccountId: string | undefined
 let mailState: MailStateFilter = 'all'
 let mailbox: GmailMailbox = 'inbox'
 let selected: ConversationProjection | undefined
+let selectedSummary: ConversationSummary | undefined
 let selectedConversationId: string | undefined
 let selectionSequence = 0
 const markReadDwell = createMarkReadDwell()
@@ -715,26 +714,6 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
     })
     return article
   }
-  if (message.accountId && message.labels?.includes('SENT')) {
-    const receiptDisclosure = document.createElement('details')
-    receiptDisclosure.className = 'dispatch-message-receipt'
-    const summary = document.createElement('summary'); summary.textContent = 'Sent details'
-    const content = document.createElement('div')
-    receiptDisclosure.append(summary, content)
-    let loaded = false
-    receiptDisclosure.addEventListener('toggle', () => {
-      if (!receiptDisclosure.open || loaded) return
-      loaded = true; content.textContent = 'Loading sent details…'
-      const show = (receipt: SendReceipt) => content.replaceChildren(receiptView(receipt, () => {
-        void api.verifyReceipt(receipt.id).then(show).catch(error => { content.textContent = String(error); loaded = false })
-      }))
-      const known = receipts.find(item => item.accountId === message.accountId && item.messageId === message.id)
-      if (known) show(known)
-      else if (offlineMode) { content.textContent = 'No saved receipt for this message. Go online to verify it.'; loaded = false }
-      else void api.recordSend(message.accountId!, message.id).then(receipt => api.verifyReceipt(receipt.id)).then(show).catch(error => { content.textContent = String(error); loaded = false })
-    })
-    article.append(receiptDisclosure)
-  }
   const content = renderEmailContent(message.body.kind, message.body.content, offlineMode || selected?.availability?.mode === 'downloaded')
   content.classList.add('dispatch-thread-content')
   article.append(content)
@@ -856,6 +835,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     renderPanels()
   }
   selectedConversationId = id
+  selectedSummary = summary
   selected = undefined
   activeDraft = undefined
   recoveryKey = undefined
@@ -1348,6 +1328,7 @@ async function restoreLocalDraft(key: string): Promise<void> {
   if (sequence !== selectionSequence) return
   const record = restored.record
   selected = undefined; selectedConversationId = undefined; selectedAttachmentContext = undefined
+  selectedSummary = undefined
   codexContextReady = false
   elements.subject.textContent = record.subject || 'Recovered local draft'
   elements.messageCount.textContent = 'Local draft'
@@ -1550,6 +1531,7 @@ function openCompose(): void {
   selectedAttachmentContext = undefined
   codexContextReady = false
   selected = undefined
+  selectedSummary = undefined
   selectedConversationId = undefined
   void bindAndShowCodex({ kind: 'unbound' }, { sequence })
   if (usesMobilePanels()) {
@@ -1682,11 +1664,9 @@ async function confirmSendDraft(): Promise<void> {
     const draft = activeDraft
     if (!draft?.id || !draft.accountId) throw new Error('Save the Gmail draft before sending it.')
     const receipt = await api.sendDraft(draft.id, draft.accountId)
-    if (!receipt) throw new Error('The send response had no receipt. Check Send receipts or Sent before retrying.')
-    showReceipt(receipt)
-    if (receipt.status !== 'accepted' && receipt.status !== 'verified') throw new Error(receipt.error || 'The send outcome is not confirmed. Check the receipt before retrying.')
+    if (!receipt) throw new Error('The send was not confirmed. Check Sent before retrying.')
+    if (receipt.status !== 'accepted' && receipt.status !== 'verified') throw new Error(receipt.error || 'The send outcome is uncertain. Check Sent before retrying.')
     clearRecovery(sendingRecoveryKey)
-    addAgentMessage('agent', 'Gmail accepted the send. Its receipt is available in Receipts.')
     if (session === draftEditSession && activeDraft?.id === draft.id && activeDraft.accountId === draft.accountId) hideDraftEditor()
     void loadConversations()
   })()
@@ -1697,9 +1677,6 @@ async function confirmSendDraft(): Promise<void> {
   freezeDraft(true)
   try {
     await operation
-  } catch (error) {
-    try { const known = (await api.receipts()).find(receipt => receipt.accountId === originalAccount && receipt.draftId === (originalId || activeDraft?.id)); if (known) showReceipt(known) } catch {}
-    throw error
   } finally {
     freezeDraft(false)
     if (draftSendFlight === operation) draftSendFlight = undefined
@@ -1766,14 +1743,39 @@ async function attachDraftFiles(): Promise<void> {
 }
 
 async function mutateSelected(action: GmailConversationAction): Promise<void> {
-  if (!selected?.accountId) return
+  const accountId = selected?.accountId ?? selectedSummary?.accountId
+  const threadId = selected?.threadId ?? selectedSummary?.threadId
+  if (!accountId || !threadId) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = 'This message is still loading. Refresh it before moving it.'
+    return
+  }
+  const messageIds = selected?.messages.map((message) => message.id) ?? []
+  const previousConversations = conversations
+  const remainsInMailbox = (value: GmailConversationAction): boolean => {
+    if (value === 'archive') return mailbox === 'sent'
+    if (value === 'spam') return mailbox === 'spam'
+    if (value === 'trash') return mailbox === 'trash'
+    return mailbox === 'inbox'
+  }
+  if (!remainsInMailbox(action)) {
+    conversations = conversations.filter((conversation) => conversation.id !== selectedSummary?.id && conversation.id !== selected?.id)
+    selected = undefined
+    selectedSummary = undefined
+    selectedConversationId = undefined
+    elements.reader.hidden = true
+    elements.readerEmpty.hidden = false
+    elements.readerEmpty.textContent = defaultEmptyListMessage()
+    renderList()
+  }
   const controls = [elements.archive, elements.spam, elements.trash, elements.moveInbox]
   controls.forEach((control) => { control.disabled = true })
   try {
-    await api.mutateConversation(selected.threadId, selected.accountId, selected.messages.map((message) => message.id), action)
-    addAgentMessage('tool', `Gmail accepted: ${action}.`)
-    await loadConversations()
+    await api.mutateConversation(threadId, accountId, messageIds, action)
+    void loadConversations(true)
   } catch (error) {
+    conversations = previousConversations
+    renderList()
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
   } finally {
@@ -2138,7 +2140,6 @@ async function refreshCodexDraft(draftId: string, accountId: string, createdByCo
 
 async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
   if (!codexContextReady) return
-  const selection = selectionSequence
   if (effect.kind === 'search') {
     if (!effect.search.requestId && !acceptChatSearchResults) return
     if (effect.search.requestId && effect.search.requestId !== searchView?.requestId) return
@@ -2158,11 +2159,6 @@ async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
     await refreshCodexDraft(effect.draftId, effect.accountId, true)
     return
   }
-  try {
-    const receipt = await api.recordSend(effect.accountId, effect.messageId, effect.draftId)
-    if (selection !== selectionSequence) return
-    showReceipt(receipt)
-  } catch (error) { if (selection !== selectionSequence) return; addAgentMessage('tool', `Gmail accepted message ${effect.messageId}; receipt details could not be loaded: ${String(error)}`) }
   if (effect.draftId && activeDraft?.id === effect.draftId && activeDraft.accountId === effect.accountId && !draftDirty && !draftSaveFlight) { clearRecovery(); hideDraftEditor() }
   if (!offlineMode) void loadConversations(true)
 }
@@ -2434,6 +2430,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   if (!preserveSelection) {
     markReadDwell.cancel()
     selected = undefined
+    selectedSummary = undefined
     selectedConversationId = undefined
     selectionSequence += 1
     selectCodexContext({ kind: 'unbound' })
@@ -2615,19 +2612,6 @@ function isServiceUnreachable(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('Service request failed at ')
 }
 
-function renderReceipts(): void {
-  const root = app.querySelector<HTMLElement>('[data-receipts-list]')!
-  if (!receipts.length) { root.textContent = 'No send receipts yet.'; return }
-  root.replaceChildren(...receipts.map(receipt => receiptView(receipt, () => {
-    void api.verifyReceipt(receipt.id).then(showReceipt).catch(error => { root.textContent = String(error) })
-  })))
-}
-function showReceipt(receipt: SendReceipt): void {
-  receipts = [receipt, ...receipts.filter(item => item.id !== receipt.id)]
-  renderReceipts()
-  const dialog = app.querySelector<HTMLDialogElement>('[data-receipts-dialog]')!
-  if (!dialog.open) dialog.show()
-}
 function renderOfflineStatus(): void {
   const checkbox = app.querySelector<HTMLInputElement>('[data-offline-mode]')!
   checkbox.checked = offlineMode
@@ -2643,12 +2627,8 @@ ${job.errors.length} failed: ${job.errors.slice(0, 3).join('; ')}` : ''}` : ''}`
   app.querySelector('[data-offline-open]')?.classList.toggle('active', offlineMode)
 }
 async function refreshUtilities(): Promise<void> {
-  const [receiptResult, offlineResult] = await Promise.allSettled([api.receipts(), api.offlineStatus()])
-  if (receiptResult.status === 'fulfilled') {
-    if (JSON.stringify(receipts) !== JSON.stringify(receiptResult.value)) { receipts = receiptResult.value; renderReceipts() }
-  } else if (app.querySelector<HTMLDialogElement>('[data-receipts-dialog]')!.open) app.querySelector<HTMLElement>('[data-receipts-list]')!.textContent = `Receipts unavailable: ${String(receiptResult.reason)}`
-  if (offlineResult.status === 'fulfilled') { offlineStatus = offlineResult.value; renderOfflineStatus() }
-  else if (app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.open) app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = `Downloaded-mail status unavailable: ${String(offlineResult.reason)}`
+  try { offlineStatus = await api.offlineStatus(); renderOfflineStatus() }
+  catch (error) { if (app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.open) app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = `Downloaded-mail status unavailable: ${String(error)}` }
 }
 function setDownloadedMode(value: boolean): void {
   if (draftDirty) checkpointDraft()
@@ -2701,15 +2681,14 @@ app.querySelector('[data-activity-toggle]')?.addEventListener('click', () => {
   const panel = app.querySelector<HTMLElement>('#dispatch-activity')!; panel.hidden = !panel.hidden
   app.querySelector('[data-activity-toggle]')!.setAttribute('aria-expanded', String(!panel.hidden))
 })
-for (const selector of ['[data-receipts-open]', '[data-offline-open]']) app.querySelector(selector)?.addEventListener('click', closeActivity)
+for (const selector of ['[data-offline-open]']) app.querySelector(selector)?.addEventListener('click', closeActivity)
 document.addEventListener('click', event => { if (!(event.target as Element).closest('.dispatch-mail-activity')) closeActivity() })
-for (const name of ['receipts', 'offline', 'recovery']) {
+for (const name of ['offline', 'recovery']) {
   const dialog = app.querySelector<HTMLDialogElement>(`[data-${name}-dialog]`)!
   dialog.addEventListener('close', () => app.querySelector<HTMLButtonElement>(name === 'recovery' ? '[data-recovery-open]' : '[data-activity-toggle]')?.focus())
 }
 app.querySelectorAll<HTMLButtonElement>('[data-dialog-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog')!.close()))
 app.querySelector('[data-recovery-open]')?.addEventListener('click', () => { renderRecoveryList(); app.querySelector<HTMLDialogElement>('[data-recovery-dialog]')!.showModal() })
-app.querySelector('[data-receipts-open]')?.addEventListener('click', () => { renderReceipts(); app.querySelector<HTMLDialogElement>('[data-receipts-dialog]')!.show(); void refreshUtilities() })
 app.querySelector('[data-offline-open]')?.addEventListener('click', () => { renderOfflineStatus(); app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.show(); void refreshUtilities() })
 app.querySelector<HTMLInputElement>('[data-offline-mode]')?.addEventListener('change', event => setDownloadedMode((event.target as HTMLInputElement).checked))
 app.querySelector('[data-download-mailbox]')?.addEventListener('click', () => { void api.downloadMailbox(mailbox, selectedAccountId).then(refreshUtilities).catch(error => { app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = String(error) }) })
@@ -2717,7 +2696,7 @@ app.querySelector('[data-cancel-download]')?.addEventListener('click', () => { v
 window.addEventListener('offline', () => setDownloadedMode(true))
 renderRecoveryList()
 void refreshUtilities()
-window.setInterval(() => { void refreshUtilities() }, 5000)
+window.setInterval(() => { if (offlineStatus?.download?.state === 'running' || app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.open) void refreshUtilities() }, 5000)
 
 async function start(): Promise<void> {
   await Promise.all([connectMail(), connectAgent()])

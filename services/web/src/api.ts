@@ -141,9 +141,6 @@ export const api = {
     const result = await request<{ receipt?: SendReceipt }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=send&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
     return result.receipt
   },
-  async receipts(): Promise<SendReceipt[]> { return (await request<{ receipts: SendReceipt[] }>(`${MAIL}/v1/send-receipts`)).receipts },
-  async recordSend(accountId: string, messageId: string, draftId?: string): Promise<SendReceipt> { return (await request<{ receipt: SendReceipt }>(`${MAIL}/v1/send-receipts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId, messageId, draftId }) })).receipt },
-  async verifyReceipt(id: string): Promise<SendReceipt> { return (await request<{ receipt: SendReceipt }>(`${MAIL}/v1/send-receipts/${encodeURIComponent(id)}`, { method: 'POST' })).receipt },
   async offlineStatus(): Promise<OfflineStatus> { return (await request<{ offline: OfflineStatus }>(`${MAIL}/v1/offline`)).offline },
   async downloadMailbox(mailbox: GmailMailbox, accountId?: string): Promise<void> { await request(`${MAIL}/v1/offline`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mailbox, accountId }) }) },
   async cancelDownload(): Promise<void> { await request(`${MAIL}/v1/offline`, { method: 'DELETE' }) },
