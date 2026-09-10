@@ -25,6 +25,22 @@ function message(
 }
 
 describe('GmailIndex', () => {
+  it('keeps an accepted folder action through a stale provider sync', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-index-action-'))
+    directories.push(directory)
+    const index = new GmailIndex(join(directory, 'gmail.sqlite'))
+    index.beginSync('2026-09-04T09:00:00Z')
+    index.replaceAccounts([{ id: 'account-1', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }], '2026-09-04T09:00:00Z')
+    const inbox = message('m1', false, true)
+    index.replaceAccount('account-1', [inbox], 'run-1', true)
+    index.completeSync('2026-09-04T09:01:00Z')
+    index.applyConversationAction('account-1', ['m1'], 'archive')
+    expect(index.mailboxConversations('inbox', 'all', 'account-1')).toHaveLength(0)
+    index.replaceAccount('account-1', [inbox], 'run-2', true)
+    expect(index.mailboxConversations('inbox', 'all', 'account-1')).toHaveLength(0)
+    expect(index.mailboxConversations('archive', 'all', 'account-1')).toHaveLength(1)
+  })
+
   it('persists Gmail state and preserves All, Unread, and Read semantics', () => {
     const directory = mkdtempSync(join(tmpdir(), 'dispatch-index-'))
     directories.push(directory)

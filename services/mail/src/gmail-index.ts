@@ -139,6 +139,7 @@ const STREAM_COLUMNS: Record<IndexStreamFlag, string> = {
 export class GmailIndex {
   readonly #db: DatabaseSync
   readonly #acceptedUnread = new Map<string, boolean>()
+  readonly #acceptedActions = new Map<string, GmailConversationAction>()
 
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
@@ -228,6 +229,7 @@ export class GmailIndex {
       }
       if (complete) this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND sync_run_id <> ?').run(accountId, runId)
       this.#reapplyAcceptedUnread(accountId, messages)
+      this.#reapplyAcceptedActions(accountId, messages)
       this.#db.exec('COMMIT')
     } catch (error) {
       this.#db.exec('ROLLBACK')
@@ -365,6 +367,25 @@ export class GmailIndex {
     }
   }
 
+  #reapplyAcceptedActions(accountId: string, incoming: readonly IndexedGmailMessage[]): void {
+    const incomingById = new Map(incoming.map((message) => [message.id, message]))
+    const update = this.#db.prepare('UPDATE gmail_messages SET in_inbox=?, in_sent=?, in_drafts=?, in_archive=?, in_spam=?, in_trash=? WHERE account_id=? AND id=?')
+    const exists = this.#db.prepare('SELECT 1 FROM gmail_messages WHERE account_id = ? AND id = ?')
+    for (const [key, action] of [...this.#acceptedActions]) {
+      const separator = key.indexOf('\0')
+      if (key.slice(0, separator) !== accountId) continue
+      const id = key.slice(separator + 1)
+      const snapshot = incomingById.get(id)
+      if (!snapshot || !exists.get(accountId, id)) { this.#acceptedActions.delete(key); continue }
+      const desired = flagsAfterAction(snapshot, action)
+      if (desired.inInbox === snapshot.inInbox && desired.inSent === snapshot.inSent && desired.inDrafts === snapshot.inDrafts && desired.inArchive === snapshot.inArchive && desired.inSpam === snapshot.inSpam && desired.inTrash === snapshot.inTrash) {
+        this.#acceptedActions.delete(key)
+        continue
+      }
+      update.run(Number(desired.inInbox), Number(desired.inSent), Number(desired.inDrafts), Number(desired.inArchive), Number(desired.inSpam), Number(desired.inTrash), accountId, id)
+    }
+  }
+
   applyConversationAction(accountId: string, messageIds: readonly string[], action: GmailConversationAction): void {
     if (messageIds.length === 0) throw new Error('Cannot update folder flags without indexed Gmail message IDs')
     const select = this.#db.prepare('SELECT * FROM gmail_messages WHERE account_id = ? AND id = ?')
@@ -390,6 +411,7 @@ export class GmailIndex {
           Number(next.inArchive), Number(next.inSpam), Number(next.inTrash),
           accountId, id,
         )
+        this.#acceptedActions.set(`${accountId}\0${id}`, action)
       }
       this.#db.exec('COMMIT')
     } catch (error) {

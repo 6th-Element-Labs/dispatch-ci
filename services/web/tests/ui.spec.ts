@@ -168,11 +168,13 @@ test('navigates native Gmail folders and routes accepted message actions', async
   await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
   const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com' }
+  const nextSummary = { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com' }
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
     requestedMailbox = new URL(route.request().url()).searchParams.get('mailbox') ?? ''
-    return route.fulfill({ json: { source: 'gmail', conversations: [summary], nextCursor: null, total: 1 } })
+    return route.fulfill({ json: { source: 'gmail', conversations: [summary, nextSummary], nextCursor: null, total: 2 } })
   })
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Body' }, attachments: [] }] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...nextSummary, source: 'gmail', messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Next body' }, attachments: [] }] } } }))
   await page.route('http://127.0.0.1:8411/v1/conversations/t1/actions', async (route) => {
     action = await route.request().postDataJSON()
     await actionGate
@@ -187,6 +189,7 @@ test('navigates native Gmail folders and routes accepted message actions', async
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveCount(0)
   await expect.poll(() => action).toEqual({ accountId: 'link-one', messageIds: ['m1'], action: 'archive' })
   releaseAction()
+  await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
 })
 
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {

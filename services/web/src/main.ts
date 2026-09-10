@@ -1752,6 +1752,8 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
   }
   const messageIds = selected?.messages.map((message) => message.id) ?? []
   const previousConversations = conversations
+  const originalSummary = selectedSummary ?? conversations.find((conversation) => conversation.id === selectedConversationId)
+  const originalIndex = originalSummary ? conversations.findIndex((conversation) => conversation.id === originalSummary.id) : -1
   const remainsInMailbox = (value: GmailConversationAction): boolean => {
     if (value === 'archive') return mailbox === 'sent'
     if (value === 'spam') return mailbox === 'spam'
@@ -1759,6 +1761,7 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
     return mailbox === 'inbox'
   }
   if (!remainsInMailbox(action)) {
+    const nextSummary = originalIndex >= 0 ? conversations[originalIndex + 1] ?? conversations[originalIndex - 1] : undefined
     conversations = conversations.filter((conversation) => conversation.id !== selectedSummary?.id && conversation.id !== selected?.id)
     selected = undefined
     selectedSummary = undefined
@@ -1767,6 +1770,7 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
     elements.readerEmpty.hidden = false
     elements.readerEmpty.textContent = defaultEmptyListMessage()
     renderList()
+    if (nextSummary) void selectConversation(nextSummary.id)
   }
   const controls = [elements.archive, elements.spam, elements.trash, elements.moveInbox]
   controls.forEach((control) => { control.disabled = true })
@@ -1778,6 +1782,7 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
     renderList()
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    if (originalSummary && conversations.some((conversation) => conversation.id === originalSummary.id)) void selectConversation(originalSummary.id)
   } finally {
     controls.forEach((control) => { control.disabled = false })
   }
