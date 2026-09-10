@@ -90,7 +90,7 @@ Results stay in the message list during background sync. Each row shows a highli
 
 ## Everyday reliability
 
-Every editor change has a local recovery copy, including To, Cc, Bcc, account, subject, body, and attachment identities. New file bytes are stored before the attachment appears in the editor. Recovery lists unsaved copies after restart and restores them for review. A matching successful Gmail save removes its recovery copy; a failed or superseded save keeps it. Storage failures remain visible. Recovery does not send mail.
+User edits are saved locally, including To, Cc, Bcc, account, subject, body, and attachment identities. New file bytes are stored before the attachment appears in the editor. New drafts autosave online once recipient input is valid; untouched reply templates do not create recovery entries. Unconfirmed local copies appear as ordinary actionable rows in Drafts, labelled Saved on this Mac, with the normal editor save and discard controls. There is no recovery banner or separate recovery dialog. A matching successful Gmail save removes its local copy even after switching emails; newer edits remain protected. Storage and save failures remain visible in the editor. Recovery never sends mail.
 
 Sent Items is the normal send confirmation. Dispatch keeps durable internal send intent and acknowledgement for recovery, but has no receipt interface. A timeout after sending has an uncertain outcome; show that failure clearly and never automatically resend.
 
@@ -98,7 +98,7 @@ Opening a conversation caches its full message bodies. Offline controls offer Do
 
 ## Current workbench design
 
-`docs/DESIGN.md` defines the current presentation. Mailboxes use a compact icon-and-label rail by default, with expanded and hidden states remembered locally. Compact message rows are the default. Recovery appears beside the message list, and send history/download controls move to Mail activity. Sent details can be read inline beside a sent message. Utilities use nonmodal panels. Existing mail commands, Codex permissions, editor semantics and service ownership remain unchanged.
+`docs/DESIGN.md` defines the current presentation. Mailboxes use a compact icon-and-label rail by default, with expanded and hidden states remembered locally. Compact message rows are the default. Local unsaved copies belong in Drafts; download controls belong in Mail activity. Sent Items confirms successful sending. Utilities use nonmodal panels.
 
 ## Web links
 

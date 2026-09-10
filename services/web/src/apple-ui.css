@@ -6,9 +6,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .dispatch-rail .nav-link { flex-direction: row; min-height: 34px; justify-content: flex-start; gap: 8px; font-size: 13px; padding: 7px 9px; }
 .dispatch-messages { grid-template-rows: auto auto auto minmax(0, 1fr) auto auto; position: relative; background: var(--tblr-bg-surface-secondary); }
 .dispatch-mail-tabs { grid-row: 1; }
-.dispatch-recovery-banner { grid-row: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; margin: 4px 10px; background: var(--tblr-yellow-lt); border-radius: 6px; font-size: 12px; }
-.dispatch-recovery-banner .nav-link { padding: 2px 4px; color: var(--tblr-primary); }
-.dispatch-recovery-banner .nav-link i { display: none; }
 .dispatch-search-status { grid-row: 3; }
 .dispatch-message-list { grid-row: 4; padding: 4px 6px; }
 .dispatch-messages > [data-mail-error] { grid-row: 5; }

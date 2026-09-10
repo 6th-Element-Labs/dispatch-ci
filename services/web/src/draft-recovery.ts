@@ -62,6 +62,10 @@ export class DraftRecovery {
     this.storage.setItem(KEY, JSON.stringify(records))
   }
   remove(key: string): void { this.storage.setItem(KEY, JSON.stringify(this.list().filter(item => item.key !== key))) }
+  removeSavedRevision(key: string, revision: number): void {
+    const item = this.list().find(record => record.key === key)
+    if (item?.revision === revision) this.remove(key)
+  }
   async restore(key: string): Promise<{ record: RecoveryDraft; attachments: Attachment[]; missing: string[] }> {
     const record = this.list().find(item => item.key === key)
     if (!record) throw new Error('This local draft is no longer available.')

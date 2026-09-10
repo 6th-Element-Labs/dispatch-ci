@@ -64,7 +64,6 @@ app.innerHTML = `
       <nav class="dispatch-rail nav nav-pills flex-column" aria-label="Mail folders" hidden><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
         <nav class="dispatch-mail-tabs" aria-label="Message state"><button class="dispatch-mail-tab active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="dispatch-mail-tab" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="dispatch-mail-tab" type="button" data-mail-state="read" aria-pressed="false">Read</button><button class="btn btn-sm btn-icon ms-auto" data-density aria-label="Use comfortable message list" aria-pressed="true" title="Message density"><i class="ti ti-list-details" aria-hidden="true"></i></button></nav>
-        <div class="dispatch-recovery-banner" hidden><span data-recovery-count>Unsaved drafts on this Mac</span><button type="button" class="nav-link" data-recovery-open hidden><i class="ti ti-history" aria-hidden="true"></i><span>Recovery</span></button></div>
         <div class="dispatch-search-status" data-search-status hidden><span data-search-summary role="status"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-clear-search aria-label="Return to mailbox">Clear</button></div>
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
@@ -137,7 +136,6 @@ app.innerHTML = `
 
 app.insertAdjacentHTML('beforeend', `
   <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
-  <dialog class="dispatch-utility-dialog" data-recovery-dialog aria-label="Local draft recovery"><div class="d-flex justify-content-between"><h2>Local draft recovery</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>These local copies are not saved to Gmail. Review a copy before saving it.</p><div data-recovery-list></div></dialog>
 
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
 `)
@@ -261,6 +259,8 @@ let sendConfirmationRevision: number | undefined
 let draftDiscarding = false
 const recovery = new DraftRecovery()
 let recoveryKey: string | undefined
+let draftSeed: { fields: string; attachments: DraftProjection['attachments'] } | undefined
+function editorFields(): string { return JSON.stringify([recipientValue(elements.draftTo), recipientValue(elements.draftCc), recipientValue(elements.draftBcc), elements.draftSubject.value, elements.draftBody.value]) }
 let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true' || navigator.onLine === false
 let offlineStatus: OfflineStatus | undefined
 
@@ -596,10 +596,27 @@ function attachmentIndicator(count?: number): HTMLElement {
 
 function renderList(emptyMessage = defaultEmptyListMessage()): void {
   elements.list.innerHTML = ''
+  if (mailbox === 'drafts' && !searchView) {
+    try {
+      for (const record of recovery.list()) {
+        if (selectedAccountId && record.accountId !== selectedAccountId) continue
+        const row = document.createElement('button')
+        row.className = 'list-group-item list-group-item-action dispatch-message'
+        row.dataset.localDraftKey = record.key
+        row.type = 'button'
+        const title = document.createElement('strong'); title.textContent = record.subject || 'New message'
+        const detail = document.createElement('small'); detail.textContent = `${record.to || 'No recipient'} · Saved on this Mac`
+        row.append(title, document.createElement('br'), detail)
+        row.onclick = () => { void restoreLocalDraft(record.key).catch(draftError) }
+        elements.list.append(row)
+      }
+    } catch (error) { const notice = document.createElement('p'); notice.textContent = `Local drafts could not be read: ${String(error)}`; elements.list.append(notice) }
+  }
   const listed = searchView ? searchView.results.map(result => result.conversation) : conversations
   renderSearchStatus()
   if (searchView) emptyMessage = searchView.phase === 'pending' ? 'Searching with Codex…' : searchView.phase === 'failed' ? searchView.error || 'Search failed.' : 'No matching conversations.'
   if (listed.length === 0) {
+    if (elements.list.childElementCount) return
     const empty = document.createElement('div')
     empty.className = 'empty text-secondary p-4 dispatch-message-list-empty'
     empty.textContent = emptyMessage
@@ -1320,6 +1337,13 @@ function renderDraftAttachments(): void {
 
 function checkpointDraft(): void {
   if (!activeDraft) return
+  if (!activeDraft.id && draftSeed?.fields === editorFields() && draftSeed.attachments === activeDraft.attachments) {
+    // Reserve the identity for edits made while the initial Gmail create is
+    // pending, without listing an untouched reply as an unsaved draft.
+    recoveryKey ??= crypto.randomUUID()
+    try { recovery.remove(recoveryKey); renderRecoveryList() } catch (error) { draftError(error) }
+    return
+  }
   try {
     recoveryKey ??= crypto.randomUUID()
     const accountId = activeDraft.id ? activeDraft.accountId : elements.draftAccount.value || activeDraft.accountId
@@ -1327,7 +1351,7 @@ function checkpointDraft(): void {
       accountId, accountLabel: accounts.find(account => account.id === accountId)?.email, gmailDraftId: activeDraft.id,
       inReplyToMessageId: activeDraft.inReplyToMessageId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, bodyMarkdown: elements.draftBody.value,
     }, activeDraft.attachments)
-    elements.recoveryStatus.textContent = recovery.list().find(item => item.key === recoveryKey)?.attachments.some(file => file.contentPending) ? 'Text saved locally; attachment recovery is saving…' : 'Local recovery copy saved'
+    elements.recoveryStatus.textContent = 'Saved on this Mac'
     renderRecoveryList()
     const draftId = activeDraft.id
     void recovery.cacheFiles(activeDraft.attachments).then(() => {
@@ -1345,23 +1369,7 @@ function clearRecovery(key = recoveryKey): void {
   renderRecoveryList()
 }
 function renderRecoveryList(): void {
-  const button = app.querySelector<HTMLButtonElement>('[data-recovery-open]')!
-  const list = app.querySelector<HTMLElement>('[data-recovery-list]')!
-  try {
-    const records = recovery.list()
-    button.hidden = records.length === 0
-    app.querySelector<HTMLElement>('.dispatch-recovery-banner')!.hidden = records.length === 0
-    app.querySelector<HTMLElement>('[data-recovery-count]')!.textContent = `${records.length} recovered ${records.length === 1 ? 'draft' : 'drafts'}`
-    button.setAttribute('aria-label', `Local draft recovery (${records.length})`)
-    list.replaceChildren(...records.map(record => {
-      const row = document.createElement('section'); row.className = 'dispatch-recovery-row'
-      const title = document.createElement('strong'); title.textContent = record.subject || '(No subject)'
-      const detail = document.createElement('p'); detail.textContent = `${record.to || '(No recipient)'} · ${record.accountLabel || 'Saved account'} · ${new Date(record.updatedAt).toLocaleString()}`
-      const restore = document.createElement('button'); restore.className = 'btn btn-sm'; restore.textContent = 'Restore local draft'
-      restore.addEventListener('click', () => { void restoreLocalDraft(record.key).catch(draftError) })
-      row.append(title, detail, restore); return row
-    }))
-  } catch (error) { button.hidden = false; app.querySelector<HTMLElement>('.dispatch-recovery-banner')!.hidden = false; button.setAttribute('aria-label', 'Local recovery needs attention'); list.textContent = String(error) }
+  if (mailbox === 'drafts') renderList()
 }
 async function restoreLocalDraft(key: string): Promise<void> {
   if (activeDraft && draftDirty) checkpointDraft()
@@ -1373,16 +1381,16 @@ async function restoreLocalDraft(key: string): Promise<void> {
   selected = undefined; selectedConversationId = undefined; selectedAttachmentContext = undefined
   selectedSummary = undefined
   codexContextReady = false
-  elements.subject.textContent = record.subject || 'Recovered local draft'
+  elements.subject.textContent = record.subject || 'New message'
   elements.messageCount.textContent = 'Local draft'
   elements.copyStatus.hidden = true
   elements.address.hidden = true
   showDraft({ id: record.gmailDraftId, accountId: record.accountId, inReplyToMessageId: record.inReplyToMessageId,
     to: parseRecipientList(record.to).map(address => ({ name: address, address, initials: '@' })), cc: record.cc, bcc: record.bcc, subject: record.subject, bodyMarkdown: record.bodyMarkdown, bodyText: record.bodyMarkdown, bodyHtml: '', attachments: restored.attachments, state: 'draft' }, !record.gmailDraftId)
+  draftSeed = undefined
   recoveryKey = key; draftDirty = true; draftEditRevision += 1
-  elements.recoveryStatus.textContent = 'Recovered local copy — review before saving to Gmail'
+  elements.recoveryStatus.textContent = 'Saved on this Mac'
   if (restored.missing.length) draftError(new Error(`Reattach these files before saving: ${restored.missing.join(', ')}`))
-  ;(app.querySelector('[data-recovery-dialog]') as HTMLDialogElement).close()
   refreshPreview()
   if (!offlineMode) void bindAndShowCodex({ kind: 'unbound' }, { sequence })
 }
@@ -1441,6 +1449,7 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   elements.draftError.textContent = ''
   elements.sendConfirm.hidden = true
   renderDraftAttachments()
+  draftSeed = { fields: editorFields(), attachments: draft.attachments }
   draftDiscarding = false
   elements.recoveryStatus.textContent = ''
   freezeDraft(Boolean(draftSendFlight))
@@ -1488,7 +1497,12 @@ function autosaveDraft(): void {
   if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
   draftAutosaveTimer = window.setTimeout(() => {
     draftAutosaveTimer = undefined
-    if (draftDirty && activeDraft?.id && !offlineMode && !draftSendFlight) void saveDraft(false).catch(draftError)
+    if (draftDirty && activeDraft && !offlineMode && !draftSendFlight) {
+      const addresses = [elements.draftTo, elements.draftCc, elements.draftBcc].flatMap(field => parseRecipientList(recipientValue(field)))
+      if (addresses.some(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) return
+      if (!activeDraft.id && draftSeed?.fields === editorFields() && draftSeed.attachments === activeDraft.attachments) return
+      void saveDraft(false).catch(draftError)
+    }
   }, 1_500)
 }
 
@@ -1614,7 +1628,11 @@ async function saveDraft(notify = true): Promise<void> {
       : await api.createDraft('', fields)
     savedSuccessfully = true
     if (savingRecoveryKey && savedDraft.id) {
-      try { recovery.bindGmailIdentity(savingRecoveryKey, accountId, savedDraft.id) }
+      try {
+        recovery.bindGmailIdentity(savingRecoveryKey, accountId, savedDraft.id)
+        recovery.removeSavedRevision(savingRecoveryKey, savingRevision)
+        renderRecoveryList()
+      }
       catch (error) { draftError(new Error(`Gmail saved the draft, but local recovery could not record its identity: ${String(error)}`)) }
     }
     if (session !== draftEditSession || !activeDraft || activeDraft.id !== draft.id || draftDiscarding) return savedDraft
@@ -2522,6 +2540,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   })
   renderList(usedCache ? defaultEmptyListMessage() : 'Loading messages…')
   if (usedCache && conversations[0] && !preserveSelection) void selectConversation(conversations[0].id)
+  const selectionAtRequest = selectionSequence
   try {
     const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery, mailbox, offlineMode)
     if (loadSequence !== conversationLoadSequence) return
@@ -2543,13 +2562,13 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     renderList()
     if (conversations[0]) {
       const selectedStillListed = Boolean(selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId))
-      if (!preserveSelection && !selectedStillListed) await selectConversation(conversations[0].id)
-    } else if (!preserveSelection) {
+      if (!preserveSelection && !selectedStillListed && selectionSequence === selectionAtRequest) await selectConversation(conversations[0].id)
+    } else if (!preserveSelection && selectionSequence === selectionAtRequest) {
       selected = undefined
       selectedConversationId = undefined
       elements.reader.hidden = true
       elements.readerEmpty.hidden = false
-      elements.readerEmpty.textContent = defaultEmptyListMessage()
+      elements.readerEmpty.textContent = mailbox === 'drafts' && elements.list.querySelector('[data-local-draft-key]') ? 'Select a draft' : defaultEmptyListMessage()
       void bindAndShowCodex({ kind: 'unbound' }, { sequence: selectionSequence })
     }
   } catch (error) {
@@ -2760,12 +2779,11 @@ app.querySelector('[data-activity-toggle]')?.addEventListener('click', () => {
 })
 for (const selector of ['[data-offline-open]']) app.querySelector(selector)?.addEventListener('click', closeActivity)
 document.addEventListener('click', event => { if (!(event.target as Element).closest('.dispatch-mail-activity')) closeActivity() })
-for (const name of ['offline', 'recovery']) {
+for (const name of ['offline']) {
   const dialog = app.querySelector<HTMLDialogElement>(`[data-${name}-dialog]`)!
-  dialog.addEventListener('close', () => app.querySelector<HTMLButtonElement>(name === 'recovery' ? '[data-recovery-open]' : '[data-activity-toggle]')?.focus())
+  dialog.addEventListener('close', () => app.querySelector<HTMLButtonElement>('[data-activity-toggle]')?.focus())
 }
 app.querySelectorAll<HTMLButtonElement>('[data-dialog-close]').forEach(button => button.addEventListener('click', () => button.closest('dialog')!.close()))
-app.querySelector('[data-recovery-open]')?.addEventListener('click', () => { renderRecoveryList(); app.querySelector<HTMLDialogElement>('[data-recovery-dialog]')!.showModal() })
 app.querySelector('[data-offline-open]')?.addEventListener('click', () => { renderOfflineStatus(); app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.show(); void refreshUtilities() })
 app.querySelector<HTMLInputElement>('[data-offline-mode]')?.addEventListener('change', event => setDownloadedMode((event.target as HTMLInputElement).checked))
 app.querySelector('[data-download-mailbox]')?.addEventListener('click', () => { void api.downloadMailbox(mailbox, selectedAccountId).then(refreshUtilities).catch(error => { app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = String(error) }) })

@@ -1868,8 +1868,8 @@ test('recovers unsaved recipients, text and file bytes after a reload without se
   await expect(page.locator('[data-draft-attachments]')).toContainText('proof.txt')
   await expect(page.locator('[data-draft-error]')).toContainText('Gmail unavailable')
   await page.reload()
-  await page.locator('[data-recovery-open]').click()
-  await page.getByRole('button', { name: 'Restore local draft' }).click()
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-local-draft-key]').filter({ hasText: 'Unsaved recovery proof' }).click()
   await expect(page.locator('[data-draft-body]')).toHaveValue('Text entered before Gmail can save it.')
   await expect(page.locator('[data-draft-subject]')).toHaveValue('Unsaved recovery proof')
   await expect(page.locator('[data-draft]')).toContainText('cc@example.com')
@@ -1884,6 +1884,22 @@ test('recovers unsaved recipients, text and file bytes after a reload without se
   await page.locator('[data-discard-draft]').click()
   await expect(page.locator('[data-recovery-open]')).toBeHidden()
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!))).toEqual([])
+})
+
+test('autosaves a new draft and keeps recovery out of the Inbox', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  let saved = false
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => {
+    saved = true
+    const fields = route.request().postDataJSON()
+    return route.fulfill({ json: { draft: { ...fields, id: 'autosaved', accountId: 'one', inReplyToMessageId: '', to: [], bodyHtml: '<p>New draft text</p>', attachments: [], state: 'draft' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.getByLabel('Draft body').fill('New draft text')
+  await expect.poll(() => saved).toBe(true)
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1') ?? '[]').length)).toBe(0)
+  await expect(page.locator('.dispatch-recovery-banner, [data-recovery-open]')).toHaveCount(0)
 })
 
 test('keeps a newer recovery copy while an older Gmail save is pending', async ({ page }) => {
