@@ -323,7 +323,7 @@ window.addEventListener('online', () => { if (draftSyncTimer !== undefined) wind
 let recoveryKey: string | undefined
 let draftSeed: { fields: string; attachments: DraftProjection['attachments'] } | undefined
 function editorFields(): string { return JSON.stringify([recipientValue(elements.draftTo), recipientValue(elements.draftCc), recipientValue(elements.draftBcc), elements.draftSubject.value, elements.draftBody.value]) }
-let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true' || navigator.onLine === false
+let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true'
 let offlineStatus: OfflineStatus | undefined
 
 let conversations: ConversationSummary[] = []
@@ -454,6 +454,7 @@ let agentConnecting = false
 let syncStatusTimer: number | undefined
 let observedSyncCompletedAt: string | null | undefined
 let observedDraftsRevision: number | undefined
+let observedMailRevision: number | undefined
 /** Ids from the last confirmed live inbox load, keyed by account and state filter so a scope change never chimes. */
 let liveInboxBaseline: { scope: string; baseline: LiveListBaseline } | undefined
 let toneContext: AudioContext | undefined
@@ -2766,6 +2767,11 @@ async function refreshSyncStatus(): Promise<void> {
   if (offlineMode) { elements.mailSource.textContent = 'Downloaded mail'; return }
   try {
     const sync = await api.syncStatus()
+    if (sync.mailRevision !== undefined && observedMailRevision !== sync.mailRevision) {
+      const changed = observedMailRevision !== undefined
+      observedMailRevision = sync.mailRevision
+      if (changed) void loadConversations(true)
+    }
     if (sync.draftsRevision !== undefined && observedDraftsRevision !== sync.draftsRevision) {
       observedDraftsRevision = sync.draftsRevision
       if (mailbox === 'drafts') void loadConversations(true)
@@ -2953,17 +2959,32 @@ async function start(): Promise<void> {
 
 window.addEventListener('pointerdown', unlockTone, { once: true })
 window.addEventListener('keydown', unlockTone, { once: true })
-app.querySelector<HTMLButtonElement>('[data-refresh]')?.addEventListener('click', (event) => {
-  const button = event.currentTarget as HTMLButtonElement
+let refreshRequest: Promise<void> | undefined
+let lastAutomaticRefresh = 0
+function requestMailRefresh(reason: 'manual' | 'wake' | 'foreground' = 'manual'): Promise<void> {
+  if (offlineMode || refreshRequest) return refreshRequest ?? Promise.resolve()
+  if (reason !== 'manual' && Date.now() - lastAutomaticRefresh < 10_000) return Promise.resolve()
+  lastAutomaticRefresh = Date.now()
+  const button = app.querySelector<HTMLButtonElement>('[data-refresh]')!
   button.disabled = true
   elements.mailSource.textContent = 'Refreshing Gmail…'
-  void api.refreshMail().then((sync) => {
+  elements.mailError.hidden = true
+  refreshRequest = api.refreshMail(reason).then((sync) => {
     observedSyncCompletedAt = sync.completedAt
     return loadConversations(true)
   }).catch((error) => {
+    elements.mailSource.textContent = 'Reconnecting to mail'
     elements.mailError.hidden = false
-    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
-  }).finally(() => { button.disabled = false })
+    elements.mailError.textContent = 'Mail could not refresh yet. Your messages and drafts are kept. Dispatch will reconnect automatically.'
+    scheduleMailReconnect()
+  }).finally(() => { button.disabled = false; refreshRequest = undefined })
+  return refreshRequest
+}
+app.querySelector<HTMLButtonElement>('[data-refresh]')?.addEventListener('click', () => { void requestMailRefresh() })
+window.addEventListener('online', () => { void requestMailRefresh('wake') })
+window.addEventListener('focus', () => { void requestMailRefresh('foreground') })
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void requestMailRefresh('foreground')
 })
 elements.account.addEventListener('change', () => {
   clearSearchView()

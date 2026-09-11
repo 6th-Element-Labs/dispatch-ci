@@ -90,6 +90,8 @@ Results stay in the message list during background sync. Each row shows a highli
 
 ## Everyday reliability
 
+After a suspension gap, the background mail service cancels obsolete read-only scans and requests fresh mailbox heads. Network return and foreground activation also request refresh. This works without an open Dispatch window when macOS resumes the background service; it does not change the Mac's sleep settings. Manual Refresh is accepted immediately and reports progress through sync status. Healthy account results appear as each stream arrives, even if another account is unavailable. Gmail Retry-After remains authoritative. Sends and draft writes are never cancelled or replayed by wake recovery.
+
 Drafts lists are served immediately from the mail index and reconciled with Gmail in the background. Previously saved or opened drafts have a durable mail-owned body cache, so reopening them does not wait for Gmail. Cached editors check for changes asynchronously; that refresh cannot overwrite edits made after opening. A confirmed remote deletion removes an untouched cached editor. Navigation checkpoints unsaved edits locally and leaves remote saves running independently.
 
 Archive, Trash, Spam, Move to Inbox, and read-state commands are committed to the mail owner's SQLite queue with their local state changes before the API accepts them. The UI selects the next row and leaves actions available. Commands replay in order per account after connection failures or restart. Partial provider snapshots cannot undo pending changes. Pending synchronization is shown quietly in Mail activity; local acceptance is not a provider acknowledgement. Sends are never automatically replayed.

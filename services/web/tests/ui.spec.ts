@@ -1174,6 +1174,39 @@ test('Refresh fetches Gmail heads and preserves the selected thread', async ({ p
   await expect(page.getByRole('button', { name: 'Refresh' })).toBeEnabled()
 })
 
+test('network return requests wake refresh and refresh failures use plain language', async ({ page }) => {
+  const reasons: string[] = []
+  let fail = false
+  await page.route('http://127.0.0.1:8411/v1/sync', route => {
+    reasons.push(route.request().postDataJSON().reason)
+    return route.fulfill({ status: fail ? 503 : 202, json: fail ? { error: 'RAW_PROVIDER_ERROR' } : { accepted: true, sync: { state: 'syncing', completedAt: null } } })
+  })
+  await page.goto('/')
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect.poll(() => reasons.includes('wake')).toBe(true)
+  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+  fail = true
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(page.locator('[data-mail-error]')).toContainText('reconnect automatically')
+  await expect(page.locator('[data-mail-error]')).not.toContainText('RAW_PROVIDER_ERROR')
+  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+})
+
+test('new mail appears when one account refreshes even if another account is rate limited', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', name: 'Test', email: 'test@example.com', connectorId: 'gmail' }] } }))
+  let updated = false
+  let observed = 0
+  const fresh = { ...conversations[0]!, id: 'demo:new', threadId: 'new', latestMessageId: 'new', subject: 'Arrived after wake' }
+  await page.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'demo', conversations: updated ? [fresh, ...conversations] : conversations } }))
+  await page.route('http://127.0.0.1:8411/v1/sync/status', route => { observed++; return route.fulfill({ json: { sync: { state: updated ? 'failed' : 'ready', error: updated ? 'RATE_LIMITED' : null, completedAt: '2026-09-11T00:00:00Z', messageCount: 3, mailRevision: updated ? 2 : 1 } } }) })
+  await page.goto('/')
+  await expect.poll(() => observed).toBeGreaterThan(0)
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  updated = true
+  await expect(page.locator('[data-conversation-id="demo:new"]')).toBeVisible({ timeout: 8000 })
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+})
+
 test('derives an immediate unread view from the cached All inbox', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)

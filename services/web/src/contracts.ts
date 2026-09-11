@@ -87,6 +87,7 @@ export type GmailMailbox = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 't
 export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface GmailSyncStatus {
+  readonly mailRevision?: number
   readonly draftsRevision?: number
   readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'
   readonly startedAt: string | null

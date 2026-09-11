@@ -353,6 +353,14 @@ export function createMailServer(
         : writeJson(response, 501, { error: 'gmail_sync_not_configured' })
     }
     if (request.method === 'POST' && url.pathname === '/v1/sync') {
+      const controller = gmail as Partial<GmailConnectorProvider>
+      if (controller.requestRefresh) {
+        let reason = 'manual'
+        try { const payload = draftObject(await readJson(request)); if (payload?.reason === 'wake' || payload?.reason === 'foreground') reason = payload.reason }
+        catch { return writeJson(response, 400, { error: 'invalid_refresh_request' }) }
+        controller.requestRefresh(reason)
+        return writeJson(response, 202, { accepted: true, sync: gmail.syncStatus?.() })
+      }
       if (!gmail.refreshNow && !gmail.syncNow) return writeJson(response, 501, { error: 'gmail_sync_not_configured' })
       try {
         if (gmail.refreshNow) await within(gmail.refreshNow(), 45_000, 'Gmail refresh')

@@ -72,6 +72,8 @@ Mail and agent read `DISPATCH_ALLOWED_ORIGIN` for their CORS origin. The default
 
 ## Failure behavior
 
+`POST /v1/sync` accepts a refresh request with HTTP 202. Optional reasons `wake` and `foreground` let mail replace obsolete read-only scans. Mail uses a suspension-gap clock, an abortable sync context, bounded scan lifetimes, and a monotonic mailbox revision. Async-local cancellation applies only to that scan's provider reads; user draft/send operations retain their own lifetime. The browser watches mailbox revisions independently of overall sync success, so one account's failure cannot hide another account's new mail.
+
 - Mail failure leaves the mail panel in a visible failed state.
 - Cached mail is labeled with its age while a refresh is active. A failed refresh keeps the provider error visible and never presents stale data as current.
 - Missing or invalid provider fields fail normalization instead of silently becoming read, empty, or current values.

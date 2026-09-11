@@ -45,8 +45,8 @@ export const api = {
     const result = await request<{ sync: GmailSyncStatus }>(`${MAIL}/v1/sync/status`)
     return result.sync
   },
-  async refreshMail(): Promise<GmailSyncStatus> {
-    const result = await request<{ sync: GmailSyncStatus }>(`${MAIL}/v1/sync`, { method: 'POST' })
+  async refreshMail(reason: 'manual' | 'wake' | 'foreground' = 'manual'): Promise<GmailSyncStatus> {
+    const result = await request<{ sync: GmailSyncStatus }>(`${MAIL}/v1/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason }) })
     return result.sync
   },
   async listMessages(accountId?: string): Promise<{ source: 'demo' | 'gmail'; messages: MessageSummary[] }> {

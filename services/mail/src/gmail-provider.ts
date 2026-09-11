@@ -1,4 +1,6 @@
 import { LocalMailStore, type SendReceipt, type ReceiptDetails, type OfflineDownload } from './local-mail-store.js'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { ResumeClock } from './resume-clock.js'
 import { groupConversations, projectConversation, conversationForMailbox } from './conversation.js'
 import { plainBodyFromMessage, projectDraft } from './draft.js'
 import { randomUUID, createHash } from 'node:crypto'
@@ -327,6 +329,12 @@ export class GmailConnectorProvider {
   readonly #syncIntervalMs: number
   readonly #refreshIntervalMs: number
   #syncPromise: Promise<void> | undefined
+  readonly #syncContext = new AsyncLocalStorage<AbortSignal>()
+  #syncController: AbortController | undefined
+  #syncKind: 'heads' | 'full' | undefined
+  #syncStarted = 0
+  #wakeTimer: ReturnType<typeof setInterval> | undefined
+  #mailRevision = Date.now()
   #syncTimer: ReturnType<typeof setInterval> | undefined
   #refreshTimer: ReturnType<typeof setInterval> | undefined
   #retryTimer: ReturnType<typeof setTimeout> | undefined
@@ -362,20 +370,25 @@ export class GmailConnectorProvider {
   startBackgroundSync(): void {
     if (!this.#index || this.#syncTimer) return
     this.#stopped = false
+    const clock = new ResumeClock()
+    this.#wakeTimer = setInterval(() => { if (clock.observe()) this.requestRefresh('wake') }, 5_000)
+    this.#wakeTimer.unref()
     void this.flushActions()
     this.#actionTimer = setInterval(() => { void this.flushActions() }, 5_000)
     this.#actionTimer.unref()
-    if (this.#index.count() > 0) void this.refreshNow().catch(() => this.#scheduleSync(5_000))
+    if (this.#index.count() > 0) this.requestRefresh('startup')
     else this.#scheduleSync(0, true)
     this.#syncTimer = setInterval(() => { this.#scheduleSync(0, true) }, this.#syncIntervalMs)
     this.#syncTimer.unref()
-    this.#refreshTimer = setInterval(() => { void this.refreshNow().catch(() => undefined) }, this.#refreshIntervalMs)
+    this.#refreshTimer = setInterval(() => { this.requestRefresh('periodic') }, this.#refreshIntervalMs)
     this.#refreshTimer.unref()
   }
 
   stopBackgroundSync(): void {
     if (this.#stopped) return
     this.#stopped = true
+    this.#syncController?.abort()
+    if (this.#wakeTimer) clearInterval(this.#wakeTimer)
     if (this.#actionTimer) clearInterval(this.#actionTimer)
     if (this.#syncTimer) clearInterval(this.#syncTimer)
     if (this.#refreshTimer) clearInterval(this.#refreshTimer)
@@ -390,7 +403,7 @@ export class GmailConnectorProvider {
 
   syncStatus(): (GmailSyncStatus & Partial<GmailSyncProgress>) | undefined {
     const indexedStatus = this.#index?.status()
-    const status = indexedStatus ? { ...indexedStatus, draftsRevision: this.#draftsRevision } : undefined
+    const status = indexedStatus ? { ...indexedStatus, draftsRevision: this.#draftsRevision, mailRevision: this.#mailRevision } : undefined
     const pending = this.#index?.pendingActions() ?? []
     if (status && pending.length) return { ...status, ...this.#syncProgress, state: 'partial', error: pending.find(job => job.error)?.error ?? `${pending.length} mail changes waiting to sync` }
     return status ? { ...status, ...this.#syncProgress } : undefined
@@ -400,25 +413,63 @@ export class GmailConnectorProvider {
     return this.#synchronize(100, true)
   }
 
+  requestRefresh(reason = 'manual'): void {
+    if (this.#stopped) return
+    if (this.#syncPromise && (reason === 'wake' || (reason !== 'periodic' && this.#syncKind === 'full') || Date.now() - this.#syncStarted > 180_000)) {
+      this.#syncController?.abort()
+      this.#syncPromise = undefined
+    }
+    if (this.#retryTimer) { clearTimeout(this.#retryTimer); this.#retryTimer = undefined }
+    void this.refreshNow().catch(error => {
+      if (error?.name === 'AbortError' || this.#stopped) return
+      this.#scheduleSync(/fetch failed|ECONN|network/i.test(String(error)) ? 5_000 : 60_000)
+    })
+  }
+
+  #runSync(kind: 'heads' | 'full', work: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    const controller = new AbortController()
+    this.#syncController = controller; this.#syncKind = kind; this.#syncStarted = Date.now()
+    const timeout = setTimeout(() => controller.abort(new Error('Gmail synchronization timed out; retrying.')), kind === 'heads' ? 180_000 : 900_000)
+    timeout.unref()
+    const flight = this.#syncContext.run(controller.signal, () => work(controller.signal)).catch(error => {
+      if (!this.#stopped && this.#syncController === controller && error?.name !== 'AbortError') this.#index?.failSync(String(error))
+      throw error
+    }).finally(() => {
+      clearTimeout(timeout)
+      if (this.#syncPromise === flight) { this.#syncPromise = undefined; this.#syncController = undefined; this.#syncKind = undefined }
+    })
+    this.#syncPromise = flight
+    return flight
+  }
+
   async refreshNow(): Promise<void> {
-    if (!this.#index || this.#index.count() === 0) return this.syncNow()
+    if (!this.#index) return
     if (this.#syncPromise) return this.#syncPromise
-    this.#syncPromise = (async () => {
+    return this.#runSync('heads', async (signal) => {
       const startedAt = new Date().toISOString()
       const runId = `${startedAt}:${randomUUID()}`
       this.#index!.beginSync(startedAt)
       try {
         const accounts = await this.accounts()
+        signal.throwIfAborted()
         if (accounts.length === 0) throw new Error('Cannot refresh Gmail: no connector accounts are available')
         this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
         const pages = await Promise.allSettled(accounts.map(async (account) => {
           const streams = []
-          for (const stream of INDEX_STREAMS) streams.push({ stream, page: await this.#searchPage(account, 50, stream.query, stream.labelIds, '') })
-          this.#syncProgress.pagesFetched += streams.length
-          this.#syncProgress.fetchedMessages += streams.reduce((count, item) => count + item.page.messages.length, 0)
+          for (const stream of INDEX_STREAMS) {
+            const page = await this.#searchPage(account, 50, stream.query, stream.labelIds, '')
+            signal.throwIfAborted()
+            streams.push({ stream, page })
+            this.#index!.replaceAccount(account.id, mergeIndexedMessages(streams.flatMap(item => item.page.messages)), runId, false)
+            if (!page.nextPageToken) this.#index!.reconcileStream(account.id, stream.flag, page.messages.map(message => message.id), runId)
+            this.#syncProgress.pagesFetched++; this.#syncProgress.fetchedMessages += page.messages.length
+            this.#mailRevision++
+          }
+          this.#syncProgress.accountsCompleted++
           return { account, streams, messages: mergeIndexedMessages(streams.flatMap((item) => item.page.messages)) }
         }))
+        signal.throwIfAborted()
         for (const result of pages) {
           if (result.status !== 'fulfilled') continue
           const page = result.value
@@ -427,7 +478,6 @@ export class GmailConnectorProvider {
           for (const item of page.streams) {
             if (!item.page.nextPageToken) this.#index!.reconcileStream(page.account.id, item.stream.flag, item.page.messages.map((message) => message.id), runId)
           }
-          this.#syncProgress.accountsCompleted += 1
         }
         this.#syncProgress.currentAccount = null
         this.#index!.pruneAccounts(accounts.map((account) => account.id))
@@ -436,11 +486,9 @@ export class GmailConnectorProvider {
         if (failed.length) throw new Error(failed.map(result => String(result.reason)).join('; '))
         this.#index!.completeSync(new Date().toISOString(), true)
       } catch (error) {
-        this.#index!.failSync(error instanceof Error ? error.message : String(error))
         throw error
       }
-    })().finally(() => { this.#syncPromise = undefined })
-    return this.#syncPromise
+    })
   }
 
   cachedAccounts(): readonly GmailAccountProjection[] { return this.#index?.accounts() ?? [] }
@@ -448,7 +496,8 @@ export class GmailConnectorProvider {
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
     try {
-      const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`, { signal: AbortSignal.timeout(30_000) })
+      const signal = this.#syncContext.getStore()
+      const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) })
       const value = await response.json() as unknown
       if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
       const inventory = record(value)
@@ -459,6 +508,7 @@ export class GmailConnectorProvider {
         return { id, connectorId: text(item?.connectorId), name: text(item?.name) || 'Gmail', email: text(item?.email) }
       })
     } catch (error) {
+      this.#syncContext.getStore()?.throwIfAborted()
       const indexed = this.#index?.accounts() ?? []
       if (indexed.length === 0) throw error
       this.#index?.failSync(`Gmail account refresh failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -687,7 +737,7 @@ export class GmailConnectorProvider {
     if (!this.#index || this.#retryTimer || this.#stopped) return
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = undefined
-      void (full ? this.syncNow() : this.refreshNow()).catch(() => this.#scheduleSync(60_000, full))
+      void (full ? this.syncNow() : this.refreshNow()).catch(error => { if (error?.name !== 'AbortError') this.#scheduleSync(60_000) })
     }, delayMs)
     this.#retryTimer.unref()
   }
@@ -695,12 +745,13 @@ export class GmailConnectorProvider {
   async #synchronize(maxPagesPerStream: number, requireComplete: boolean): Promise<void> {
     if (!this.#index) return
     if (this.#syncPromise) return this.#syncPromise
-    this.#syncPromise = (async () => {
+    return this.#runSync('full', async (signal) => {
       const startedAt = new Date().toISOString()
       const runId = `${startedAt}:${randomUUID()}`
       this.#index!.beginSync(startedAt)
       try {
         const accounts = await this.accounts()
+        signal.throwIfAborted()
         if (accounts.length === 0) throw new Error('Cannot synchronize Gmail: no connector accounts are available')
         this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
@@ -715,6 +766,7 @@ export class GmailConnectorProvider {
             const streamIds: string[] = []
             for (let pageNumber = 0; pageNumber < maxPagesPerStream; pageNumber += 1) {
               const page = await this.#searchPage(account, 50, stream.query, stream.labelIds, token)
+              signal.throwIfAborted()
               this.#syncProgress.pagesFetched += 1
               this.#syncProgress.fetchedMessages += page.messages.length
               messages.push(...page.messages)
@@ -734,6 +786,7 @@ export class GmailConnectorProvider {
             }
           }
           this.#index!.replaceAccount(account.id, mergeIndexedMessages(messages), runId, complete)
+          this.#mailRevision++
           for (const stream of completeStreams) this.#index!.reconcileStream(account.id, stream.flag, stream.ids, runId)
           completion.push(complete)
           this.#syncProgress.accountsCompleted += 1
@@ -743,11 +796,9 @@ export class GmailConnectorProvider {
         this.#local.pruneAccounts(accounts.map((account) => account.id))
         this.#index!.completeSync(new Date().toISOString(), completion.every(Boolean))
       } catch (error) {
-        this.#index!.failSync(error instanceof Error ? error.message : String(error))
         throw error
       }
-    })().finally(() => { this.#syncPromise = undefined })
-    return this.#syncPromise
+    })
   }
 
   async readMessage(accountId: string, messageId: string): Promise<MessageProjection> {
@@ -1222,7 +1273,8 @@ export class GmailConnectorProvider {
     // A slow scan must not hold up a save. Lanes share account backoff.
     const lane = `${linkId}:${path.includes('search') ? 'sync' : /create|update|modify|archive|delete|discard|send/.test(path) ? 'write' : `${path}:${JSON.stringify(bodyValue)}`}`
     const previous = this.#connectorFlights.get(lane)
-    const flight = (async () => { await previous?.catch(() => undefined); return this.#postNow(path, bodyValue) })()
+    const signal = this.#syncContext.getStore()
+    const flight = (async () => { await previous?.catch(() => undefined); signal?.throwIfAborted(); return this.#postNow(path, bodyValue) })()
     this.#connectorFlights.set(lane, flight)
     try { return await flight } finally { if (this.#connectorFlights.get(lane) === flight) this.#connectorFlights.delete(lane) }
   }
@@ -1232,7 +1284,7 @@ export class GmailConnectorProvider {
     const retryAt = Math.max(this.#gmailBackoff.get(linkId) ?? 0, this.#local.retryAfter(linkId))
     if (retryAt > Date.now()) throw Object.assign(new Error(`Gmail is temporarily unavailable. Retry after ${new Date(retryAt).toISOString()}`), { code: 'gmail_backoff' })
     const response = await fetch(`${this.#agentBase}${path}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue), signal: AbortSignal.timeout(30_000),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue), signal: this.#syncContext.getStore() ? AbortSignal.any([this.#syncContext.getStore()!, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     })
     const value = await response.json() as unknown
     if (response.status === 429 || /RATE_LIMITED|rateLimitExceeded|HTTP status: 429/.test(JSON.stringify(value))) {
