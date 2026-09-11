@@ -74,6 +74,8 @@ button { cursor: pointer; }
 .dispatch-reader > [data-reader].dispatch-drafting { grid-template-rows: auto minmax(140px, .55fr) minmax(300px, 1fr); }
 .dispatch-reader > [data-reader].dispatch-composing { grid-template-rows: auto minmax(0, 1fr); }
 .dispatch-reader > [data-reader].dispatch-composing .dispatch-draft { grid-row: 2; }
+.dispatch-reader > [data-reader].dispatch-drafting.dispatch-draft-collapsed { grid-template-rows: auto minmax(0, 1fr) auto; }
+.dispatch-reader > [data-reader].dispatch-composing.dispatch-draft-collapsed { grid-template-rows: auto auto minmax(0, 1fr); }
 .dispatch-reader-empty { height: 100%; display: grid; align-content: center; }
 .dispatch-reader-header { display: flex; flex-direction: column; gap: .35rem; padding: .75rem 1.25rem .6rem; border-bottom: 1px solid var(--tblr-border-color); background: var(--tblr-bg-surface); }
 .dispatch-reader-toolbar { display: flex; align-items: center; gap: .4rem; }

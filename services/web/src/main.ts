@@ -104,7 +104,7 @@ app.innerHTML = `
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="card-body dispatch-draft" data-draft hidden>
-            <div class="card"><div class="card-header"><div><span class="badge bg-blue-lt text-blue me-2">Draft</span><strong>Reply preview</strong></div><span class="text-secondary small">Send asks for confirm</span></div><div class="card-body">
+            <div class="card"><div class="card-header"><div><strong>Unsent draft</strong><span class="text-secondary small ms-2">Not sent</span></div><button type="button" class="btn btn-sm btn-ghost-secondary" data-collapse-draft aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-chevron-down me-1" aria-hidden="true"></i>Collapse draft</button></div><div id="dispatch-draft-content" data-draft-content><div class="card-body">
             <label class="form-label">From<select class="form-select mt-1" data-draft-account aria-label="Draft account"></select></label>
             <label class="form-label">To<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-to aria-label="Draft recipient" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Recipient suggestions"></ul></div></label>
             <div class="row g-3 mt-0"><label class="col form-label">Cc<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-cc aria-label="Draft Cc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Cc suggestions"></ul></div></label><label class="col form-label">Bcc<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-bcc aria-label="Draft Bcc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Bcc suggestions"></ul></div></label></div>
@@ -120,6 +120,7 @@ app.innerHTML = `
               <button class="btn btn-primary" type="button" data-send-confirm-go>Send now</button>
             </div>
             </div><footer class="card-footer d-flex flex-wrap gap-2"><button class="btn btn-outline-danger" type="button" data-discard-draft>Discard</button><button class="btn btn-outline-secondary" type="button" data-attach-draft>Attach</button><input type="file" data-draft-files multiple hidden><button class="btn btn-outline-secondary" type="button" data-save-draft>Save draft</button><button class="btn btn-outline-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-primary ms-auto" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send draft</button></footer></div>
+            </div>
           </section>
         </div>
       </main>
@@ -1522,7 +1523,20 @@ function replyQuoteMarkdown(message: MessageProjection): string {
   return `\n\n> ${content.split(/\r?\n/).join('\n> ')}`
 }
 
+function setDraftCollapsed(collapsed: boolean): void {
+  app.querySelector<HTMLElement>('[data-draft-content]')!.hidden = collapsed
+  elements.reader.classList.toggle('dispatch-draft-collapsed', collapsed)
+  const button = app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!
+  button.setAttribute('aria-expanded', String(!collapsed))
+  button.innerHTML = `<i class="ti ti-chevron-${collapsed ? 'up' : 'down'} me-1" aria-hidden="true"></i>${collapsed ? 'Expand' : 'Collapse'} draft`
+}
+app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!.addEventListener('click', () => {
+  setDraftCollapsed(!app.querySelector<HTMLElement>('[data-draft-content]')!.hidden)
+})
+
 function showDraft(draft: DraftProjection, accountMutable: boolean): void {
+  const sameDraft = Boolean(activeDraft && activeDraft.id === draft.id && activeDraft.accountId === draft.accountId && activeDraft.inReplyToMessageId === draft.inReplyToMessageId)
+  if (!sameDraft) setDraftCollapsed(false)
   if (!draft.id || activeDraft?.id !== draft.id || activeDraft?.accountId !== draft.accountId) recoveryKey = undefined
   if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
   if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)

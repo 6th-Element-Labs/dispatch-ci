@@ -1232,6 +1232,23 @@ for (const editing of [false, true]) test(`new reply refreshes the open thread a
   }
 })
 
+test('collapses an unsent draft without losing edits and gives space back to the email', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply', exact: true }).click()
+  const body = page.getByRole('textbox', { name: 'Draft body' })
+  await body.fill('Keep these unsent words')
+  const before = await page.locator('[data-body]').boundingBox()
+  await page.getByRole('button', { name: 'Collapse draft', exact: true }).click()
+  await expect(page.getByText('Unsent draft', { exact: true })).toBeVisible()
+  await expect(page.getByText('Not sent', { exact: true })).toBeVisible()
+  await expect(body).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Send draft', exact: true })).toBeHidden()
+  expect((await page.locator('[data-body]').boundingBox())!.height).toBeGreaterThan(before!.height)
+  const expand = page.getByRole('button', { name: 'Expand draft', exact: true })
+  await expand.focus(); await page.keyboard.press('Enter')
+  await expect(body).toHaveValue('Keep these unsent words')
+})
+
 test('derives an immediate unread view from the cached All inbox', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
