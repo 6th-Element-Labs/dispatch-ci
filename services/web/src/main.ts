@@ -938,7 +938,7 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
   } catch (error) { addAgentMessage('error', error instanceof Error ? error.message : String(error)) }
 }
 
-async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean } = {}): Promise<void> {
+async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean; refresh?: boolean } = {}): Promise<void> {
   markReadDwell.cancel()
   const matchResult = searchView?.results.find(result => result.conversation.id === id)
   const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
@@ -950,9 +950,12 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     scheduleDraftSync(0)
   }
   const sequence = ++selectionSequence
-  selectCodexContext(conversationBindingKey({ ...summary, source: summary.accountId ? 'gmail' : summary.id.startsWith('demo:') ? 'demo' : undefined }))
-  selectedAttachmentContext = undefined
-  codexContextReady = false
+  const keepCodex = options.refresh && id === selectedConversationId && codexContextReady
+  if (!keepCodex) {
+    selectCodexContext(conversationBindingKey({ ...summary, source: summary.accountId ? 'gmail' : summary.id.startsWith('demo:') ? 'demo' : undefined }))
+    selectedAttachmentContext = undefined
+    codexContextReady = false
+  }
   if (sequence !== selectionSequence) return
   if (options.revealOnMobile && usesMobilePanels()) {
     mobilePanel = 'reader'
@@ -1093,6 +1096,7 @@ const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(
     }
     if (!offlineMode && conversation.availability?.mode !== 'downloaded') void warmAttachments(conversation, sequence)
     prefetchConversations(id)
+    if (keepCodex) return
     try {
       const key = conversationBindingKey({ accountId: conversation.accountId, threadId: conversation.threadId, source: conversation.source })
       if (bindingCacheKey(key) !== bindingCacheKey(desiredCodexKey)) selectCodexContext(key)
@@ -2680,6 +2684,11 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   try {
     const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery, mailbox, offlineMode)
     if (loadSequence !== conversationLoadSequence) return
+    const previous = new Map(conversations.map(conversation => [conversation.id, conversation]))
+    for (const conversation of result.conversations) {
+      const old = previous.get(conversation.id)
+      if (old && old.latestMessageId !== conversation.latestMessageId) dropConversationCache(conversation.id)
+    }
     conversations = applyAcceptedReadState(result.conversations).filter(c => !pendingMailboxRemovals.has(`${mailbox}:${c.id}`))
     syncSelectedReadState()
     noteArrivals()
@@ -2697,6 +2706,12 @@ async function loadConversations(preserveSelection = false): Promise<void> {
         : `${!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected'} · ${refreshedLabel}`
     if (result.sync && result.coverage !== 'downloaded') elements.mailSource.textContent = result.sync.state === 'ready' ? `Gmail synced · ${syncTime(result.sync.completedAt)}` : result.sync.state === 'failed' ? 'Waiting for Gmail' : 'Syncing Gmail'
     renderList()
+    const currentSummary = conversations.find(conversation => conversation.id === selectedConversationId)
+    if (!activeDraft && !offlineMode && currentSummary && selectedSummary && currentSummary.latestMessageId !== selectedSummary.latestMessageId) {
+      dropConversationCache(currentSummary.id)
+      await selectConversation(currentSummary.id, { refresh: true })
+      return
+    }
     if (mailbox === 'drafts' && !activeDraft && selectedConversationId && !conversations.some(item => item.id === selectedConversationId)) {
       selected = undefined; selectedSummary = undefined; selectedConversationId = undefined
       if (conversations[0]) { await selectConversation(conversations[0].id); return }

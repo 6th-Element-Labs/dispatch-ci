@@ -1207,6 +1207,31 @@ test('new mail appears when one account refreshes even if another account is rat
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
 })
 
+for (const editing of [false, true]) test(`new reply refreshes the open thread and preserves draft edits: ${editing}`, async ({ page }) => {
+  let updated = false
+  let refreshed = false
+  await stubAgent(page)
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', name: 'Test', email: 'test@example.com', connectorId: 'gmail' }] } }))
+  await page.route(/8411\/v1\/conversations\?/, route => { refreshed ||= updated; return route.fulfill({ json: { source: 'demo', conversations: updated ? [{ ...conversations[0]!, latestMessageId: 'jacob', messageCount: 2 }, conversations[1]!] : conversations } }) })
+  await page.route(/8411\/v1\/conversations\/t1(?:\?|$)/, route => route.fulfill({ json: { conversation: { ...conversations[0]!, source: 'demo', messages: [{ ...messages[0]!, id: updated ? 'jacob' : 'm1', body: { kind: 'sanitized-html', content: updated ? '<p>Received thanks from Jacob!</p>' : '<p>Original message</p>' }, attachments: [] }] } } }))
+  await page.route('http://127.0.0.1:8411/v1/sync/status', route => route.fulfill({ json: { sync: { state: 'ready', completedAt: '2026-09-11T00:00:00Z', messageCount: 3, mailRevision: updated ? 2 : 1 } } }))
+  await page.goto('/')
+  await expect(page.getByText('Original message', { exact: true })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Keep this unsent prompt')
+  if (editing) {
+    await page.getByRole('button', { name: 'Reply', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Draft body' }).fill('Keep my draft edits')
+  }
+  updated = true
+  if (editing) {
+    await expect.poll(() => refreshed, { timeout: 8000 }).toBe(true)
+    await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Keep my draft edits')
+  } else {
+    await expect(page.getByText('Received thanks from Jacob!', { exact: true })).toBeVisible({ timeout: 8000 })
+    await expect(page.getByRole('textbox', { name: 'Ask Codex' })).toHaveValue('Keep this unsent prompt')
+  }
+})
+
 test('derives an immediate unread view from the cached All inbox', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
