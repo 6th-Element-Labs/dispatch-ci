@@ -1,6 +1,14 @@
 import { expect, it } from 'vitest'
 import { TaskActivity } from '../src/task-activity.js'
 
+it('marks disconnected work interrupted instead of blocking service updates forever', () => {
+  const activity = new TaskActivity()
+  activity.accept({ method: 'turn/started', params: { threadId: 'a', turn: { id: 'turn-a' } } })
+  activity.disconnected()
+  expect(activity.tasks.get('a')).toMatchObject({ status: 'Interrupted', requests: [] })
+  expect(activity.tasks.get('a')?.turnId).toBeUndefined()
+})
+
 it('retains independent running turns and approvals without a UI subscriber', () => {
   const activity = new TaskActivity()
   activity.accept({ method: 'turn/started', params: { threadId: 'a', turn: { id: 'turn-a' } } })

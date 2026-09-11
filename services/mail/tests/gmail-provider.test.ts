@@ -770,6 +770,7 @@ describe('live drafts', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: ':memory:' })
     await provider.syncNow()
+    await provider.refreshDrafts(undefined, true)
     const drafts = await provider.listMailboxConversations!('drafts', 'all')
     expect(drafts.map((conversation) => [conversation.latestMessageId, conversation.subject])).toEqual([['fresh-draft-msg', 'Materials for Chris']])
     expect(reads).toEqual(['fresh-draft-msg'])
@@ -777,6 +778,7 @@ describe('live drafts', () => {
     expect(reads).toEqual(['fresh-draft-msg'])
     expect((await provider.listMailboxConversations!('inbox', 'all')).map((conversation) => conversation.latestMessageId)).toEqual(['in-1'])
     live = []
+    await provider.refreshDrafts(undefined, true)
     expect(await provider.listMailboxConversations!('drafts', 'all')).toEqual([])
   })
 })

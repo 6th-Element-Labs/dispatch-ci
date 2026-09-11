@@ -60,6 +60,20 @@ async function startWithBindings() {
 }
 
 describe('dispatch-agent', () => {
+  it('refuses an update while Codex works and stops admitting work once idle drain succeeds', async () => {
+    const { base, fake } = await start()
+    const emit = fake.subscribe.mock.calls[0]![0]
+    const control = { method: 'POST', headers: { 'x-dispatch-runtime': 'development' } }
+    expect((await fetch(`${base}/v1/runtime/drain`, { method: 'POST' })).status).toBe(403)
+    emit({ method: 'turn/started', params: { threadId: 'background', turn: { id: 'turn-1' } } })
+    expect((await fetch(`${base}/v1/runtime/drain`, control)).status).toBe(409)
+    expect(await (await fetch(`${base}/v1/runtime`)).json()).toMatchObject({ activeOperations: 1, draining: false })
+    emit({ method: 'turn/completed', params: { threadId: 'background', turn: { id: 'turn-1', status: 'completed' } } })
+    expect((await fetch(`${base}/v1/runtime/drain`, control)).status).toBe(200)
+    expect((await fetch(`${base}/v1/threads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(503)
+    expect((await fetch(`${base}/v1/runtime/resume`, control)).status).toBe(200)
+    expect((await fetch(`${base}/v1/threads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(201)
+  })
   it('reports the real harness boundary', async () => {
     const { base } = await start()
     const health = await (await fetch(`${base}/health`)).json()

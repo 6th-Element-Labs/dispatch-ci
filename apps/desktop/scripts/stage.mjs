@@ -1,6 +1,7 @@
 // Builds the Dispatch services and copies their compiled output into the Tauri
 // resources directory. Fails loudly if any build or expected file is missing.
-import { copyFileSync, cpSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, readFileSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -33,6 +34,17 @@ if (!servicesOnly && !existsSync(join(repo, 'services', 'web', 'dist', 'index.ht
   process.exit(1)
 }
 console.log(`stage: services staged under ${resources}`)
+const hash = createHash('sha256').update(readFileSync(join(desktop, 'node-sidecar.json')))
+function hashRuntime(directory, prefix = '') {
+  for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.name === 'node_modules' || entry.name === 'runtime-id') continue
+    const name = `${prefix}${entry.name}`
+    if (entry.isDirectory()) hashRuntime(join(directory, entry.name), `${name}/`)
+    else hash.update(name).update(readFileSync(join(directory, entry.name)))
+  }
+}
+hashRuntime(resources)
+writeFileSync(join(resources, 'runtime-id'), hash.digest('hex'))
 
 // A service's runtime npm dependencies must travel with its compiled code.
 // The lockfile is copied so the bundle installs exactly what CI tested.

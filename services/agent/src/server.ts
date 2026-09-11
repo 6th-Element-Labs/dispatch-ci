@@ -208,6 +208,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
   const activityClients = new Set<ServerResponse>()
   const publishActivity = () => { for (const client of activityClients) client.write(`data: ${JSON.stringify(activity.summary().filter(task => !serviceThreadIds.has(task.threadId)))}\n\n`) }
   runtime.subscribe((message) => {
+    if (message.method === 'dispatch/appServerDisconnected') { activity.disconnected(); publishActivity() }
     if (activity.accept(message)) publishActivity()
     const sent = completedGmailSend(message)
     if (sent) void fetch(`${options.mailBase ?? `http://127.0.0.1:${process.env.DISPATCH_MAIL_PORT ?? '8411'}`}/v1/send-receipts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sent), signal: AbortSignal.timeout(5000) }).then(response => { if (!response.ok) throw new Error(`Receipt persistence returned ${response.status}`) }).catch(error => console.error('Send receipt could not be recorded:', error))
@@ -250,9 +251,26 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     return thread
   }
 
+  let activeRequests = 0
+  let draining = false
+  const activeOperations = () => Math.max(activeRequests, activity.summary().filter(task => ['Working', 'Needs attention'].includes(task.status)).length)
   return createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return json(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    if (request.method === 'POST' && url.pathname.startsWith('/v1/runtime/') && request.headers['x-dispatch-runtime'] !== (process.env.DISPATCH_RUNTIME_ID ?? 'development')) return json(response, 403, { error: 'runtime_control_identity_required' })
+    if (request.method === 'POST' && url.pathname === '/v1/runtime/drain') {
+      const count = activeOperations()
+      if (count === 0) draining = true
+      return json(response, count ? 409 : 200, { service: 'dispatch-agent', draining, activeOperations: count })
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/runtime/resume') { draining = false; return json(response, 200, { service: 'dispatch-agent', draining }) }
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method ?? '')) {
+      if (draining) return json(response, 503, { error: 'runtime_updating', detail: 'Dispatch is updating its services. Try again shortly.' })
+      activeRequests++
+      let done = false
+      const finish = () => { if (!done) { done = true; activeRequests-- } }
+      response.once('finish', finish); response.once('close', finish)
+    }
     if (url.pathname === '/mcp/dispatch-mail') {
       try { await handleDispatchMailMcp(request, response, options.mailBase) }
       catch (error) { if (!response.headersSent) json(response, 500, { error: 'dispatch_mail_tool_failed', detail: errorMessage(error) }) }
@@ -262,10 +280,14 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     if (request.method === 'GET' && url.pathname === '/health') {
       return json(response, 200, {
         service: 'dispatch-agent',
+        runtimeId: process.env.DISPATCH_RUNTIME_ID ?? null,
         status: 'healthy',
         appServerError: runtime.lastError(),
         appServerWarning: runtime.lastWarning?.() ?? null,
       })
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/runtime') {
+      return json(response, 200, { service: 'dispatch-agent', runtimeId: process.env.DISPATCH_RUNTIME_ID ?? null, activeOperations: activeOperations(), draining })
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
       try {

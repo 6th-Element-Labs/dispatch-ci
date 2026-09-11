@@ -7,10 +7,10 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Runtime, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -18,6 +18,7 @@ pub const SIDECAR: &str = "node";
 pub const BROWSER_ORIGIN: &str = "http://127.0.0.1:8410";
 pub const NATIVE_ORIGIN: &str = "tauri://localhost";
 const EXTRA_PATH: &str = "/opt/homebrew/bin:/usr/local/bin";
+pub fn persistent() -> bool { cfg!(target_os = "macos") && !tauri::is_dev() }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Service {
@@ -100,11 +101,13 @@ pub struct Supervisor {
     logs: PathBuf,
     codex: Option<PathBuf>,
     children: Mutex<Vec<(Service, CommandChild)>>,
+    alive: Arc<AtomicBool>,
+    maintenance: Arc<Mutex<()>>,
 }
 
 impl Supervisor {
     pub fn new(resources: PathBuf, logs: PathBuf, codex: Option<PathBuf>) -> Self {
-        Self { resources, logs, codex, children: Mutex::new(Vec::new()) }
+        Self { resources, logs, codex, children: Mutex::new(Vec::new()), alive: Arc::new(AtomicBool::new(true)), maintenance: Arc::new(Mutex::new(())) }
     }
 
     pub fn scripts(&self) -> Vec<PathBuf> {
@@ -116,6 +119,28 @@ impl Supervisor {
     }
 
     pub fn start<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
+        if persistent() {
+            let home = app.path().home_dir().map_err(|e| e.to_string())?;
+            let _guard = self.maintenance.lock().map_err(|e| e.to_string())?;
+            let current = crate::background::start(&self.resources, &home, &self.logs, self.codex.as_deref())?;
+            if !current {
+                self.append(Service::Agent, "dispatch: runtime update waiting for active work");
+                let (resources, logs, codex, alive, maintenance) = (self.resources.clone(), self.logs.clone(), self.codex.clone(), self.alive.clone(), self.maintenance.clone());
+                std::thread::spawn(move || {
+                    while alive.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_secs(5));
+                        if !alive.load(Ordering::Relaxed) { break; }
+                        let Ok(_guard) = maintenance.lock() else { break; };
+                        match crate::background::start(&resources, &home, &logs, codex.as_deref()) {
+                            Ok(true) => break,
+                            Ok(false) => continue,
+                            Err(error) => { eprintln!("Dispatch background update: {error}"); break; }
+                        }
+                    }
+                });
+            }
+            return Ok(());
+        }
         std::fs::create_dir_all(&self.logs)
             .map_err(|error| format!("Could not create {}: {error}", self.logs.display()))?;
         let inherited_path = std::env::var("PATH").unwrap_or_default();
@@ -142,6 +167,8 @@ impl Supervisor {
 
     /// SIGTERM every child, wait up to three seconds, then SIGKILL survivors.
     pub fn stop(&self) {
+        self.alive.store(false, Ordering::Relaxed);
+        if persistent() { return; }
         let Ok(mut children) = self.children.lock() else { return };
         let taken: Vec<(Service, CommandChild)> = children.drain(..).collect();
         for (_, child) in &taken {
@@ -162,6 +189,11 @@ impl Supervisor {
     }
 
     pub fn restart<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
+        if persistent() {
+            let _guard = self.maintenance.lock().map_err(|e| e.to_string())?;
+            let home = app.path().home_dir().map_err(|e| e.to_string())?;
+            return crate::background::restart(&self.resources, &home, &self.logs, self.codex.as_deref());
+        }
         self.stop();
         self.start(app)
     }

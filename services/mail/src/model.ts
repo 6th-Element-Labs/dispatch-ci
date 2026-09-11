@@ -51,6 +51,7 @@ export interface DraftAttachment {
 }
 
 export interface DraftProjection {
+  readonly cachedAt?: string
   readonly gmailThreadId?: string
   readonly gmailMessageId?: string
   readonly id: string

@@ -90,6 +90,8 @@ Results stay in the message list during background sync. Each row shows a highli
 
 ## Everyday reliability
 
+Drafts lists are served immediately from the mail index and reconciled with Gmail in the background. Previously saved or opened drafts have a durable mail-owned body cache, so reopening them does not wait for Gmail. Cached editors check for changes asynchronously; that refresh cannot overwrite edits made after opening. A confirmed remote deletion removes an untouched cached editor. Navigation checkpoints unsaved edits locally and leaves remote saves running independently.
+
 Archive, Trash, Spam, Move to Inbox, and read-state commands are committed to the mail owner's SQLite queue with their local state changes before the API accepts them. The UI selects the next row and leaves actions available. Commands replay in order per account after connection failures or restart. Partial provider snapshots cannot undo pending changes. Pending synchronization is shown quietly in Mail activity; local acceptance is not a provider acknowledgement. Sends are never automatically replayed.
 
 Provider Retry-After is shared across the mail service's bounded request lanes and persisted across restart. Mailbox scans cannot block interactive draft saves, and list reads do not start repeated failed scans. Every folder refreshes after synchronization recovers. Draft errors use plain language; local drafts say they are waiting to sync until Gmail confirms the save. Forward opens the same local editor immediately, like Reply.
@@ -111,6 +113,8 @@ Opening an HTTP or HTTPS link keeps the mail view, selected conversation, draft 
 The main native webview also rejects external navigation and new-window requests, so target=_blank and navigation outside the normal click handler cannot replace mail. Remote pages have no Dispatch capability. The toolbar is a separate local webview; it is never injected into website content. Mailto links open through the system handler.
 
 ## Reply responsiveness
+
+On macOS, Quit closes the interface while per-user background services continue Codex work and accepted mail operations. Reopening attaches to those same services. Versioned runtime files keep work valid when Dispatch.app is replaced. Updates drain new operations and wait for existing tasks before restarting; manual Restart Services also refuses to interrupt active work. These services run in the logged-in user session, not in the cloud.
 
 Reply and Reply All open an editable local draft from the already-loaded conversation immediately. Gmail persistence runs in the background, with local recovery kept until the matching save is confirmed. Typing during creation stays in the editor and is saved afterward. Switching conversations does not let a late create response replace the selected thread; recovery learns the saved Gmail draft identity. Repeated clicks while the first create is pending do not create duplicate drafts.
 

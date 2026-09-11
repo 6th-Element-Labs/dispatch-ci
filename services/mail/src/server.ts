@@ -117,6 +117,9 @@ export function createMailServer(
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 3_000
   const attachmentCacheDir = options.attachmentCacheDir ?? defaultAttachmentCacheDir()
   const openPath = options.openPath ?? defaultOpenPath
+  let activeMutations = 0
+  let draining = false
+  const activeOperations = () => Math.max(activeMutations, (gmail as Partial<GmailConnectorProvider>).runtimeStatus?.().activeOperations ?? 0)
 
   async function attachmentPayload(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<unknown> {
     if (accountId && gmail.readAttachment) {
@@ -134,9 +137,26 @@ export function createMailServer(
   const server = createServer(async (request, response) => {
     if (request.method === 'OPTIONS') return writeJson(response, 204, {})
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    if (request.method === 'POST' && url.pathname.startsWith('/v1/runtime/') && request.headers['x-dispatch-runtime'] !== (process.env.DISPATCH_RUNTIME_ID ?? 'development')) return writeJson(response, 403, { error: 'runtime_control_identity_required' })
+    if (request.method === 'POST' && url.pathname === '/v1/runtime/drain') {
+      const count = activeOperations()
+      if (count === 0) draining = true
+      return writeJson(response, count ? 409 : 200, { service: 'dispatch-mail', draining, activeOperations: count })
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/runtime/resume') { draining = false; return writeJson(response, 200, { service: 'dispatch-mail', draining }) }
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method ?? '')) {
+      if (draining) return writeJson(response, 503, { error: 'runtime_updating', detail: 'Dispatch is updating its services. Try again shortly.' })
+      activeMutations++
+      let done = false
+      const finish = () => { if (!done) { done = true; activeMutations-- } }
+      response.once('finish', finish); response.once('close', finish)
+    }
 
     if (request.method === 'GET' && url.pathname === '/health') {
-      return writeJson(response, 200, { service: 'dispatch-mail', status: 'healthy' })
+      return writeJson(response, 200, { service: 'dispatch-mail', status: 'healthy', runtimeId: process.env.DISPATCH_RUNTIME_ID ?? null })
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/runtime') {
+      return writeJson(response, 200, { service: 'dispatch-mail', runtimeId: process.env.DISPATCH_RUNTIME_ID ?? null, activeOperations: activeOperations(), draining })
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
       if (demoEnabled) return writeJson(response, 200, { service: 'dispatch-mail', status: 'ready', provider: 'demo' })
@@ -202,7 +222,8 @@ export function createMailServer(
         return writeJson(response, 200, { source: 'gmail', coverage: 'downloaded', conversations: page, total: all.length, nextCursor: cursorValue + page.length < all.length ? String(cursorValue + page.length) : null })
       }
       try {
-        const accounts = await gmail.accounts()
+        const cached = gmail.cachedAccounts?.() ?? []
+        const accounts = cached.length ? cached : await gmail.accounts()
         if (accounts.length > 0) {
           const conversations = gmail.listMailboxConversations
             ? await gmail.listMailboxConversations(mailbox, state, accountId ?? undefined, query)
@@ -303,7 +324,8 @@ export function createMailServer(
     if (request.method === 'GET' && url.pathname === '/v1/accounts') {
       if (url.searchParams.get('offline') === 'true' && gmail.cachedAccounts) return writeJson(response, 200, { accounts: gmail.cachedAccounts() })
       try {
-        return writeJson(response, 200, { accounts: await gmail.accounts() })
+        const cached = gmail.cachedAccounts?.() ?? []
+        return writeJson(response, 200, { accounts: cached.length ? cached : await gmail.accounts() })
       } catch (error) {
         return writeJson(response, 502, { error: 'gmail_accounts_failed', detail: error instanceof Error ? error.message : String(error) })
       }

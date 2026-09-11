@@ -335,6 +335,11 @@ export class GmailConnectorProvider {
   readonly #draftCreates = new Map<string, Promise<DraftProjection>>()
   readonly #gmailBackoff = new Map<string, number>()
   readonly #connectorFlights = new Map<string, Promise<unknown>>()
+  readonly #draftRefreshFlights = new Map<string, Promise<void>>()
+  readonly #draftRefreshAt = new Map<string, number>()
+  #draftsRevision = Date.now()
+  #draftCacheSequence = 0
+  readonly #draftCacheRequests = new Map<string, number>()
   #actionFlight: Promise<void> | undefined
   #actionTimer: ReturnType<typeof setInterval> | undefined
   #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
@@ -384,7 +389,8 @@ export class GmailConnectorProvider {
   }
 
   syncStatus(): (GmailSyncStatus & Partial<GmailSyncProgress>) | undefined {
-    const status = this.#index?.status()
+    const indexedStatus = this.#index?.status()
+    const status = indexedStatus ? { ...indexedStatus, draftsRevision: this.#draftsRevision } : undefined
     const pending = this.#index?.pendingActions() ?? []
     if (status && pending.length) return { ...status, ...this.#syncProgress, state: 'partial', error: pending.find(job => job.error)?.error ?? `${pending.length} mail changes waiting to sync` }
     return status ? { ...status, ...this.#syncProgress } : undefined
@@ -438,6 +444,7 @@ export class GmailConnectorProvider {
   }
 
   cachedAccounts(): readonly GmailAccountProjection[] { return this.#index?.accounts() ?? [] }
+  runtimeStatus(): { activeOperations: number } { return { activeOperations: this.#sendFlights.size + this.#draftCreates.size } }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
     try {
@@ -514,7 +521,7 @@ export class GmailConnectorProvider {
   async listMailboxConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): Promise<readonly ConversationSummary[]> {
     if (!this.#index) throw new Error('Durable Gmail index is required for mailbox lists')
     await this.#ensureIndex()
-    if (mailbox === 'drafts') await this.#syncLiveDrafts(accountId)
+    if (mailbox === 'drafts') void this.refreshDrafts(accountId).catch(error => { if (!this.#stopped) this.#index?.failSync(String(error)) })
     return query
       ? this.#index.searchMailboxConversations(mailbox, query, state, accountId)
       : this.#index.mailboxConversations(mailbox, state, accountId)
@@ -532,14 +539,17 @@ export class GmailConnectorProvider {
     if (!index) return
     const accounts = (await this.accounts()).filter((account) => !accountId || account.id === accountId)
     await Promise.all(accounts.map(async (account) => {
+      const requestedAt = new Date().toISOString()
       let summaries: GmailDraftSummary[]
       try {
         summaries = await this.#listGmailDrafts(account.id)
       } catch (error) {
+        if (this.#stopped) return
         index.failSync(String(error))
         process.stderr.write(`dispatch-mail: live drafts unavailable for ${account.email || account.name}: ${error instanceof Error ? error.message : String(error)}\n`)
         return
       }
+      if (this.#stopped) return
       const indexed = new Map(index.messages(account.id).map((message) => [message.id, message]))
       const rows: IndexedGmailMessage[] = []
       for (const summary of summaries) {
@@ -560,9 +570,40 @@ export class GmailConnectorProvider {
         }
       }
       const runId = `drafts:${new Date().toISOString()}:${randomUUID()}`
+      if (this.#stopped) return
       index.replaceAccount(account.id, rows, runId, false)
       index.reconcileStream(account.id, 'drafts', summaries.map((row) => row.messageId), runId)
+      this.#local.pruneDrafts(account.id, summaries.map(row => row.draftId), requestedAt)
+      this.#draftsRevision = Math.max(Date.now(), this.#draftsRevision + 1)
     }))
+  }
+
+  /** Draft lists are local reads. Provider reconciliation runs once per scope. */
+  async refreshDrafts(accountId?: string, force = false): Promise<void> {
+    const key = accountId ?? '*'
+    const running = this.#draftRefreshFlights.get(key)
+    if (running) return running
+    if (!force && Date.now() - (this.#draftRefreshAt.get(key) ?? 0) < 15_000) return
+    this.#draftRefreshAt.set(key, Date.now())
+    const flight = this.#syncLiveDrafts(accountId).finally(() => { this.#draftRefreshFlights.delete(key) })
+    this.#draftRefreshFlights.set(key, flight)
+    return flight
+  }
+
+  #rememberDraft(draft: DraftProjection, write = false, request?: number): void {
+    if (!draft.accountId) return
+    const key = `${draft.accountId}:${draft.id}`
+    if (request !== undefined && this.#draftCacheRequests.get(key) !== request) return
+    if (write) this.#draftCacheRequests.set(key, ++this.#draftCacheSequence)
+    this.#drafts.set(`${draft.accountId}:${draft.id}`, draft)
+    this.#local.putDraft(draft)
+    if (write && this.#index && draft.gmailMessageId && draft.gmailThreadId) {
+      const account = this.#index.accounts().find(item => item.id === draft.accountId)
+      if (!account?.email) return
+      const date = received(new Date().toISOString(), { messageId: draft.gmailMessageId, account: draft.accountId })
+      this.#index.replaceAccount(draft.accountId, [{ id: draft.gmailMessageId, threadId: draft.gmailThreadId, accountId: draft.accountId, accountLabel: account?.email ?? draft.accountId, sender: sender(account?.email ?? ''), subject: draft.subject, receivedAt: date.iso, receivedLabel: date.label, receivedFullLabel: date.fullLabel, preview: draft.bodyText.slice(0,200), unread: false, inInbox: false, inSent: false, inDrafts: true, inArchive: false, inSpam: false, inTrash: false, hasAttachment: draft.attachments.length > 0 }], `draft-save:${Date.now()}`, false)
+      this.#draftsRevision = Math.max(Date.now(), this.#draftsRevision + 1)
+    }
   }
 
   async #listGmailDrafts(accountId: string): Promise<GmailDraftSummary[]> {
@@ -635,8 +676,7 @@ export class GmailConnectorProvider {
     if (!this.#index) return
     const status = this.#index.status()
     if (this.#index.count() === 0) {
-      await this.#synchronize(1, false)
-      this.#scheduleSync(0, true)
+      if (status.state === 'idle') this.#scheduleSync(0, true)
       return
     }
     // Reads must not continually restart a failed account scan. The background
@@ -890,7 +930,7 @@ export class GmailConnectorProvider {
       if (!id) throw new Error('Gmail did not return a draft ID')
       const returnedMessage = record(value.message)
       const saved = { ...draft, id, gmailMessageId: text(returnedMessage?.id) || text(value.message_id) || undefined, gmailThreadId: text(returnedMessage?.thread_id) || text(returnedMessage?.threadId) || text(value.thread_id) || undefined }
-      this.#drafts.set(`${accountId}:${id}`, saved)
+      this.#rememberDraft(saved, true)
       void this.#refreshIndexedDrafts(accountId)
       return saved
     } catch (error) {
@@ -900,17 +940,19 @@ export class GmailConnectorProvider {
 
   async updateGmailDraft(draft: DraftProjection): Promise<DraftProjection> {
     if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
-    const existing = this.#drafts.get(`${draft.accountId}:${draft.id}`)
+    const existing = this.#drafts.get(`${draft.accountId}:${draft.id}`) ?? this.#local.draft(draft.accountId, draft.id)
     const attachments = await this.#resolveDraftAttachments(draft.accountId, draft.attachments, existing?.attachments ?? [])
-    const saved = { ...draft, attachments }
+    let saved = { ...draft, cachedAt: undefined, gmailThreadId: draft.gmailThreadId ?? existing?.gmailThreadId, gmailMessageId: draft.gmailMessageId ?? existing?.gmailMessageId, attachments }
     try {
-      await this.#post('/v1/connectors/gmail/drafts/update', {
+      const result = structured(await this.#post('/v1/connectors/gmail/drafts/update', {
         linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '),
         cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject,
         bodyMarkdown: draft.bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: draft.bodyText,
         ...attachments.length > 0 ? { attachments: connectorAttachments(attachments) } : {},
-      })
-      this.#drafts.set(`${draft.accountId}:${draft.id}`, saved)
+      }))
+      const message = record(result.message)
+      saved = { ...saved, gmailMessageId: text(message?.id) || saved.gmailMessageId, gmailThreadId: text(message?.thread_id) || text(message?.threadId) || saved.gmailThreadId }
+      this.#rememberDraft(saved, true)
       void this.#refreshIndexedDrafts(draft.accountId)
       return saved
     } catch (error) {
@@ -958,15 +1000,20 @@ export class GmailConnectorProvider {
   }
 
   async readGmailDraft(accountId: string, draftId: string): Promise<DraftProjection> {
+    const key = `${accountId}:${draftId}`
+    const request = ++this.#draftCacheSequence
+    this.#draftCacheRequests.set(key, request)
     const summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId)
     if (!summary) {
+      if (this.#draftCacheRequests.get(key) !== request && this.#drafts.has(key)) return this.#drafts.get(key)!
+      this.#local.removeDraft(accountId, draftId)
       throw Object.assign(new Error(`Gmail draft ${draftId} was not found`), { code: 'gmail_draft_not_found' })
     }
     const message = await this.readMessage(accountId, summary.messageId)
     const existing = this.#drafts.get(`${accountId}:${draftId}`)
     const draft = this.#projectGmailDraft(summary, message, existing?.inReplyToMessageId ?? summary.messageId, accountId, existing)
-    this.#drafts.set(`${accountId}:${draftId}`, draft)
-    return draft
+    this.#rememberDraft(draft, false, request)
+    return this.#draftCacheRequests.get(key) === request ? draft : this.#drafts.get(key) ?? draft
   }
 
   /**
@@ -975,16 +1022,23 @@ export class GmailConnectorProvider {
    * matched by either.
    */
   async openGmailDraft(accountId: string, messageId: string, threadId = ''): Promise<DraftProjection> {
+    const cached = this.#local.draftForMessage(accountId, messageId, threadId)
+    if (cached) return cached
+    const request = ++this.#draftCacheSequence
     const summary = await this.#findGmailDraft(accountId, (draft) => draft.messageId === messageId || draft.threadId === messageId || (threadId !== '' && draft.threadId === threadId))
     if (!summary) {
+      const newer = this.#local.draftForMessage(accountId, messageId, threadId)
+      if (newer) return newer
       // Gmail has no such draft any more (sent or deleted); stop listing it.
       this.#index?.discardDraftMessages(accountId, [messageId])
       throw Object.assign(new Error('This draft no longer exists in Gmail. It was sent or deleted.'), { code: 'gmail_draft_not_found' })
     }
     const message = await this.readMessage(accountId, summary.messageId)
     const draft = this.#projectGmailDraft(summary, message, messageId, accountId)
-    this.#drafts.set(`${accountId}:${summary.draftId}`, draft)
-    return draft
+    const key = `${accountId}:${draft.id}`
+    if ((this.#draftCacheRequests.get(key) ?? 0) < request) this.#draftCacheRequests.set(key, request)
+    this.#rememberDraft(draft, false, request)
+    return this.#draftCacheRequests.get(key) === request ? draft : this.#drafts.get(key) ?? draft
   }
 
   async discardGmailDraft(accountId: string, draftId: string): Promise<void> {
@@ -1003,6 +1057,7 @@ export class GmailConnectorProvider {
         if (await this.#findGmailDraft(accountId, candidate => candidate.draftId === draftId)) throw new Error('The draft was moved to Trash but Gmail still lists it. Refresh before retrying.')
       }
       this.#drafts.delete(`${accountId}:${draftId}`)
+      this.#local.removeDraft(accountId, draftId)
       if (this.#index && summary) this.#index.discardDraftMessages(accountId, [summary.messageId])
       void this.#refreshIndexedDrafts(accountId)
     } catch (error) {
@@ -1078,6 +1133,7 @@ export class GmailConnectorProvider {
       const messageId = text(structured(result).id)
       if (record(result)?.isError || structured(result).error || !messageId) throw new Error('Gmail did not return a confirmed sent message ID.')
       receipt = { ...receipt, messageId, status: 'accepted', acceptedAt: new Date().toISOString() }
+      this.#local.removeDraft(accountId, draftId)
       if (!this.#stopped) {
         this.#local.putReceipt(receipt)
         void this.verifySendReceipt(receipt.id)
@@ -1093,7 +1149,7 @@ export class GmailConnectorProvider {
 
   async #refreshIndexedDrafts(accountId?: string): Promise<void> {
     try {
-      if (accountId) await this.#syncLiveDrafts(accountId)
+      if (accountId) await this.refreshDrafts(accountId, true)
       else await this.refreshNow()
     } catch {
       this.#scheduleSync(5_000)

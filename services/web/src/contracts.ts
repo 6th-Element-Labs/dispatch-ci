@@ -30,6 +30,7 @@ export interface MessageProjection extends MessageSummary {
 }
 
 export interface DraftProjection {
+  readonly cachedAt?: string
   readonly gmailThreadId?: string
   readonly gmailMessageId?: string
   readonly id: string
@@ -86,6 +87,7 @@ export type GmailMailbox = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 't
 export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface GmailSyncStatus {
+  readonly draftsRevision?: number
   readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'
   readonly startedAt: string | null
   readonly completedAt: string | null

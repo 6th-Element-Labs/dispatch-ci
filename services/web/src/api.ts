@@ -53,7 +53,7 @@ export const api = {
     const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
     return request(`${MAIL}/v1/messages${query}`)
   },
-  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string, mailbox: GmailMailbox = 'inbox', offline = false): Promise<{ source: 'demo' | 'gmail'; coverage?: 'indexed' | 'recent' | 'downloaded'; conversations: ConversationSummary[]; nextCursor: string | null; total: number }> {
+  async listConversations(state: MailStateFilter, accountId?: string, cursor?: string, search?: string, mailbox: GmailMailbox = 'inbox', offline = false): Promise<{ source: 'demo' | 'gmail'; coverage?: 'indexed' | 'recent' | 'downloaded'; conversations: ConversationSummary[]; nextCursor: string | null; total: number; sync?: GmailSyncStatus }> {
     const params = new URLSearchParams({ state, mailbox, limit: '100' })
     if (accountId) params.set('account', accountId)
     if (offline) params.set('offline', 'true')

@@ -1552,7 +1552,7 @@ test('a wide HTML email scrolls inside its card instead of being clipped', async
   expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1)
 })
 
-for (const saveOutcome of ['succeeds', 'fails'] as const) {
+for (const saveOutcome of ['succeeds', 'fails', 'pending'] as const) {
   test(`returning from a draft to the inbox keeps every row selectable when the autosave ${saveOutcome}`, async ({ page }) => {
     await page.unroute('http://127.0.0.1:8411/v1/accounts')
     await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
@@ -1570,8 +1570,10 @@ for (const saveOutcome of ['succeeds', 'fails'] as const) {
       await route.fulfill({ status: 201, json: { draft } })
     })
     let saves = 0
+    let pendingSave: import('@playwright/test').Route | undefined
     await page.route('http://127.0.0.1:8411/v1/drafts/draft-9', async (route) => {
       saves += 1
+      if (saveOutcome === 'pending') { pendingSave = route; return }
       if (saveOutcome === 'fails') return route.fulfill({ status: 502, json: { error: 'gmail_draft_update_failed', detail: 'connector refused' } })
       const fields = await route.request().postDataJSON() as Record<string, unknown>
       return route.fulfill({ json: { draft: { ...draft, bodyMarkdown: fields.bodyMarkdown, bodyText: fields.bodyText } } })
@@ -1582,6 +1584,7 @@ for (const saveOutcome of ['succeeds', 'fails'] as const) {
     const body = page.getByRole('textbox', { name: 'Draft body' })
     await expect(body).toHaveValue('Hi Ana')
     await body.fill('Hi Ana, edited')
+    if (saveOutcome === 'pending') await expect.poll(() => Boolean(pendingSave)).toBe(true)
     await page.getByRole('button', { name: 'Inbox', exact: true }).click()
     await page.locator('[data-conversation-id="demo:t2"]').click()
     await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible({ timeout: 5000 })
@@ -1589,11 +1592,28 @@ for (const saveOutcome of ['succeeds', 'fails'] as const) {
     await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
     await expect(page.locator('.dispatch-thread-body').first()).toContainText('Inbox body')
     await expect(page.getByRole('textbox', { name: 'Draft body' })).toBeHidden()
-    expect(saves).toBeGreaterThanOrEqual(1)
-    if (saveOutcome === 'fails') await expect(page.locator('[data-mail-error]')).toContainText('was not saved: Request failed (502)')
-    else await expect(page.locator('[data-mail-error]')).toBeHidden()
+    await expect.poll(() => saves).toBeGreaterThanOrEqual(1)
+    await expect(page.locator('[data-mail-error]')).toBeHidden()
+    if (saveOutcome !== 'succeeds') expect(await page.evaluate(() => localStorage.getItem('dispatch.editor-recovery.v1'))).toContain('Hi Ana, edited')
+    if (pendingSave) await pendingSave.fulfill({ status: 502, json: { error: 'gmail_draft_update_failed', detail: 'delayed provider failure' } })
   })
 }
+
+test('cached draft opens immediately and a late refresh cannot overwrite newer edits', async ({ page }) => {
+  const draft = { id: 'cached', accountId: 'one', gmailThreadId: 't1', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: 'Cached draft', bodyMarkdown: 'Stored content', bodyText: 'Stored content', bodyHtml: '<p>Stored content</p>', attachments: [], state: 'draft', cachedAt: '2026-09-11T00:00:00Z' }
+  await page.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'gmail', conversations: [{ ...conversations[0], accountId: 'one', subject: 'Cached draft' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts/open', route => route.fulfill({ json: { draft } }))
+  let refreshing: import('@playwright/test').Route | undefined
+  await page.route('http://127.0.0.1:8411/v1/drafts/cached?account=one', route => { refreshing = route })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await expect(page.getByLabel('Draft body')).toHaveValue('Stored content')
+  await expect(page.locator('[data-send-draft]')).toBeDisabled()
+  await expect.poll(() => Boolean(refreshing)).toBe(true)
+  await page.getByLabel('Draft body').fill('My newer edit')
+  await refreshing!.fulfill({ json: { draft: { ...draft, cachedAt: undefined, bodyMarkdown: 'Remote older version' } } })
+  await expect(page.getByLabel('Draft body')).toHaveValue('My newer edit')
+})
 
 test('renders inline code in Codex replies as readable inline text, not badges', async ({ page }) => {
   await page.goto('/')

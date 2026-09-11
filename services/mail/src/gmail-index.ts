@@ -62,6 +62,7 @@ export interface IndexedGmailAccount {
 }
 
 export interface GmailSyncStatus {
+  readonly draftsRevision?: number
   readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'
   readonly startedAt: string | null
   readonly completedAt: string | null

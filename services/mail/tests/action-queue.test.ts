@@ -25,6 +25,7 @@ it('indexes draft-list metadata without fetching a rotating MIME message id', as
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: path })
   try {
+    await provider.refreshDrafts(undefined, true)
     expect(await provider.listMailboxConversations('drafts', 'all')).toMatchObject([{ latestMessageId: 'new-message', subject: 'Current draft', hasAttachment: true }])
     expect(reads).toBe(0)
   } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(dir, { recursive: true, force: true }) }

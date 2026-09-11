@@ -4,6 +4,13 @@ import type { RpcMessage } from './json-line-rpc.js'
 export class TaskActivity {
   readonly tasks = new Map<string, { threadId: string; status: string; turnId?: string; requests: RpcMessage[] }>()
 
+  disconnected(): void {
+    for (const task of this.tasks.values()) {
+      if (!['Working', 'Needs attention'].includes(task.status)) continue
+      task.status = 'Interrupted'; task.turnId = undefined; task.requests = []
+    }
+  }
+
   accept(message: RpcMessage): boolean {
     const p = message.params as { threadId?: string; requestId?: string | number; turn?: { id?: string; status?: string } } | undefined
     if (message.method === 'serverRequest/resolved') return this.resolve(p?.requestId)
