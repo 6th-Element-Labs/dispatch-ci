@@ -60,7 +60,7 @@ export function draftArguments(payload: Record<string, unknown>): Record<string,
   const alternative = {
     mime_type: 'multipart/alternative',
     parts: [
-      { mime_type: 'text/plain', charset: 'UTF-8', body: { content: textBody } },
+      { mime_type: 'text/plain', charset: 'UTF-8', body: { content: textBody }, ...typeof payload.draftContentId === 'string' ? { content_id: payload.draftContentId } : {} },
       { mime_type: 'text/html', charset: 'UTF-8', body: { content: html } },
     ],
   }
@@ -70,7 +70,7 @@ export function draftArguments(payload: Record<string, unknown>): Record<string,
       mime_type: String(item.mime_type ?? item.mediaType ?? 'application/octet-stream'),
       filename: String(item.filename ?? item.name ?? 'attachment'),
       content_disposition: item.contentId ? 'inline' : 'attachment',
-      ...item.contentId ? { headers: [{ name: 'Content-ID', value: `<${String(item.contentId)}>` }] } : {},
+      ...item.contentId ? { content_id: String(item.contentId) } : {},
       body: { base64_url_content: base64Url(String(item.data ?? item.contentBase64 ?? '')) },
     }))
   const args: Record<string, unknown> = {

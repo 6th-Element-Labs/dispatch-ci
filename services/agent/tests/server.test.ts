@@ -4,7 +4,14 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CodexBindingStore, defaultCodexWorkspace } from '../src/codex-bindings.js'
-import { createAgentServer } from '../src/server.js'
+import { createAgentServer, draftArguments } from '../src/server.js'
+
+it('puts the stable draft marker on a MIME leaf accepted by Gmail', () => {
+  const args = draftArguments({ to: 'test@example.com', subject: 'Draft', bodyMarkdown: 'Body', bodyHtml: '<p>Body</p>', draftContentId: 'dispatch-key@draft.dispatch.local' })
+  const payload = args.payload as { content_id?: string; parts: { content_id?: string }[] }
+  expect(payload.content_id).toBeUndefined()
+  expect(payload.parts[0]?.content_id).toBe('dispatch-key@draft.dispatch.local')
+})
 
 const servers: ReturnType<typeof createAgentServer>[] = []
 

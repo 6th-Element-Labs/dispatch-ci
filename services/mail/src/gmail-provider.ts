@@ -213,6 +213,7 @@ function attachments(payload: UnknownRecord): readonly AttachmentProjection[] {
   return parts(payload).flatMap((part) => {
     const filename = text(part.filename)
     const contentId = partContentId(part)
+    if (!filename && text(part.mime_type) === 'text/plain' && /^dispatch-[a-zA-Z0-9-]+@draft\.dispatch\.local$/.test(contentId)) return []
     if (!filename && !contentId) return []
     const partBody = record(part.body)
     const size = typeof partBody?.size === 'number' ? partBody.size : 0
@@ -329,6 +330,8 @@ export class GmailConnectorProvider {
   #retryTimer: ReturnType<typeof setTimeout> | undefined
   #stopped = false
   readonly #drafts = new Map<string, DraftProjection>()
+  readonly #draftCreates = new Map<string, Promise<DraftProjection>>()
+  readonly #gmailBackoff = new Map<string, number>()
   #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
 
   constructor(
@@ -342,7 +345,7 @@ export class GmailConnectorProvider {
     this.#index = indexPath ? new GmailIndex(indexPath) : undefined
     this.#local = new LocalMailStore(options.localPath ?? (indexPath && indexPath !== ':memory:' ? `${indexPath}.local` : ':memory:'))
     this.#download = this.#local.download()
-    this.#syncIntervalMs = options.syncIntervalMs ?? 300_000
+    this.#syncIntervalMs = options.syncIntervalMs ?? 6 * 60 * 60 * 1000
     this.#refreshIntervalMs = options.refreshIntervalMs ?? 60_000
   }
 
@@ -350,8 +353,8 @@ export class GmailConnectorProvider {
     if (!this.#index || this.#syncTimer) return
     this.#stopped = false
     if (this.#index.count() > 0) void this.refreshNow().catch(() => this.#scheduleSync(5_000))
-    else this.#scheduleSync()
-    this.#syncTimer = setInterval(() => { this.#scheduleSync() }, this.#syncIntervalMs)
+    else this.#scheduleSync(0, true)
+    this.#syncTimer = setInterval(() => { this.#scheduleSync(0, true) }, this.#syncIntervalMs)
     this.#syncTimer.unref()
     this.#refreshTimer = setInterval(() => { void this.refreshNow().catch(() => undefined) }, this.#refreshIntervalMs)
     this.#refreshTimer.unref()
@@ -391,13 +394,16 @@ export class GmailConnectorProvider {
         if (accounts.length === 0) throw new Error('Cannot refresh Gmail: no connector accounts are available')
         this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
-        const pages = await Promise.all(accounts.map(async (account) => {
-          const streams = await Promise.all(INDEX_STREAMS.map(async (stream) => ({ stream, page: await this.#searchPage(account, 50, stream.query, stream.labelIds, '') })))
+        const pages = await Promise.allSettled(accounts.map(async (account) => {
+          const streams = []
+          for (const stream of INDEX_STREAMS) streams.push({ stream, page: await this.#searchPage(account, 50, stream.query, stream.labelIds, '') })
           this.#syncProgress.pagesFetched += streams.length
           this.#syncProgress.fetchedMessages += streams.reduce((count, item) => count + item.page.messages.length, 0)
           return { account, streams, messages: mergeIndexedMessages(streams.flatMap((item) => item.page.messages)) }
         }))
-        for (const page of pages) {
+        for (const result of pages) {
+          if (result.status !== 'fulfilled') continue
+          const page = result.value
           this.#syncProgress.currentAccount = page.account.name
           this.#index!.replaceAccount(page.account.id, page.messages, runId, false)
           for (const item of page.streams) {
@@ -408,6 +414,8 @@ export class GmailConnectorProvider {
         this.#syncProgress.currentAccount = null
         this.#index!.pruneAccounts(accounts.map((account) => account.id))
         this.#local.pruneAccounts(accounts.map((account) => account.id))
+        const failed = pages.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        if (failed.length) throw new Error(failed.map(result => String(result.reason)).join('; '))
         this.#index!.completeSync(new Date().toISOString(), true)
       } catch (error) {
         this.#index!.failSync(error instanceof Error ? error.message : String(error))
@@ -610,17 +618,17 @@ export class GmailConnectorProvider {
     const status = this.#index.status()
     if (this.#index.count() === 0) {
       await this.#synchronize(1, false)
-      this.#scheduleSync()
+      this.#scheduleSync(0, true)
       return
     }
     if (status.state === 'failed' || status.state === 'partial') this.#scheduleSync()
   }
 
-  #scheduleSync(delayMs = 0): void {
+  #scheduleSync(delayMs = 0, full = false): void {
     if (!this.#index || this.#retryTimer || this.#stopped) return
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = undefined
-      void this.syncNow().catch(() => this.#scheduleSync(5_000))
+      void (full ? this.syncNow() : this.refreshNow()).catch(() => this.#scheduleSync(60_000, full))
     }, delayMs)
     this.#retryTimer.unref()
   }
@@ -776,18 +784,65 @@ export class GmailConnectorProvider {
     this.#scheduleSync(1_000)
   }
 
-  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[] = []): Promise<DraftProjection> {
+  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[] = [], clientId?: string): Promise<DraftProjection> {
+    if (!clientId) return this.#createGmailDraft(accountId, messageId, to, cc, bcc, subject, bodyMarkdown, draftAttachments)
+    if (!/^[a-zA-Z0-9-]{1,100}$/.test(clientId)) throw new Error('Invalid draft save identity')
+    const key = `${accountId}:${clientId}`
+    while (this.#draftCreates.has(key)) await this.#draftCreates.get(key)!.catch(() => undefined)
+    const operation = (async () => {
+      const prior = this.#local.draftCreate(accountId, clientId)
+      let id = prior?.draftId
+      if (prior && !id) {
+        const candidates: GmailDraftSummary[] = []
+        await this.#findGmailDraft(accountId, draft => { candidates.push(draft); return false })
+        for (const candidate of candidates) {
+          const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: candidate.messageId, format: 'full' })
+          const mime = record(structured(raw).payload) ?? {}
+          if ([mime, ...parts(mime)].some(part => partContentId(part) === `dispatch-${clientId}@draft.dispatch.local`)) { id = candidate.draftId; break }
+        }
+        if (!id && !prior.rejected) throw Object.assign(new Error('Waiting for Gmail to confirm the existing draft save.'), { code: 'draft_sync_pending' })
+        if (id) this.#local.putDraftCreate(accountId, clientId, { draftId: id })
+        else this.#local.removeDraftCreate(accountId, clientId)
+      }
+      if (id) {
+        const existing = await this.readGmailDraft(accountId, id)
+        return this.updateGmailDraft({ ...projectDraft({ id, accountId, inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments: draftAttachments }), gmailThreadId: existing.gmailThreadId, gmailMessageId: existing.gmailMessageId })
+      }
+      // Resolve account/connectivity before recording a provider write intent.
+      await this.#account(accountId)
+      const retryAt = this.#gmailBackoff.get(accountId) ?? 0
+      if (retryAt > Date.now()) throw new Error(`Gmail is temporarily unavailable. Retry after ${new Date(retryAt).toISOString()}`)
+      const readyAttachments = await this.#resolveDraftAttachments(accountId, draftAttachments)
+      this.#local.putDraftCreate(accountId, clientId, {})
+      try {
+        const saved = await this.#createGmailDraft(accountId, messageId, to, cc, bcc, subject, bodyMarkdown, readyAttachments, `dispatch-${clientId}@draft.dispatch.local`)
+        this.#local.putDraftCreate(accountId, clientId, { draftId: saved.id })
+        return saved
+      } catch (error) {
+        if (/HTTP status: (429|5\d\d)|RATE_LIMITED/.test(String(error))) this.#local.putDraftCreate(accountId, clientId, { rejected: true })
+        const connectionCode = (error as { cause?: { code?: string } })?.cause?.code
+        if (connectionCode === 'ECONNREFUSED' || connectionCode === 'ENOTFOUND' || /invalid.arguments|invalid.params|argument.binding|gmail_draft_create_unavailable|gmail_html_unsupported/i.test(String(error))) this.#local.removeDraftCreate(accountId, clientId)
+        throw error
+      }
+    })()
+    this.#draftCreates.set(key, operation)
+    try { return await operation } finally { this.#draftCreates.delete(key) }
+  }
+
+  async #createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[], draftContentId?: string): Promise<DraftProjection> {
     const attachments = await this.#resolveDraftAttachments(accountId, draftAttachments)
     const draft = projectDraft({ id: '', inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments, accountId })
     try {
       const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', {
         linkId: accountId, replyMessageId: messageId || null, to, cc, bcc, subject,
         bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: bodyMarkdown,
+        ...(draftContentId ? { draftContentId } : {}),
         ...attachments.length > 0 ? { attachments: connectorAttachments(attachments) } : {},
       }))
       const id = text(value.draft_id) || text(value.id)
       if (!id) throw new Error('Gmail did not return a draft ID')
-      const saved = { ...draft, id }
+      const returnedMessage = record(value.message)
+      const saved = { ...draft, id, gmailMessageId: text(returnedMessage?.id) || text(value.message_id) || undefined, gmailThreadId: text(returnedMessage?.thread_id) || text(returnedMessage?.threadId) || text(value.thread_id) || undefined }
       this.#drafts.set(`${accountId}:${id}`, saved)
       void this.#refreshIndexedDrafts()
       return saved
@@ -1045,7 +1100,7 @@ export class GmailConnectorProvider {
   }
 
   #projectGmailDraft(summary: GmailDraftSummary, message: MessageProjection, inReplyToMessageId: string, accountId: string, existing?: DraftProjection): DraftProjection {
-    return projectDraft({
+    return { ...projectDraft({
       id: summary.draftId,
       inReplyToMessageId,
       to: addressList(summary.to),
@@ -1055,14 +1110,21 @@ export class GmailConnectorProvider {
       bodyMarkdown: plainBodyFromMessage(message),
       attachments: existing?.attachments.length ? existing.attachments : draftAttachmentsFromMessage(message),
       accountId,
-    })
+    }), gmailMessageId: summary.messageId, gmailThreadId: summary.threadId }
   }
 
   async #post(path: string, bodyValue: UnknownRecord): Promise<unknown> {
+    const linkId = text(bodyValue.linkId)
+    const retryAt = this.#gmailBackoff.get(linkId) ?? 0
+    if (retryAt > Date.now()) throw new Error(`Gmail is temporarily unavailable. Retry after ${new Date(retryAt).toISOString()}`)
     const response = await fetch(`${this.#agentBase}${path}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue), signal: AbortSignal.timeout(30_000),
     })
     const value = await response.json() as unknown
+    if (response.status === 429 || /RATE_LIMITED|rateLimitExceeded|HTTP status: 429/.test(JSON.stringify(value))) {
+      const date = /Retry after (\d{4}-\d\d-\d\dT[\d:.]+Z)/.exec(JSON.stringify(value))?.[1]
+      this.#gmailBackoff.set(linkId, date ? Math.max(Date.now() + 60_000, Date.parse(date)) : Date.now() + 60_000)
+    }
     if (!response.ok) throw new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`)
     if (record(value)?.isError || structured(value).error) throw new Error(`Gmail connector rejected the request: ${JSON.stringify(value)}`)
     return value

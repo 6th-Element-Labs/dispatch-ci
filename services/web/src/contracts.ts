@@ -30,6 +30,8 @@ export interface MessageProjection extends MessageSummary {
 }
 
 export interface DraftProjection {
+  readonly gmailThreadId?: string
+  readonly gmailMessageId?: string
   readonly id: string
   readonly inReplyToMessageId: string
   readonly to: readonly MailAddress[]

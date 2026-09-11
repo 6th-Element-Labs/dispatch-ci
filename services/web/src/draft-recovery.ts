@@ -1,6 +1,7 @@
 import type { DraftProjection } from './contracts.js'
 type Attachment = DraftProjection['attachments'][number]
 export interface RecoveryDraft {
+  gmailThreadId?: string
   key: string; updatedAt: string; revision: number; accountId?: string; accountLabel?: string; gmailDraftId: string; inReplyToMessageId: string
   to: string; cc: string; bcc: string; subject: string; bodyMarkdown: string
   attachments: (Omit<Attachment, 'contentBase64'> & { blobKey?: string; contentPending?: boolean })[]
@@ -54,11 +55,12 @@ export class DraftRecovery {
     })
     this.storage.setItem(KEY, JSON.stringify([{ ...value, attachments: files }, ...records]))
   }
-  bindGmailIdentity(key: string, accountId: string, draftId: string): void {
+  bindGmailIdentity(key: string, accountId: string, draftId: string, gmailThreadId?: string): void {
     const records = this.list()
     const record = records.find(item => item.key === key && item.accountId === accountId)
     if (!record || (record.gmailDraftId && record.gmailDraftId !== draftId)) return
     record.gmailDraftId = draftId
+    if (gmailThreadId) record.gmailThreadId = gmailThreadId
     this.storage.setItem(KEY, JSON.stringify(records))
   }
   remove(key: string): void { this.storage.setItem(KEY, JSON.stringify(this.list().filter(item => item.key !== key))) }

@@ -450,7 +450,7 @@ export function createMailServer(
       const messageId = 'messageId' in body ? String(body.messageId) : ''
       if (typeof body.accountId === 'string' && gmail.createGmailDraft) {
         try {
-          const draft = await gmail.createGmailDraft(body.accountId, messageId, String(body.to ?? ''), String(body.cc ?? ''), String(body.bcc ?? ''), String(body.subject ?? ''), String(body.bodyMarkdown ?? body.bodyText ?? ''), draftAttachments(body.attachments))
+          const draft = await gmail.createGmailDraft(body.accountId, messageId, String(body.to ?? ''), String(body.cc ?? ''), String(body.bcc ?? ''), String(body.subject ?? ''), String(body.bodyMarkdown ?? body.bodyText ?? ''), draftAttachments(body.attachments), typeof body.clientDraftId === 'string' ? body.clientDraftId : undefined)
           return writeJson(response, 201, { draft })
         } catch (error) {
           return writeJson(response, 502, draftError(error, 'gmail_draft_update_failed'))

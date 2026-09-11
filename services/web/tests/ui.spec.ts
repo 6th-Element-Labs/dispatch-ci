@@ -212,7 +212,7 @@ test('previews a new compose draft with account, Cc, and Bcc before saving', asy
   await page.getByRole('textbox', { name: 'Draft subject' }).fill('Project update')
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Draft preview')
   await page.getByRole('button', { name: 'Save draft' }).click()
-  await expect.poll(() => draftRequest).toEqual({ messageId: '', accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyMarkdown: 'Draft preview', bodyText: 'Draft preview', attachments: [] })
+  await expect.poll(() => draftRequest).toEqual({ messageId: '', clientDraftId: expect.any(String), accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyMarkdown: 'Draft preview', bodyText: 'Draft preview', attachments: [] })
 })
 
 test('autosaves each saved-draft header and keeps the account locked', async ({ page }) => {
@@ -1900,6 +1900,23 @@ test('autosaves a new draft and keeps recovery out of the Inbox', async ({ page 
   await expect.poll(() => saved).toBe(true)
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1') ?? '[]').length)).toBe(0)
   await expect(page.locator('.dispatch-recovery-banner, [data-recovery-open]')).toHaveCount(0)
+})
+
+test('retries an unsent draft from a previous session without opening its editor', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{ key: 'queued-draft', updatedAt: '2026-09-11T00:00:00Z', revision: 1, accountId: 'one', gmailDraftId: '', inReplyToMessageId: '', to: 'work@example.com', cc: '', bcc: '', subject: 'Queued draft', bodyMarkdown: 'Keep this text', attachments: [] }])))
+  const writes: any[] = []
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => {
+    const fields = route.request().postDataJSON(); writes.push(fields)
+    if (writes.length === 1) return route.fulfill({ status: 503, json: { error: 'temporarily unavailable' } })
+    return route.fulfill({ json: { draft: { ...fields, id: 'saved', gmailThreadId: 'saved-thread', accountId: 'one', inReplyToMessageId: '', to: [], bodyHtml: '<p>Keep this text</p>', attachments: [], state: 'draft' } } })
+  })
+  await page.goto('/')
+  await expect.poll(() => writes.length, { timeout: 20_000 }).toBe(2)
+  expect(writes.map(write => write.clientDraftId)).toEqual(['queued-draft', 'queued-draft'])
+  expect(writes[1].bodyMarkdown).toBe('Keep this text')
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1') ?? '[]').length)).toBe(0)
+  await expect(page.getByText('Saved on this Mac', { exact: true })).toHaveCount(0)
 })
 
 test('keeps a newer recovery copy while an older Gmail save is pending', async ({ page }) => {

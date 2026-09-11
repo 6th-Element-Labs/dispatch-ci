@@ -31,6 +31,14 @@ export class LocalMailStore {
     if (job?.state === 'running') this.putDownload({ ...job, state: 'interrupted' })
   }
   close(): void { this.#db.close() }
+  draftCreate(accountId: string, clientId: string): { draftId?: string; rejected?: boolean } | undefined {
+    const row = this.#db.prepare('SELECT payload FROM local_state WHERE key=?').get(`draft-create:${accountId}:${clientId}`)
+    return row ? JSON.parse(String(row.payload)) : undefined
+  }
+  putDraftCreate(accountId: string, clientId: string, value: { draftId?: string; rejected?: boolean }): void {
+    this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES(?,?)').run(`draft-create:${accountId}:${clientId}`, JSON.stringify(value))
+  }
+  removeDraftCreate(accountId: string, clientId: string): void { this.#db.prepare('DELETE FROM local_state WHERE key=?').run(`draft-create:${accountId}:${clientId}`) }
   cache(conversation: ConversationProjection): string {
     if (!conversation.accountId) throw new Error('A downloaded conversation requires an account')
     const cachedAt = new Date().toISOString()

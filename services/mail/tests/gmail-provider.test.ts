@@ -40,6 +40,12 @@ const gmailDraftMessage = {
 }
 
 describe('GmailConnectorProvider', () => {
+  it('does not present the draft identity marker as an attachment', () => {
+    const input = structuredClone(gmailMessage)
+    const plain = input.structuredContent.payload.parts[0] as Record<string, unknown>
+    plain.headers = [{ name: 'Content-ID', value: '<dispatch-key@draft.dispatch.local>' }]
+    expect(projectGmailMessage(input, true).attachments.map(file => file.name)).toEqual(['arrival.pdf'])
+  })
   it.each([false, true])('appends local file bytes and verifies the saved provider copy (corrupt=%s)', async corrupt => {
     const directory = mkdtempSync(join(tmpdir(), 'dispatch-local-attach-')); directories.push(directory)
     const path = join(directory, 'new.txt'); writeFileSync(path, 'new file bytes')
