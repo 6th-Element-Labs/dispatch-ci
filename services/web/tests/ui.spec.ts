@@ -23,9 +23,9 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
   await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [] } }))
   await page.route('http://127.0.0.1:8412/v1/threads/bindings', async (route) => {
-    const body = await route.request().postDataJSON() as { kind?: string; accountId?: string; gmailThreadId?: string }
-    const key = body.kind === 'conversation' ? `conversation:${body.accountId}:${body.gmailThreadId}` : 'unbound'
-    const threadId = bindings[key]?.threadId ?? `thread-${key}`
+    const body = await route.request().postDataJSON() as { kind?: string; accountId?: string; gmailThreadId?: string; draftKey?: string }
+    const key = body.kind === 'draft' ? `draft:${body.draftKey}` : body.kind === 'conversation' ? `conversation:${body.accountId}:${body.gmailThreadId}` : 'unbound'
+    const threadId = bindings[key]?.threadId ?? (body.kind === 'draft' ? bindings.draft?.threadId : undefined) ?? `thread-${key}`
     await route.fulfill({ json: { binding: { key: body, threadId, created: false, replaced: false } } })
   })
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/[^/]+$/, async (route) => {
@@ -63,6 +63,30 @@ test.beforeEach(async ({ page }) => {
   })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ status: 503, json: { status: 'not_ready' } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/recipients/, (route) => route.fulfill({ json: { recipients: [] } }))
+})
+
+test('new compose has its own task and never opens the general history', async ({ page }) => {
+  await stubAgent(page)
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await expect(page.locator('[data-agent-stream]')).toContainText('History for thread-draft%3A')
+  const first = await page.locator('[data-agent-stream]').innerText()
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await expect(page.locator('[data-agent-stream]')).toContainText('History for thread-draft%3A')
+  await expect.poll(() => page.locator('[data-agent-stream]').innerText()).not.toBe(first)
+  await expect(page.locator('[data-agent-stream]')).not.toContainText('History for thread-unbound')
+})
+
+test('a sync heartbeat in an empty mailbox cannot close the active compose editor', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'gmail', conversations: [], total: 0 } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.getByLabel('Draft subject').fill('Keep this editor open')
+  await page.waitForTimeout(5_500)
+  await expect(page.getByLabel('Draft subject')).toBeVisible()
+  await expect(page.getByLabel('Draft subject')).toHaveValue('Keep this editor open')
 })
 
 test('renders the three-panel mail surface and sanitizes provider HTML', async ({ page }) => {
@@ -189,6 +213,8 @@ test('navigates native Gmail folders and routes accepted message actions', async
   await page.locator('[data-archive]').click()
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveCount(0)
   await expect.poll(() => action).toEqual({ accountId: 'link-one', messageIds: ['m1'], action: 'archive' })
+  await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
+  await expect(page.locator('[data-trash]')).toBeEnabled()
   releaseAction()
   await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
 })
@@ -1059,13 +1085,14 @@ test('switches the Codex pane when the selected conversation changes', async ({ 
   expect(turns.some((url) => url.includes('thread-t1'))).toBe(false)
 })
 
-test('uses the unbound Codex thread for a new compose', async ({ page }) => {
+test('keeps general history out of a new compose', async ({ page }) => {
   await stubAgent(page, { unbound: { threadId: 'thread-unbound' } })
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
   await page.goto('/')
   await page.getByRole('button', { name: 'Compose' }).click()
-  await expect(page.getByText('History for thread-unbound')).toBeVisible()
+  await expect(page.locator('[data-agent-stream]')).toContainText('History for thread-draft%3A')
+  await expect(page.getByText('History for thread-unbound')).toHaveCount(0)
 })
 
 test('replaces a stale Codex binding cache from agent', async ({ page }) => {
@@ -1171,8 +1198,8 @@ test('labels cached mail stale and exposes the refresh failure', async ({ page }
   await page.reload()
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2)
   await expect(page.locator('[data-mail-source]')).toHaveText(/^STALE · /)
-  await expect(page.locator('[data-mail-error]')).toContainText('connector timed out')
-  await expect(page.locator('[data-mail-error]')).toContainText('Showing data last confirmed')
+  await expect(page.locator('[data-mail-error]')).toContainText('Gmail is unavailable')
+  await expect(page.locator('[data-mail-error]')).toContainText('Showing mail saved')
 })
 
 test('recovers the mail list automatically after a transient service failure', async ({ page }) => {
@@ -1186,7 +1213,7 @@ test('recovers the mail list automatically after a transient service failure', a
   })
   await page.goto('/')
   await expect(page.locator('[data-mail-source]')).toHaveText('Unavailable')
-  await expect(page.locator('[data-mail-error]')).toContainText('temporary outage')
+  await expect(page.locator('[data-mail-error]')).toContainText('reconnect automatically')
   await expect(page.locator('[data-conversation-id]')).toHaveCount(2, { timeout: 5_000 })
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
@@ -1866,7 +1893,8 @@ test('recovers unsaved recipients, text and file bytes after a reload without se
   await page.locator('[data-draft-body]').fill('Text entered before Gmail can save it.')
   await page.locator('[data-draft-files]').setInputFiles({ name: 'proof.txt', mimeType: 'text/plain', buffer: Buffer.from('Persist these bytes') })
   await expect(page.locator('[data-draft-attachments]')).toContainText('proof.txt')
-  await expect(page.locator('[data-draft-error]')).toContainText('Gmail unavailable')
+  await expect(page.locator('[data-recovery-status]')).toContainText('waiting to sync')
+  await expect(page.locator('[data-draft-error]')).toBeHidden()
   await page.reload()
   await page.getByRole('button', { name: 'Drafts', exact: true }).click()
   await page.locator('[data-local-draft-key]').filter({ hasText: 'Unsaved recovery proof' }).click()
@@ -2055,7 +2083,7 @@ test('web toolbar uses native history and its close action returns to mail', asy
   expect(await page.evaluate(() => (window as unknown as { __actions: string[] }).__actions)).toEqual(['back', 'close'])
 })
 
-test('Reply opens before Gmail responds, keeps typing, and prevents duplicate creation', async ({ page }) => {
+for (const action of ['reply', 'forward']) test(`${action} opens before Gmail responds, keeps typing, and prevents duplicate creation`, async ({ page }) => {
   let pending: import('@playwright/test').Route | undefined
   let creates = 0
   const updates: Record<string, unknown>[] = []
@@ -2064,11 +2092,11 @@ test('Reply opens before Gmail responds, keeps typing, and prevents duplicate cr
   await page.route('http://127.0.0.1:8411/v1/drafts', route => { creates++; pending = route })
   await page.route(/8411\/v1\/drafts\/fast-reply$/, route => { const body = route.request().postDataJSON(); updates.push(body); return route.fulfill({ json: { draft: { ...draft, bodyMarkdown: body.bodyMarkdown, bodyText: body.bodyMarkdown } } }) })
   await page.goto('/'); await expect(page.locator('[data-body]')).toContainText('Original')
-  await page.locator('[data-reply]').click()
+  await page.locator(`[data-${action}]`).click()
   await expect(page.locator('[data-draft-body]')).toBeVisible()
   await expect.poll(() => Boolean(pending)).toBe(true)
   await page.locator('[data-draft-body]').fill('My immediate edit')
-  await page.locator('[data-reply]').click()
+  await page.locator(`[data-${action}]`).click()
   expect(creates).toBe(1)
   await expect(page.locator('[data-draft-body]')).toHaveValue('My immediate edit')
   await pending!.fulfill({ json: { draft } })
@@ -2181,7 +2209,7 @@ test('failed email binding never shows general or previous chat during reconnect
 
 
 test('restores an ongoing compose turn after working on another email', async ({ page }) => {
-  await stubAgent(page, { unbound: { threadId: 'compose-task' } })
+  await stubAgent(page, { draft: { threadId: 'compose-task' } })
   await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
   await page.route('http://127.0.0.1:8412/v1/threads/compose-task', route => route.fulfill({ json: {
     thread: { turns: [{ id: 'running-turn', status: 'inProgress', items: [{ type: 'agentMessage', text: 'Still preparing the draft' }] }] },
@@ -2205,7 +2233,7 @@ test('restores an ongoing compose turn after working on another email', async ({
 })
 
 test('opens a draft completed in the background when returning to compose', async ({ page }) => {
-  await stubAgent(page, { unbound: { threadId: 'compose-task' } })
+  await stubAgent(page, { draft: { threadId: 'compose-task' } })
   await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
   let completed = false
   await page.route('http://127.0.0.1:8412/v1/threads/compose-task', route => route.fulfill({ json: {

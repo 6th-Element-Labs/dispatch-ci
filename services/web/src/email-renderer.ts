@@ -44,7 +44,10 @@ function renderRoot(kind: 'sanitized-html' | 'plain-text', value: string, downlo
 
 /** Extract source text without disclosure labels or remote-image requests. */
 export function emailPlainText(kind: 'sanitized-html' | 'plain-text', value: string): string {
-  return renderRoot(kind, value, true).textContent?.trim() ?? ''
+  const root = renderRoot(kind, value, true)
+  for (const node of root.querySelectorAll('br')) node.replaceWith('\n')
+  for (const node of root.querySelectorAll('p,div,li,tr,blockquote,h1,h2,h3,h4')) node.append('\n')
+  return (root.textContent ?? '').replace(/\n[\t ]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 export function renderEmailContent(kind: 'sanitized-html' | 'plain-text', value: string, downloaded = false): HTMLElement {

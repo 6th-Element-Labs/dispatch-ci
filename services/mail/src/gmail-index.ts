@@ -93,10 +93,10 @@ type MessageRow = {
 }
 
 function queueEligible(message: IndexedGmailMessage, state: MailStateFilter): boolean {
-  if (message.inSpam || message.inTrash) return false
+  if (!message.inInbox || message.inSpam || message.inTrash || message.inDrafts) return false
   if (state === 'unread') return message.unread
   if (state === 'read') return message.inInbox
-  return message.inInbox || message.unread
+  return true
 }
 
 function folderMember(message: IndexedGmailMessage, mailbox: Exclude<GmailMailbox, 'inbox'>): boolean {
@@ -146,7 +146,10 @@ export class GmailIndex {
     this.#db = new DatabaseSync(path)
     this.#db.exec(`
       PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = NORMAL;
+      PRAGMA synchronous = FULL;
+      CREATE TABLE IF NOT EXISTS gmail_action_overlay (key TEXT PRIMARY KEY, action TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS gmail_unread_overlay (key TEXT PRIMARY KEY, unread INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS gmail_action_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, payload TEXT NOT NULL, error TEXT);
       CREATE TABLE IF NOT EXISTS gmail_messages (
         account_id TEXT NOT NULL,
         id TEXT NOT NULL,
@@ -196,6 +199,8 @@ export class GmailIndex {
         this.#db.exec(`ALTER TABLE gmail_messages ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 0`)
       }
     }
+    for (const row of this.#db.prepare('SELECT CAST(key AS BLOB) AS key,action FROM gmail_action_overlay').all()) this.#acceptedActions.set(Buffer.from(row.key as Uint8Array).toString(), String(row.action) as GmailConversationAction)
+    for (const row of this.#db.prepare('SELECT CAST(key AS BLOB) AS key,unread FROM gmail_unread_overlay').all()) this.#acceptedUnread.set(Buffer.from(row.key as Uint8Array).toString(), row.unread === 1)
   }
 
   replaceAccount(accountId: string, messages: readonly IndexedGmailMessage[], runId: string, complete: boolean): void {
@@ -227,7 +232,7 @@ export class GmailIndex {
           Number(message.inSpam), Number(message.inTrash), Number(message.hasAttachment === true), runId,
         )
       }
-      if (complete) this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND sync_run_id <> ?').run(accountId, runId)
+      if (complete) this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND sync_run_id <> ? AND NOT EXISTS (SELECT 1 FROM gmail_action_overlay WHERE key=account_id || char(0) || id) AND NOT EXISTS (SELECT 1 FROM gmail_unread_overlay WHERE key=account_id || char(0) || id)').run(accountId, runId)
       this.#reapplyAcceptedUnread(accountId, messages)
       this.#reapplyAcceptedActions(accountId, messages)
       this.#db.exec('COMMIT')
@@ -260,6 +265,8 @@ export class GmailIndex {
     this.#db.exec('BEGIN IMMEDIATE')
     try {
       for (const id of stale) {
+        if (this.#acceptedActions.has(`${accountId}\0${id}`)) continue
+        if (flag === 'unread' && this.#acceptedUnread.has(`${accountId}\0${id}`)) continue
         clear.run(accountId, id)
         removed += Number(remove.run(accountId, id).changes)
       }
@@ -334,14 +341,16 @@ export class GmailIndex {
     return rows.map((row) => row.id)
   }
 
-  setUnread(accountId: string, messageIds: readonly string[], unread: boolean): void {
+  setUnread(accountId: string, messageIds: readonly string[], unread: boolean, enqueue = false): void {
     if (messageIds.length === 0) throw new Error('Cannot update read state without indexed Gmail message IDs')
     const update = this.#db.prepare('UPDATE gmail_messages SET unread = ? WHERE account_id = ? AND id = ?')
     this.#db.exec('BEGIN IMMEDIATE')
     try {
+      if (enqueue) this.#db.prepare('INSERT INTO gmail_action_queue(account_id,payload) VALUES (?,?)').run(accountId, JSON.stringify({ messageIds, action: unread ? 'unread' : 'read' }))
       for (const id of messageIds) {
         update.run(Number(unread), accountId, id)
         this.#acceptedUnread.set(`${accountId}\0${id}`, unread)
+        this.#db.prepare('INSERT OR REPLACE INTO gmail_unread_overlay VALUES (?,?)').run(`${accountId}\0${id}`, Number(unread))
       }
       this.#db.exec('COMMIT')
     } catch (error) {
@@ -360,7 +369,9 @@ export class GmailIndex {
       const id = key.slice(separator + 1)
       const snapshot = incomingById.get(id)
       if (snapshot?.unread === unread || !exists.get(accountId, id)) {
+        if (this.pendingActions().some(job => job.accountId === accountId && job.messageIds.includes(id) && (job.action === 'read' || job.action === 'unread'))) continue
         this.#acceptedUnread.delete(key)
+        this.#db.prepare('DELETE FROM gmail_unread_overlay WHERE key=?').run(key)
         continue
       }
       update.run(Number(unread), accountId, id)
@@ -376,17 +387,29 @@ export class GmailIndex {
       if (key.slice(0, separator) !== accountId) continue
       const id = key.slice(separator + 1)
       const snapshot = incomingById.get(id)
-      if (!snapshot || !exists.get(accountId, id)) { this.#acceptedActions.delete(key); continue }
+      if (!snapshot) continue
+      if (!exists.get(accountId, id)) continue
       const desired = flagsAfterAction(snapshot, action)
       if (desired.inInbox === snapshot.inInbox && desired.inSent === snapshot.inSent && desired.inDrafts === snapshot.inDrafts && desired.inArchive === snapshot.inArchive && desired.inSpam === snapshot.inSpam && desired.inTrash === snapshot.inTrash) {
+        // Pending commands remain authoritative even if a stale snapshot happens
+        // to match a newer local action before its provider write completes.
+        if (this.pendingActions().some(job => job.accountId === accountId && job.messageIds.includes(id))) continue
         this.#acceptedActions.delete(key)
+        this.#db.prepare('DELETE FROM gmail_action_overlay WHERE key=?').run(key)
         continue
       }
       update.run(Number(desired.inInbox), Number(desired.inSent), Number(desired.inDrafts), Number(desired.inArchive), Number(desired.inSpam), Number(desired.inTrash), accountId, id)
     }
   }
 
-  applyConversationAction(accountId: string, messageIds: readonly string[], action: GmailConversationAction): void {
+  pendingActions(): Array<{ id: number; accountId: string; messageIds: string[]; action: GmailConversationAction | 'read' | 'unread'; error?: string }> {
+    return this.#db.prepare('SELECT * FROM gmail_action_queue ORDER BY id').all().map(row => ({ id: Number(row.id), accountId: String(row.account_id), ...JSON.parse(String(row.payload)), error: row.error ? String(row.error) : undefined }))
+  }
+
+  finishAction(id: number): void { this.#db.prepare('DELETE FROM gmail_action_queue WHERE id=?').run(id) }
+  failAction(id: number, error: string): void { this.#db.prepare('UPDATE gmail_action_queue SET error=? WHERE id=?').run(error, id) }
+
+  applyConversationAction(accountId: string, messageIds: readonly string[], action: GmailConversationAction, enqueue = false): void {
     if (messageIds.length === 0) throw new Error('Cannot update folder flags without indexed Gmail message IDs')
     const select = this.#db.prepare('SELECT * FROM gmail_messages WHERE account_id = ? AND id = ?')
     const update = this.#db.prepare(`
@@ -395,6 +418,7 @@ export class GmailIndex {
     `)
     this.#db.exec('BEGIN IMMEDIATE')
     try {
+      if (enqueue) this.#db.prepare('INSERT INTO gmail_action_queue(account_id,payload) VALUES (?,?)').run(accountId, JSON.stringify({ messageIds, action }))
       for (const id of messageIds) {
         const row = select.get(accountId, id) as MessageRow | undefined
         if (!row) continue
@@ -412,6 +436,7 @@ export class GmailIndex {
           accountId, id,
         )
         this.#acceptedActions.set(`${accountId}\0${id}`, action)
+        this.#db.prepare('INSERT OR REPLACE INTO gmail_action_overlay VALUES (?,?)').run(`${accountId}\0${id}`, action)
       }
       this.#db.exec('COMMIT')
     } catch (error) {

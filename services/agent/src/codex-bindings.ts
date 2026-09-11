@@ -4,10 +4,12 @@ import { dirname, join } from 'node:path'
 
 export type CodexBindingKey =
   | { readonly kind: 'unbound' }
+  | { readonly kind: 'draft'; readonly draftKey: string }
   | { readonly kind: 'conversation'; readonly accountId: string; readonly gmailThreadId: string }
 
 export function bindingRecordKey(key: CodexBindingKey): string {
   if (key.kind === 'unbound') return 'unbound'
+  if (key.kind === 'draft') return `draft:${key.draftKey}`
   return `conversation:${key.accountId}:${key.gmailThreadId}`
 }
 
@@ -25,10 +27,18 @@ export function defaultCodexWorkspace(): string {
 export class CodexBindingStore {
   #records = new Map<string, string>()
   #loaded = false
+  #loadFlight: Promise<void> | undefined
+  #writeFlight: Promise<void> = Promise.resolve()
 
   constructor(readonly path: string) {}
 
   async load(): Promise<void> {
+    if (this.#loaded) return
+    this.#loadFlight ??= this.#readOnce().finally(() => { this.#loadFlight = undefined })
+    await this.#loadFlight
+  }
+
+  async #readOnce(): Promise<void> {
     try {
       const value = JSON.parse(await readFile(this.path, 'utf8')) as unknown
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Codex binding file is not an object')
@@ -58,9 +68,13 @@ export class CodexBindingStore {
   }
 
   async #flush(): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true })
-    const tmp = `${this.path}.${process.pid}.tmp`
-    await writeFile(tmp, `${JSON.stringify(Object.fromEntries(this.#records), null, 2)}\n`)
-    await rename(tmp, this.path)
+    const write = this.#writeFlight.catch(() => undefined).then(async () => {
+      await mkdir(dirname(this.path), { recursive: true })
+      const tmp = `${this.path}.${process.pid}.tmp`
+      await writeFile(tmp, `${JSON.stringify(Object.fromEntries(this.#records), null, 2)}\n`)
+      await rename(tmp, this.path)
+    })
+    this.#writeFlight = write
+    await write
   }
 }

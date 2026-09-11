@@ -260,6 +260,15 @@ let draftDiscarding = false
 const recovery = new DraftRecovery()
 let draftSyncTimer: number | undefined
 const backgroundDraftSaves = new Map<string, Promise<DraftProjection | undefined>>()
+async function linkDraftTask(key: string, draft: DraftProjection): Promise<void> {
+  if (!draft.accountId || !draft.gmailThreadId) return
+  const id = readBindingCache()[`draft:${key}`]
+  if (!id) return
+  const target: CodexPaneKey = { kind: 'conversation', accountId: draft.accountId, gmailThreadId: draft.gmailThreadId }
+  writeBindingCache(target, id)
+  const bound = await api.bindThread(target, id)
+  writeBindingCache(target, bound.threadId)
+}
 const draftSyncErrors = new Map<string, string>()
 let draftSyncDelay = 3000
 function retryableDraftError(error: unknown): boolean {
@@ -289,6 +298,7 @@ async function syncPendingDrafts(): Promise<void> {
       if ([current.to, current.cc, current.bcc].flatMap(parseRecipientList).some(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) return
       const fields = { accountId: current.accountId, messageId: current.inReplyToMessageId, clientDraftId: current.key, to: current.to, cc: current.cc, bcc: current.bcc, subject: current.subject, bodyMarkdown: current.bodyMarkdown, attachments: restored.attachments }
       const saved = current.gmailDraftId ? await api.updateDraft(current.gmailDraftId, fields) : await api.createDraft('', fields)
+      void linkDraftTask(current.key, saved).catch(error => console.error('Draft task binding will need reconnection:', error))
       recovery.bindGmailIdentity(current.key, current.accountId!, saved.id, saved.gmailThreadId)
       recovery.removeSavedRevision(current.key, current.revision)
       draftSyncErrors.delete(current.key)
@@ -314,6 +324,7 @@ let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true' || na
 let offlineStatus: OfflineStatus | undefined
 
 let conversations: ConversationSummary[] = []
+const pendingMailboxRemovals = new Set<string>()
 let conversationTotal = 0
 let nextConversationCursor: string | null = null
 let loadingMoreConversations = false
@@ -329,7 +340,7 @@ const markReadDwell = createMarkReadDwell()
 let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
 const BINDING_CACHE = 'dispatch.codex.bindings.v1'
-type CodexPaneKey = { kind: 'unbound' } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
+type CodexPaneKey = { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
 const acceptedReadState = new Map<string, boolean>()
 let threadId: string | undefined
 let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
@@ -352,12 +363,13 @@ function renderBackgroundTasks(): void {
     const entry = Object.entries(bindings).find(([, id]) => id === task.threadId)
     if (!entry) continue
     const summary = conversations.find(c => bindingCacheKey(conversationBindingKey({ ...c, source: c.accountId ? 'gmail' : 'demo' })) === entry[0])
-    if (!summary && entry[0] !== 'unbound') continue
+    const localDraft = entry[0].startsWith('draft:') ? recovery.list().find(record => `draft:${record.key}` === entry[0]) : undefined
+    if (!summary && !localDraft && entry[0] !== 'unbound' && !entry[0].startsWith('draft:')) continue
     const button = document.createElement('button')
     button.className = 'btn btn-sm btn-ghost-secondary w-100 text-truncate'
-    button.textContent = `${task.status} · ${summary?.subject ?? 'New email / general chat'}`
+    button.textContent = `${task.status} · ${summary?.subject ?? localDraft?.subject ?? 'New email / general chat'}`
     button.title = button.textContent
-    button.onclick = () => { if (summary) void selectConversation(summary.id); else openCompose() }
+    button.onclick = () => { if (summary) void selectConversation(summary.id); else if (localDraft) void restoreLocalDraft(localDraft.key); else if (entry[0].startsWith('draft:')) openCompose(entry[0].slice(6)); else { selectCodexContext({ kind: 'unbound' }); void bindAndShowCodex({ kind: 'unbound' }) } }
     backgroundTasks.append(button)
   }
   backgroundTasks.hidden = !backgroundTasks.childElementCount
@@ -379,6 +391,7 @@ function connectTaskActivity(): void {
 }
 
 function bindingCacheKey(key: CodexPaneKey): string {
+  if (key.kind === 'draft') return `draft:${key.draftKey}`
   return key.kind === 'unbound' ? 'unbound' : `conversation:${key.accountId}:${key.gmailThreadId}`
 }
 
@@ -664,7 +677,7 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
       }
     } catch (error) { const notice = document.createElement('p'); notice.textContent = `Local drafts could not be read: ${String(error)}`; elements.list.append(notice) }
   }
-  const listed = searchView ? searchView.results.map(result => result.conversation) : conversations.filter(c => !localDrafts.some(record => record.accountId === c.accountId && record.gmailThreadId === c.threadId))
+  const listed = (searchView ? searchView.results.map(result => result.conversation) : conversations.filter(c => !localDrafts.some(record => record.accountId === c.accountId && record.gmailThreadId === c.threadId))).filter(c => !pendingMailboxRemovals.has(`${mailbox}:${c.id}`))
   renderSearchStatus()
   if (searchView) emptyMessage = searchView.phase === 'pending' ? 'Searching with Codex…' : searchView.phase === 'failed' ? searchView.error || 'Search failed.' : 'No matching conversations.'
   if (listed.length === 0) {
@@ -996,8 +1009,13 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
       const detail = error instanceof Error ? error.message : String(error)
       const gone = detail.includes('gmail_draft_not_found')
       loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
-      loading.textContent = gone ? 'This draft no longer exists in Gmail. It was sent or deleted.' : detail
-      if (gone) void loadConversations(true)
+      loading.textContent = gone ? 'This draft was sent or deleted.' : 'Gmail is unavailable. This draft will open when the connection returns.'
+      if (gone) {
+        conversations = conversations.filter(item => item.id !== id)
+        selectedConversationId = undefined; selectedSummary = undefined
+        renderList()
+        void loadConversations()
+      }
     }
     return
   }
@@ -1086,10 +1104,10 @@ const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(
   } catch (error) {
     if (sequence !== selectionSequence) return
     loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
-    loading.textContent = error instanceof Error ? error.message : String(error)
+    loading.textContent = 'This message is not available yet. Dispatch will retry when Gmail reconnects.'
 if (!offlineMode && !String(error).includes('not_downloaded')) window.setTimeout(() => {
       if (selectedConversationId === id) void selectConversation(id)
-    }, 1_500)
+    }, 60_000)
   }
 }
 
@@ -1404,7 +1422,7 @@ function checkpointDraft(): void {
       accountId, accountLabel: accounts.find(account => account.id === accountId)?.email, gmailDraftId: activeDraft.id,
       inReplyToMessageId: activeDraft.inReplyToMessageId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, bodyMarkdown: elements.draftBody.value,
     }, activeDraft.attachments)
-    elements.recoveryStatus.textContent = 'Saved'
+    elements.recoveryStatus.textContent = 'Saved · waiting to sync'
     scheduleDraftSync()
     renderRecoveryList()
     const draftId = activeDraft.id
@@ -1428,10 +1446,15 @@ function renderRecoveryList(): void {
 async function restoreLocalDraft(key: string): Promise<void> {
   if (activeDraft && draftDirty) checkpointDraft()
   const sequence = ++selectionSequence
-  selectCodexContext({ kind: 'unbound' })
+  let codexKey: CodexPaneKey = { kind: 'draft', draftKey: key }
+  selectCodexContext(codexKey)
   const restored = await recovery.restore(key)
   if (sequence !== selectionSequence) return
   const record = restored.record
+  if (record.gmailThreadId && record.accountId) {
+    codexKey = { kind: 'conversation', accountId: record.accountId, gmailThreadId: record.gmailThreadId }
+    selectCodexContext(codexKey)
+  }
   selected = undefined; selectedConversationId = undefined; selectedAttachmentContext = undefined
   selectedSummary = undefined
   codexContextReady = false
@@ -1444,10 +1467,10 @@ async function restoreLocalDraft(key: string): Promise<void> {
     to: parseRecipientList(record.to).map(address => ({ name: address, address, initials: '@' })), cc: record.cc, bcc: record.bcc, subject: record.subject, bodyMarkdown: record.bodyMarkdown, bodyText: record.bodyMarkdown, bodyHtml: '', attachments: restored.attachments, state: 'draft' }, !record.gmailDraftId)
   draftSeed = undefined
   recoveryKey = key; draftDirty = true; draftEditRevision = Math.max(draftEditRevision, record.revision) + 1
-  elements.recoveryStatus.textContent = 'Saved'
+  elements.recoveryStatus.textContent = 'Saved · waiting to sync'
   if (restored.missing.length) draftError(new Error(`Reattach these files before saving: ${restored.missing.join(', ')}`))
   refreshPreview()
-  if (!offlineMode) void bindAndShowCodex({ kind: 'unbound' }, { sequence })
+  if (!offlineMode) void bindAndShowCodex(codexKey, { sequence })
 }
 function freezeDraft(disabled: boolean): void {
   elements.draft.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input,textarea,select,button').forEach(control => { control.disabled = disabled })
@@ -1455,8 +1478,19 @@ function freezeDraft(disabled: boolean): void {
 }
 
 function draftError(error: unknown): void {
+  if (retryableDraftError(error)) {
+    elements.recoveryStatus.textContent = 'Saved · waiting to sync'
+    elements.draftError.hidden = true
+    scheduleDraftSync()
+    if (!elements.sendConfirm.hidden) {
+      elements.draftError.hidden = false
+      elements.draftError.textContent = 'Sending could not be confirmed. Your draft is kept. Check Sent before trying again.'
+    }
+    return
+  }
   elements.draftError.hidden = false
-  elements.draftError.textContent = error instanceof Error ? error.message : String(error)
+  const detail = error instanceof Error ? error.message : String(error)
+  elements.draftError.textContent = /Request failed|\{"error"/.test(detail) ? 'Gmail could not complete this action. Your edits are kept. Check the account connection and try again.' : detail
 }
 
 function replyQuoteMarkdown(message: MessageProjection): string {
@@ -1609,11 +1643,14 @@ async function openForward(): Promise<void> {
   const latest = selected.messages.find((message) => message.id === latestMessageId) ?? selected.messages[0]
   if (!latest) return
   const subject = selected.subject.startsWith('Fwd:') ? selected.subject : `Fwd: ${selected.subject}`
+  if (draftSaveFlight && activeDraft?.subject === subject && activeDraft.accountId === selected.accountId) { elements.draftBody.focus(); return }
   const content = emailPlainText(latest.body.kind, latest.body.content)
   const bodyMarkdown = `\n\n---------- Forwarded message ----------\nFrom: ${latest.sender.name} <${latest.sender.address}>\nDate: ${latest.receivedFullLabel}\nSubject: ${latest.subject}\n\n${content}`
-  if (offlineMode) {
+  if (offlineMode || selected.source === 'gmail') {
     showDraft({ id: '', accountId: selected.accountId, inReplyToMessageId: '', to: [], cc: '', bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, bodyHtml: '', attachments: latest.attachments.map(file => ({ ...file, sourceMessageId: latest.id })), state: 'draft' }, true)
-    markDraftDirty(); refreshPreview(); return
+    markDraftDirty(); refreshPreview()
+    if (!offlineMode) void saveDraft(false).catch(draftError)
+    return
   }
   const draft = await api.createDraft('', {
     accountId: selected.accountId,
@@ -1634,7 +1671,7 @@ async function openForward(): Promise<void> {
   showDraft(draft, false)
 }
 
-function openCompose(): void {
+function openCompose(existingKey?: string): void {
   const accountId = selectedAccountId ?? selected?.accountId ?? accounts[0]?.id
   if (!accountId) {
     addAgentMessage('error', 'Connect a Gmail account before composing mail.')
@@ -1642,13 +1679,14 @@ function openCompose(): void {
   }
   markReadDwell.cancel()
   const sequence = ++selectionSequence
-  selectCodexContext({ kind: 'unbound' })
+  const codexKey: CodexPaneKey = { kind: 'draft', draftKey: existingKey ?? crypto.randomUUID() }
+  selectCodexContext(codexKey)
   selectedAttachmentContext = undefined
   codexContextReady = false
   selected = undefined
   selectedSummary = undefined
   selectedConversationId = undefined
-  void bindAndShowCodex({ kind: 'unbound' }, { sequence })
+  void bindAndShowCodex(codexKey, { sequence })
   if (usesMobilePanels()) {
     mobilePanel = 'reader'
     mobileReturnPanel = 'reader'
@@ -1662,6 +1700,7 @@ function openCompose(): void {
   elements.accountSep.hidden = true
   const draft: DraftProjection = { id: '', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '', bodyText: '', attachments: [], state: 'draft', accountId }
   showDraft(draft, true)
+  recoveryKey = codexKey.draftKey
 }
 
 async function saveDraft(notify = true): Promise<void> {
@@ -1690,6 +1729,7 @@ async function saveDraft(notify = true): Promise<void> {
       ? await api.updateDraft(draft.id, fields)
       : await api.createDraft('', fields)
     savedSuccessfully = true
+    if (savingRecoveryKey) void linkDraftTask(savingRecoveryKey, savedDraft).catch(error => console.error('Draft task binding will need reconnection:', error))
     if (savingRecoveryKey) draftSyncErrors.delete(savingRecoveryKey)
     draftSyncDelay = 3000
     if (savingRecoveryKey && savedDraft.id) {
@@ -1729,7 +1769,7 @@ async function saveDraft(notify = true): Promise<void> {
     if (draftSaveFlight === operation) draftSaveFlight = undefined
     if (session === draftEditSession && activeDraft) {
       elements.draftAccount.disabled = Boolean(activeDraft.id)
-      if (!savedSuccessfully) elements.recoveryStatus.textContent = retrySave ? 'Saved · waiting to sync' : 'Saved'
+      if (!savedSuccessfully) elements.recoveryStatus.textContent = 'Saved · waiting to sync'
       if (savedSuccessfully && draftDirty && activeDraft.id && !draftSendFlight) autosaveDraft()
     }
   }
@@ -1882,9 +1922,10 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
     return
   }
   const messageIds = selected?.messages.map((message) => message.id) ?? []
-  const previousConversations = conversations
+  const originalMailbox = mailbox
+  const previousConversations = (searchView?.results.map(item => item.conversation) ?? conversations).filter(c => !pendingMailboxRemovals.has(`${mailbox}:${c.id}`))
   const originalSummary = selectedSummary ?? conversations.find((conversation) => conversation.id === selectedConversationId)
-  const originalIndex = originalSummary ? conversations.findIndex((conversation) => conversation.id === originalSummary.id) : -1
+  const originalIndex = originalSummary ? previousConversations.findIndex((conversation) => conversation.id === originalSummary.id) : -1
   const remainsInMailbox = (value: GmailConversationAction): boolean => {
     if (value === 'archive') return mailbox === 'sent'
     if (value === 'spam') return mailbox === 'spam'
@@ -1892,7 +1933,10 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
     return mailbox === 'inbox'
   }
   if (!remainsInMailbox(action)) {
-    const nextSummary = originalIndex >= 0 ? conversations[originalIndex + 1] ?? conversations[originalIndex - 1] : undefined
+    conversationLoadSequence += 1
+    if (originalSummary) pendingMailboxRemovals.add(`${originalMailbox}:${originalSummary.id}`)
+    const nextSummary = originalIndex >= 0 ? previousConversations[originalIndex + 1] ?? previousConversations[originalIndex - 1] : undefined
+    if (searchView) searchView = { ...searchView, results: searchView.results.filter(item => item.conversation.id !== originalSummary?.id) }
     conversations = conversations.filter((conversation) => conversation.id !== selectedSummary?.id && conversation.id !== selected?.id)
     selected = undefined
     selectedSummary = undefined
@@ -1903,19 +1947,19 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
     renderList()
     if (nextSummary) void selectConversation(nextSummary.id)
   }
-  const controls = [elements.archive, elements.spam, elements.trash, elements.moveInbox]
-  controls.forEach((control) => { control.disabled = true })
   try {
     await api.mutateConversation(threadId, accountId, messageIds, action)
-    void loadConversations(true)
+    await loadConversations(true)
   } catch (error) {
-    conversations = previousConversations
-    renderList()
+    if (mailbox === originalMailbox && originalSummary && !conversations.some(item => item.id === originalSummary.id)) {
+      conversations.splice(Math.min(Math.max(originalIndex, 0), conversations.length), 0, originalSummary)
+      renderList()
+    }
     elements.mailError.hidden = false
-    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
-    if (originalSummary && conversations.some((conversation) => conversation.id === originalSummary.id)) void selectConversation(originalSummary.id)
+    elements.mailError.textContent = 'The change could not be saved. Try again.'
   } finally {
-    controls.forEach((control) => { control.disabled = false })
+    if (originalSummary) pendingMailboxRemovals.delete(`${originalMailbox}:${originalSummary.id}`)
+    renderList()
   }
 }
 
@@ -2388,13 +2432,13 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
   try {
     if (!await api.agentReady()) { if (current()) scheduleAgentReconnect(); return false }
     if (!current()) return false
-    const binding = await api.bindThread(key, options.adoptThreadId)
+    const binding = await api.bindThread(key, options.adoptThreadId ?? readBindingCache()[bindingCacheKey(key)])
     if (!current()) return false
     writeBindingCache(key, binding.threadId)
     await showCodexThread(binding.threadId, binding.created, binding.replaced, binding.detail)
     if (!current()) return false
     const context = selected ?? (mailbox === 'drafts' ? conversations.find((item) => item.id === selectedConversationId) : undefined)
-    const currentKey = context ? conversationBindingKey(context) : !selectedConversationId ? { kind: 'unbound' } : undefined
+    const currentKey = context ? conversationBindingKey(context) : !selectedConversationId ? desiredCodexKey : undefined
     if (currentKey && JSON.stringify(key) === JSON.stringify(currentKey) && (options.sequence === undefined || options.sequence === selectionSequence)) codexContextReady = true
     const restore = pendingMailEffects.get(binding.threadId)
     if (codexContextReady && restore) {
@@ -2614,7 +2658,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
   try {
     const result = await api.listConversations(mailState, selectedAccountId, undefined, searchQuery, mailbox, offlineMode)
     if (loadSequence !== conversationLoadSequence) return
-    conversations = applyAcceptedReadState(result.conversations)
+    conversations = applyAcceptedReadState(result.conversations).filter(c => !pendingMailboxRemovals.has(`${mailbox}:${c.id}`))
     syncSelectedReadState()
     noteArrivals()
     if (mailReconnectTimer !== undefined) window.clearTimeout(mailReconnectTimer)
@@ -2630,6 +2674,11 @@ async function loadConversations(preserveSelection = false): Promise<void> {
         ? `Recent ${mailboxLabels[mailbox]} · ${refreshedLabel}`
         : `${!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected'} · ${refreshedLabel}`
     renderList()
+    if (mailbox === 'drafts' && !activeDraft && selectedConversationId && !conversations.some(item => item.id === selectedConversationId)) {
+      selected = undefined; selectedSummary = undefined; selectedConversationId = undefined
+      if (conversations[0]) { await selectConversation(conversations[0].id); return }
+      elements.reader.hidden = true; elements.readerEmpty.hidden = false; elements.readerEmpty.textContent = 'No drafts'
+    }
     if (conversations[0]) {
       const selectedStillListed = Boolean(selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId))
       if (!preserveSelection && !selectedStillListed && selectionSequence === selectionAtRequest) await selectConversation(conversations[0].id)
@@ -2647,13 +2696,13 @@ async function loadConversations(preserveSelection = false): Promise<void> {
       elements.mailSource.textContent = `STALE · ${cacheLabel}`
       elements.mailError.hidden = false
       const detail = error instanceof Error ? error.message : String(error)
-      elements.mailError.textContent = `Gmail refresh failed: ${detail}. Showing data last confirmed ${cacheLabel}.`
+      elements.mailError.textContent = `Gmail is unavailable. Showing mail saved ${cacheLabel}.`
       scheduleMailReconnect()
       return
     }
     elements.mailSource.textContent = 'Unavailable'
     elements.mailError.hidden = false
-    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    elements.mailError.textContent = 'Gmail is unavailable. Dispatch will reconnect automatically.'
     scheduleMailReconnect()
   }
 }
@@ -2695,7 +2744,6 @@ async function refreshSyncStatus(): Promise<void> {
   if (offlineMode) { elements.mailSource.textContent = 'Downloaded mail'; return }
   try {
     const sync = await api.syncStatus()
-    if (mailbox !== 'inbox' && sync.state !== 'failed') return
     if (sync.state === 'failed') {
       if (/RATE_LIMITED|rateLimitExceeded|Retry after/i.test(sync.error ?? '')) {
         elements.mailSource.textContent = 'Waiting for Gmail'
@@ -2706,7 +2754,7 @@ async function refreshSyncStatus(): Promise<void> {
       }
       elements.mailSource.textContent = `SYNC FAILED · ${syncTime(sync.startedAt)}`
       elements.mailError.hidden = false
-      elements.mailError.textContent = sync.error ?? 'Gmail synchronization failed without an error detail.'
+      elements.mailError.textContent = 'Gmail could not sync. Your mail and pending edits are kept on this device.'
       syncErrorVisible = true
     } else if (sync.state === 'syncing') {
       if (syncErrorVisible) elements.mailError.hidden = true
@@ -2716,7 +2764,8 @@ async function refreshSyncStatus(): Promise<void> {
         : ''
       elements.mailSource.textContent = `Syncing Gmail${accountProgress} · ${sync.fetchedMessages ?? sync.messageCount} fetched`
     } else if (sync.state === 'partial') {
-      elements.mailSource.textContent = `Partial Gmail index · ${sync.messageCount} messages`
+      elements.mailSource.textContent = sync.error?.includes('mail changes') ? 'Changes waiting to sync' : `Partial Gmail index · ${sync.messageCount} messages`
+      elements.mailSource.title = sync.error ?? ''
     } else if (sync.state === 'ready') {
       elements.mailSource.title = ''
       elements.mailSource.textContent = `Gmail synced · ${syncTime(sync.completedAt)}`
@@ -2724,13 +2773,12 @@ async function refreshSyncStatus(): Promise<void> {
       syncErrorVisible = false
       const changed = observedSyncCompletedAt !== undefined && sync.completedAt !== observedSyncCompletedAt
       observedSyncCompletedAt = sync.completedAt
-      if (changed && mailbox === 'inbox') void loadConversations(true)
-      if (mailState === 'all' && conversations.length === 0) void loadConversations()
+      if (changed && !activeDraft) void loadConversations(true)
     }
   } catch (error) {
     elements.mailSource.textContent = 'SYNC STATUS FAILED'
     elements.mailError.hidden = false
-    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    elements.mailError.textContent = 'Dispatch is reconnecting to mail.'
     syncErrorVisible = true
   }
 }
@@ -2939,7 +2987,7 @@ elements.agentDivider.addEventListener('dblclick', () => { panels.agent = false;
 app.querySelector('[data-collapse-messages]')?.addEventListener('click', () => { panels.messages = false; renderPanels() })
 app.querySelector('[data-collapse-reader]')?.addEventListener('click', () => { panels.reader = false; renderPanels() })
 app.querySelector('[data-mobile-back]')?.addEventListener('click', () => { mobilePanel = 'messages'; renderPanels() })
-app.querySelector('[data-compose]')?.addEventListener('click', openCompose)
+app.querySelector('[data-compose]')?.addEventListener('click', () => openCompose())
 app.querySelector('[data-reply]')?.addEventListener('click', () => { void openDraft(false).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-reply-all]')?.addEventListener('click', () => { void openDraft(true).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
 app.querySelector('[data-forward]')?.addEventListener('click', () => { void openForward().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })

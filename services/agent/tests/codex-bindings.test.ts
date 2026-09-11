@@ -38,6 +38,17 @@ describe('CodexBindingStore', () => {
     expect(store.get({ kind: 'unbound' })).toBe('new')
   })
 
+  it('keeps two new compose tasks separate and persists concurrent bindings', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'dispatch-compose-bindings-')), 'bindings.json')
+    const store = new CodexBindingStore(path)
+    await Promise.all([store.put({ kind: 'draft', draftKey: 'one' }, 'task-one'), store.put({ kind: 'draft', draftKey: 'two' }, 'task-two')])
+    const reopened = new CodexBindingStore(path)
+    await reopened.load()
+    expect(reopened.get({ kind: 'draft', draftKey: 'one' })).toBe('task-one')
+    expect(reopened.get({ kind: 'draft', draftKey: 'two' })).toBe('task-two')
+    expect(reopened.get({ kind: 'unbound' })).toBeUndefined()
+  })
+
   it('fails in the open when the file cannot be written', async () => {
     const store = new CodexBindingStore('/dev/null/codex-bindings.json')
     await expect(store.put({ kind: 'unbound' }, 'thread-1')).rejects.toThrow()

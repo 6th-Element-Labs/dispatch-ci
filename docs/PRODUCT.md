@@ -14,11 +14,11 @@ Dispatch has three persistent panels:
 2. Selected email or draft.
 3. Codex chat.
 
-The middle reading surface is visually primary. Selection of a Gmail conversation switches the one Codex pane to that conversation’s Codex thread. A new Compose with no Gmail thread id, and a state with no selection, use one unbound Codex thread.
+The middle reading surface is visually primary. Selection of a Gmail conversation switches the one Codex pane to that conversation’s Codex thread. Each new Compose has a separate durable draft task key. Once Gmail assigns a thread ID, Dispatch associates the existing task with that email. General search and no selection use the unbound task.
 
 All connected Gmail accounts enter one date-ordered queue by default. The user can filter that queue to one account. Message rows show a compact date and time. The rendered message header shows the full date and time.
 
-The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. All, Unread, and Read filters operate on conversation state. A conversation is unread when any retrieved member message carries Gmail's `UNREAD` label. All contains Inbox conversations plus unread conversations outside Inbox, excluding spam and trash. Unread contains every unread conversation outside spam and trash. Read remains scoped to read Inbox conversations.
+The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. Inbox contains only Gmail INBOX members, excluding drafts, spam and trash. All, Unread, and Read filter conversations within the selected mailbox. Unread archived mail remains in Archive and never enters Inbox merely because it is unread.
 
 Selecting a conversation loads the complete Gmail thread with the newest message first. The reader shows the subject on its own row, then the action buttons. A long subject stays on one line and uses an ellipsis. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
 
@@ -89,6 +89,10 @@ Results stay in the message list during background sync. Each row shows a highli
 
 
 ## Everyday reliability
+
+Archive, Trash, Spam, Move to Inbox, and read-state commands are committed to the mail owner's SQLite queue with their local state changes before the API accepts them. The UI selects the next row and leaves actions available. Commands replay in order per account after connection failures or restart. Partial provider snapshots cannot undo pending changes. Pending synchronization is shown quietly in Mail activity; local acceptance is not a provider acknowledgement. Sends are never automatically replayed.
+
+Provider Retry-After is shared across the mail service's bounded request lanes and persisted across restart. Mailbox scans cannot block interactive draft saves, and list reads do not start repeated failed scans. Every folder refreshes after synchronization recovers. Draft errors use plain language; local drafts say they are waiting to sync until Gmail confirms the save. Forward opens the same local editor immediately, like Reply.
 
 User edits are saved locally, including To, Cc, Bcc, account, subject, body, and attachment identities. New file bytes are stored before the attachment appears in the editor. New drafts autosave once recipient input is valid; untouched reply templates do not create recovery entries. Pending edits sync automatically in the background after temporary failures, navigation, or restart, using a stable draft identity to avoid duplicate creates. Drafts is one normal list: pending edits replace the matching Gmail row, with no separate local-copy label, recovery banner, or recovery dialog. A confirmed save clears only its own revision. Newer edits remain protected. Permanent save failures remain visible in the editor or affected Drafts row. Draft synchronization never sends mail.
 

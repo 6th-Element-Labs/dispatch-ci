@@ -25,6 +25,27 @@ function message(
 }
 
 describe('GmailIndex', () => {
+  it('keeps unread archives out of Inbox across partial sync and restart, with a durable command', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-action-restart-'))
+    directories.push(directory)
+    const path = join(directory, 'gmail.sqlite')
+    const first = new GmailIndex(path)
+    const original = message('m1', true, true)
+    first.replaceAccount('account-1', [original], 'one', true)
+    first.applyConversationAction('account-1', ['m1'], 'archive', true)
+    first.replaceAccount('account-1', [message('m2', false, true)], 'partial', false)
+    first.close()
+    const second = new GmailIndex(path)
+    second.replaceAccount('account-1', [original], 'stale', false)
+    expect(second.pendingActions()).toMatchObject([{ accountId: 'account-1', messageIds: ['m1'], action: 'archive' }])
+    expect(second.conversations('unread')).toEqual([])
+    expect(second.mailboxConversations('archive', 'unread')).toHaveLength(1)
+    second.finishAction(second.pendingActions()[0]!.id)
+    second.replaceAccount('account-1', [{ ...original, inInbox: false, inArchive: true }], 'confirmed', false)
+    second.replaceAccount('account-1', [original], 'user-moved-back', false)
+    expect(second.conversations('unread')).toHaveLength(1)
+    second.close()
+  })
   it('keeps an accepted folder action through a stale provider sync', () => {
     const directory = mkdtempSync(join(tmpdir(), 'dispatch-index-action-'))
     directories.push(directory)
@@ -50,8 +71,8 @@ describe('GmailIndex', () => {
     index.replaceAccounts([{ id: 'account-1', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }], '2026-09-04T09:00:00Z')
     index.replaceAccount('account-1', [message('m1', true, false), message('m2', false, true), message('m3', true, true)], 'run-1', true)
     index.completeSync('2026-09-04T09:01:00Z')
-    expect(index.conversations('all')).toHaveLength(3)
-    expect(index.conversations('unread').map((conversation) => conversation.latestMessageId)).toEqual(['m1', 'm3'])
+    expect(index.conversations('all')).toHaveLength(2)
+    expect(index.conversations('unread').map((conversation) => conversation.latestMessageId)).toEqual(['m3'])
     expect(index.conversations('read')).toMatchObject([{ latestMessageId: 'm2', unread: false }])
     index.close()
 
@@ -97,10 +118,10 @@ describe('GmailIndex', () => {
   it('searches indexed Gmail fields and operators', () => {
     const index = new GmailIndex(':memory:')
     index.replaceAccount('account-1', [{ ...message('m1', true, true), hasAttachment: true }, message('m2', false, true), { ...message('m3', true, false), subject: 'Archived only' }], 'run-1', true)
-    expect(index.searchConversations('from:ana', 'all')).toHaveLength(3)
+    expect(index.searchConversations('from:ana', 'all')).toHaveLength(2)
     expect(index.searchConversations('subject:m1 has:attachment is:unread', 'all')).toHaveLength(1)
     expect(index.searchConversations('after:2026-09-04T08:30:00Z', 'all')).toHaveLength(1)
-    expect(index.searchConversations('subject:Archived', 'all')).toHaveLength(1)
+    expect(index.searchConversations('subject:Archived', 'all')).toHaveLength(0)
     expect(() => index.searchConversations('label:custom', 'all')).toThrow('Unsupported Gmail search operator')
     index.close()
   })
@@ -162,8 +183,8 @@ describe('GmailIndex', () => {
       message('m3', true, false, { inTrash: true, inArchive: false }),
       message('m4', true, false, { inArchive: true }),
     ], 'run-1', true)
-    expect(index.conversations('all').map((item) => item.latestMessageId).sort()).toEqual(['m1', 'm4'])
-    expect(index.conversations('unread').map((item) => item.latestMessageId).sort()).toEqual(['m1', 'm4'])
+    expect(index.conversations('all').map((item) => item.latestMessageId).sort()).toEqual(['m1'])
+    expect(index.conversations('unread').map((item) => item.latestMessageId).sort()).toEqual(['m1'])
     expect(index.mailboxConversations('spam', 'all').map((item) => item.latestMessageId)).toEqual(['m2'])
     expect(index.mailboxConversations('trash', 'unread').map((item) => item.latestMessageId)).toEqual(['m3'])
     index.close()

@@ -230,8 +230,8 @@ describe('GmailConnectorProvider', () => {
     await provider.listConversations('link-one', 'read', 1)
     expect(searches).toEqual([
       expect.objectContaining({ query: '-in:spam -in:trash', labelIds: ['INBOX'] }),
-      expect.objectContaining({ query: '(in:inbox OR is:unread) -in:spam -in:trash', labelIds: [] }),
-      expect.objectContaining({ query: 'is:unread -in:spam -in:trash', labelIds: ['UNREAD'] }),
+      expect.objectContaining({ query: 'in:inbox -in:spam -in:trash -in:drafts', labelIds: ['INBOX'] }),
+      expect.objectContaining({ query: 'in:inbox is:unread -in:spam -in:trash -in:drafts', labelIds: ['INBOX', 'UNREAD'] }),
       expect.objectContaining({ query: 'in:inbox is:read -in:spam -in:trash', labelIds: ['INBOX'] }),
     ])
     expect(await provider.readMessage('link-one', 'gmail-message-1')).toMatchObject({ id: 'gmail-message-1', source: 'gmail' })
@@ -281,21 +281,21 @@ describe('GmailConnectorProvider', () => {
     const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: join(directory, 'gmail.sqlite') })
     await provider.syncNow()
     expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3 })
-    expect(await provider.listUnifiedConversations('all')).toHaveLength(3)
-    expect(await provider.listUnifiedConversations('unread')).toHaveLength(2)
-    await provider.setConversationUnread('link-one', 't2', false)
+    expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
     expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
+    await provider.setConversationUnread('link-one', 't2', false)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(0)
     expect(requests.filter((request) => request.labelIds?.includes('INBOX'))).toHaveLength(2)
     expect(requests.filter((request) => request.labelIds?.includes('UNREAD') === true && request.labelIds.includes('INBOX') !== true)).toHaveLength(1)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
     await provider.refreshNow()
     expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 7 })
-    expect(await provider.listUnifiedConversations('all')).toHaveLength(3)
-    expect(await provider.listUnifiedConversations('unread')).toHaveLength(1)
+    expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
+    expect(await provider.listUnifiedConversations('unread')).toHaveLength(0)
     failSearch = true
     await expect(provider.syncNow()).rejects.toThrow('Gmail connector request failed (502)')
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', messageCount: 3 })
-    await expect(provider.listUnifiedConversations('all')).resolves.toHaveLength(3)
+    await expect(provider.listUnifiedConversations('all')).resolves.toHaveLength(2)
     failInventory = true
     await expect(provider.accounts()).resolves.toMatchObject([{ id: 'link-one', email: 'work@example.com' }])
     expect(provider.syncStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Gmail account refresh failed') })
@@ -635,7 +635,9 @@ describe('GmailConnectorProvider', () => {
     const before = searches.length
     await provider.createGmailDraft('link-one', '', 'client@example.com', '', '', 'Subject', 'Body')
     await provider.discardGmailDraft('link-one', 'draft-1')
+    expect(searches.length).toBe(before)
     await provider.sendGmailDraft('link-one', 'draft-1')
+    await provider.refreshNow()
     expect(searches.length).toBeGreaterThan(before)
     provider.stopBackgroundSync()
   })

@@ -31,6 +31,13 @@ export class LocalMailStore {
     if (job?.state === 'running') this.putDownload({ ...job, state: 'interrupted' })
   }
   close(): void { this.#db.close() }
+  retryAfter(accountId: string): number {
+    const row = this.#db.prepare('SELECT payload FROM local_state WHERE key=?').get(`retry-after:${accountId}`)
+    return row ? Number(row.payload) : 0
+  }
+  putRetryAfter(accountId: string, timestamp: number): void {
+    this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES (?,?)').run(`retry-after:${accountId}`, String(timestamp))
+  }
   draftCreate(accountId: string, clientId: string): { draftId?: string; rejected?: boolean } | undefined {
     const row = this.#db.prepare('SELECT payload FROM local_state WHERE key=?').get(`draft-create:${accountId}:${clientId}`)
     return row ? JSON.parse(String(row.payload)) : undefined

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectDraft, quoteReplyMarkdown } from '../src/draft.js'
+import { plainBodyFromMessage, projectDraft, quoteReplyMarkdown } from '../src/draft.js'
 import type { MessageProjection } from '../src/model.js'
 
 const message: MessageProjection = {
@@ -11,6 +11,14 @@ const message: MessageProjection = {
 }
 
 describe('draft helpers', () => {
+  it('keeps paragraph boundaries, emphasis and links when a Gmail draft is reopened', () => {
+    const markdown = plainBodyFromMessage({ ...message, body: { kind: 'sanitized-html', content: '<p>Hello <strong>Ana</strong>.</p><p>See <a href="https://example.com">proposal</a>.</p><ul><li>One</li><li>Two</li></ul>' } })
+    expect(markdown).toContain('**Ana**')
+    expect(markdown).toContain('\n\nSee [proposal](https://example.com)')
+    const reopened = projectDraft({ id: 'd', inReplyToMessageId: '', to: [], subject: 'Test', bodyMarkdown: markdown + '\n\nNew paragraph' })
+    expect(reopened.bodyHtml).toContain('<strong>Ana</strong>')
+    expect(reopened.bodyHtml).toContain('<li>One</li>')
+  })
   it('projects Markdown and derived HTML with bodyText alias', () => {
     const draft = projectDraft({
       id: 'd1', inReplyToMessageId: 'm2', to: [message.sender], cc: '', bcc: '',

@@ -179,6 +179,7 @@ function threadIdFrom(value: unknown): string {
 
 function parseBindingKey(payload: Record<string, unknown>): CodexBindingKey | undefined {
   if (payload.kind === 'unbound') return { kind: 'unbound' }
+  if (payload.kind === 'draft' && typeof payload.draftKey === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(payload.draftKey)) return { kind: 'draft', draftKey: payload.draftKey }
   if (payload.kind === 'conversation' && typeof payload.accountId === 'string' && payload.accountId && typeof payload.gmailThreadId === 'string' && payload.gmailThreadId) {
     return { kind: 'conversation', accountId: payload.accountId, gmailThreadId: payload.gmailThreadId }
   }
@@ -538,7 +539,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
         const key = parseBindingKey(payload)
         if (!key) return json(response, 400, { error: 'invalid_binding_key' })
         await bindings.load()
-        const adopt = key.kind === 'unbound' && typeof payload.adoptThreadId === 'string' ? payload.adoptThreadId : ''
+        const adopt = typeof payload.adoptThreadId === 'string' ? payload.adoptThreadId : ''
         const existing = bindings.get(key) ?? (adopt || undefined)
         if (existing) {
           try {

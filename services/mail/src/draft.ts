@@ -1,4 +1,5 @@
 import { renderDraftMarkdown } from './draft-markdown.js'
+import TurndownService from 'turndown'
 import type { DraftAttachment, DraftProjection, MailAddress, MessageProjection } from './model.js'
 
 export interface DraftFields {
@@ -33,7 +34,10 @@ export function projectDraft(fields: DraftFields): DraftProjection {
 
 export function plainBodyFromMessage(message: MessageProjection): string {
   if (message.body.kind === 'plain-text') return message.body.content.trim()
-  return message.body.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  const converter = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' })
+  converter.remove(['script', 'style'])
+  converter.keep(['table', 'sub', 'sup'])
+  return converter.turndown(message.body.content)
 }
 
 export function quoteReplyMarkdown(message: MessageProjection): string {
