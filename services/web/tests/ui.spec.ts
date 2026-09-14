@@ -1213,11 +1213,15 @@ for (const editing of [false, true]) test(`new reply refreshes the open thread a
   await stubAgent(page)
   await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', name: 'Test', email: 'test@example.com', connectorId: 'gmail' }] } }))
   await page.route(/8411\/v1\/conversations\?/, route => { refreshed ||= updated; return route.fulfill({ json: { source: 'demo', conversations: updated ? [{ ...conversations[0]!, latestMessageId: 'jacob', messageCount: 2 }, conversations[1]!] : conversations } }) })
-  await page.route(/8411\/v1\/conversations\/t1(?:\?|$)/, route => route.fulfill({ json: { conversation: { ...conversations[0]!, source: 'demo', messages: [{ ...messages[0]!, id: updated ? 'jacob' : 'm1', body: { kind: 'sanitized-html', content: updated ? '<p>Received thanks from Jacob!</p>' : '<p>Original message</p>' }, attachments: [] }] } } }))
+  await page.route(/8411\/v1\/conversations\/t1(?:\?|$)/, route => route.fulfill({ json: { conversation: { ...conversations[0]!, source: 'demo', messages: [{ ...messages[0]!, id: updated ? 'jacob' : 'm1', body: { kind: 'sanitized-html', content: `${updated ? '<p>Received thanks from Jacob!</p>' : '<p>Original message</p>'}<div style="height:2000px">Earlier correspondence</div>` }, attachments: [] }] } } }))
   await page.route('http://127.0.0.1:8411/v1/sync/status', route => route.fulfill({ json: { sync: { state: 'ready', completedAt: '2026-09-11T00:00:00Z', messageCount: 3, mailRevision: updated ? 2 : 1 } } }))
   await page.goto('/')
   await expect(page.getByText('Original message', { exact: true })).toBeVisible()
   await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Keep this unsent prompt')
+  if (!editing) {
+    await page.locator('[data-body]').evaluate(element => { element.scrollTop = 500 })
+    expect(await page.locator('[data-body]').evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  }
   if (editing) {
     await page.getByRole('button', { name: 'Reply', exact: true }).click()
     await page.getByRole('textbox', { name: 'Draft body' }).fill('Keep my draft edits')
@@ -1228,6 +1232,7 @@ for (const editing of [false, true]) test(`new reply refreshes the open thread a
     await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Keep my draft edits')
   } else {
     await expect(page.getByText('Received thanks from Jacob!', { exact: true })).toBeVisible({ timeout: 8000 })
+    await expect.poll(() => page.locator('[data-body]').evaluate(element => element.scrollTop)).toBe(0)
     await expect(page.getByRole('textbox', { name: 'Ask Codex' })).toHaveValue('Keep this unsent prompt')
   }
 })
@@ -1247,6 +1252,43 @@ test('collapses an unsent draft without losing edits and gives space back to the
   const expand = page.getByRole('button', { name: 'Expand draft', exact: true })
   await expand.focus(); await page.keyboard.press('Enter')
   await expect(body).toHaveValue('Keep these unsent words')
+})
+
+for (const action of ['automatic', 'refresh', 'compose']) test(`failed message download recovers safely: ${action}`, async ({ page }) => {
+  let reads = 0
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', name: 'Test', email: 'test@example.com', connectorId: 'gmail' }] } }))
+  await page.route(/8411\/v1\/conversations\/t1(?:\?|$)/, route => {
+    if (++reads === 1) return route.fulfill({ status: 503, json: { error: 'network unavailable after wake' } })
+    return route.fulfill({ json: { conversation: { ...conversations[0]!, source: 'demo', messages: [{ ...messages[0]!, body: { kind: 'sanitized-html', content: '<p>Downloaded after reconnect</p>' }, attachments: [] }] } } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/sync', route => route.fulfill({ status: 202, json: { sync: { state: 'syncing', completedAt: null } } }))
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: 'Retry message', exact: true })).toBeVisible()
+  if (action === 'refresh') await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  if (action === 'compose') {
+    await page.getByRole('button', { name: 'Compose', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Draft body' }).fill('Do not replace this draft')
+    await page.waitForTimeout(5500)
+    await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Do not replace this draft')
+    expect(reads).toBe(1)
+  } else await expect(page.getByText('Downloaded after reconnect', { exact: true })).toBeVisible({ timeout: action === 'refresh' ? 3000 : 8000 })
+})
+
+test('network loss never persists downloaded-only mode and old automatic offline settings are repaired', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('dispatch.offline-mode', 'true'))
+  let refreshes = 0
+  await page.route('http://127.0.0.1:8411/v1/sync', route => { refreshes++; return route.fulfill({ status: 202, json: { sync: { state: 'syncing', completedAt: null } } }) })
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem('dispatch.offline-mode'))).toBeNull()
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect.poll(() => refreshes).toBe(1)
+  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')))
+  expect(await page.evaluate(() => localStorage.getItem('dispatch.offline-mode'))).toBeNull()
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect.poll(() => refreshes).toBe(2)
+  await expect(page.locator('[data-mail-source]')).not.toHaveText('Downloaded mail')
 })
 
 test('derives an immediate unread view from the cached All inbox', async ({ page }) => {
@@ -2071,7 +2113,7 @@ test('keeps sending quiet and locks edits until Gmail responds', async ({ page }
 
 test('reads downloaded mail with a visible timestamp and blocks remote images', async ({ page }) => {
   const requests: string[] = []
-  await page.addInitScript(() => localStorage.setItem('dispatch.offline-mode', 'true'))
+  await page.addInitScript(() => { localStorage.setItem('dispatch.offline-mode', 'true'); localStorage.setItem('dispatch.offline-mode-source', 'manual') })
   await page.route(/8411\/v1\/accounts/, route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
   await page.route(/8411\/v1\/conversations\?/, route => { requests.push(route.request().url()); return route.fulfill({ json: { source: 'gmail', coverage: 'downloaded', conversations: [{ ...conversations[0], accountId: 'one', downloaded: true }] } }) })
   await page.route(/8411\/v1\/conversations\/t1/, route => { requests.push(route.request().url()); return route.fulfill({ json: { conversation: { ...conversations[0], accountId: 'one', source: 'gmail', availability: { mode: 'downloaded', cachedAt: '2026-09-08T01:00:00Z' }, messages: [{ ...messages[0], accountId: 'one', source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Full downloaded body</p><img src="https://tracker.example/pixel" srcset="https://tracker.example/high 2x"><div style="background-image:url(https://tracker.example/bg)">No remote background</div>' }, attachments: [] }] } } }) })

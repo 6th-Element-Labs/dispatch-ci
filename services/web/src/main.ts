@@ -324,7 +324,10 @@ window.addEventListener('online', () => { if (draftSyncTimer !== undefined) wind
 let recoveryKey: string | undefined
 let draftSeed: { fields: string; attachments: DraftProjection['attachments'] } | undefined
 function editorFields(): string { return JSON.stringify([recipientValue(elements.draftTo), recipientValue(elements.draftCc), recipientValue(elements.draftBcc), elements.draftSubject.value, elements.draftBody.value]) }
-let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true'
+// Older builds persisted network loss as an explicit offline preference.
+// Only a deliberate user choice may disable live Gmail reads and refresh.
+let offlineMode = localStorage.getItem('dispatch.offline-mode') === 'true' && localStorage.getItem('dispatch.offline-mode-source') === 'manual'
+if (localStorage.getItem('dispatch.offline-mode-source') !== 'manual') localStorage.removeItem('dispatch.offline-mode')
 let offlineStatus: OfflineStatus | undefined
 
 let conversations: ConversationSummary[] = []
@@ -339,6 +342,7 @@ let mailbox: GmailMailbox = 'inbox'
 let selected: ConversationProjection | undefined
 let selectedSummary: ConversationSummary | undefined
 let selectedConversationId: string | undefined
+let readerNeedsRetry = false
 let selectionSequence = 0
 const markReadDwell = createMarkReadDwell()
 let conversationLoadSequence = 0
@@ -944,6 +948,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   const matchResult = searchView?.results.find(result => result.conversation.id === id)
   const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
   if (!summary) return
+  readerNeedsRetry = false
   // Navigation depends only on a durable local checkpoint. The existing save
   // flight and outbox finish independently of the selected email.
   if (activeDraft && draftDirty) {
@@ -1037,6 +1042,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     const conversation = await request
     if (sequence !== selectionSequence || selectedConversationId !== id) return
     selected = conversation
+    readerNeedsRetry = !offlineMode && conversation.availability?.mode === 'downloaded'
     elements.copyStatus.hidden = !conversation.availability
     elements.copyStatus.textContent = conversation.availability ? `${conversation.availability.mode === 'downloaded' ? 'Downloaded copy' : 'Available offline'} · ${new Date(conversation.availability.cachedAt).toLocaleString()}${conversation.availability.reason ? ` · ${conversation.availability.reason}` : ''}` : ''
     if (conversation.availability?.mode === 'downloaded') markReadDwell.cancel()
@@ -1046,7 +1052,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
     elements.subject.textContent = conversation.subject
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
-const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
+    const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
     elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0 || Boolean(matchResult?.hits.some(hit => hit.messageId === message.id)))))
     const attachmentCount = newestFirst.reduce((count, message) => count + message.attachments.length, 0)
     threadAttachmentCounts.set(`${mailbox}:${id}`, attachmentCount)
@@ -1079,6 +1085,9 @@ const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(
       elements.body.prepend(files)
       renderDisclosure()
     }
+    // Replacing a thread must not retain the previous thread's scroll offset.
+    // Search hits below may intentionally move to their matching passage.
+    elements.body.scrollTop = 0
     if (matchResult) {
       for (const hit of matchResult.hits) {
         const message = [...elements.body.querySelectorAll<HTMLElement>('[data-message-id]')].find(node => node.dataset.messageId === hit.messageId)
@@ -1109,11 +1118,16 @@ const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(
     }
   } catch (error) {
     if (sequence !== selectionSequence) return
+    readerNeedsRetry = true
     loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
     loading.textContent = 'This message is not available yet. Dispatch will retry when Gmail reconnects.'
+    const retry = document.createElement('button')
+    retry.type = 'button'; retry.className = 'btn btn-sm btn-outline-primary ms-2'; retry.textContent = 'Retry message'
+    retry.onclick = () => { if (!activeDraft && selectedConversationId === id) void selectConversation(id) }
+    loading.append(retry)
 if (!offlineMode && !String(error).includes('not_downloaded')) window.setTimeout(() => {
-      if (selectedConversationId === id) void selectConversation(id)
-    }, 60_000)
+      if (sequence === selectionSequence && !activeDraft && selectedConversationId === id) void selectConversation(id)
+    }, 5_000)
   }
 }
 
@@ -2721,7 +2735,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     if (result.sync && result.coverage !== 'downloaded') elements.mailSource.textContent = result.sync.state === 'ready' ? `Gmail synced · ${syncTime(result.sync.completedAt)}` : result.sync.state === 'failed' ? 'Waiting for Gmail' : 'Syncing Gmail'
     renderList()
     const currentSummary = conversations.find(conversation => conversation.id === selectedConversationId)
-    if (!activeDraft && !offlineMode && currentSummary && selectedSummary && currentSummary.latestMessageId !== selectedSummary.latestMessageId) {
+    if (!activeDraft && !offlineMode && currentSummary && selectedSummary && (readerNeedsRetry || currentSummary.latestMessageId !== selectedSummary.latestMessageId)) {
       dropConversationCache(currentSummary.id)
       await selectConversation(currentSummary.id, { refresh: true })
       return
@@ -2915,7 +2929,7 @@ async function refreshUtilities(): Promise<void> {
 }
 function setDownloadedMode(value: boolean): void {
   if (draftDirty) checkpointDraft()
-  offlineMode = value; localStorage.setItem('dispatch.offline-mode', String(value))
+  offlineMode = value; localStorage.setItem('dispatch.offline-mode', String(value)); localStorage.setItem('dispatch.offline-mode-source', 'manual')
   if (!value) scheduleDraftSync(0)
   clearSearchView(); conversationCache.clear(); renderOfflineStatus()
   void connectMail()
@@ -2976,7 +2990,7 @@ app.querySelector('[data-offline-open]')?.addEventListener('click', () => { rend
 app.querySelector<HTMLInputElement>('[data-offline-mode]')?.addEventListener('change', event => setDownloadedMode((event.target as HTMLInputElement).checked))
 app.querySelector('[data-download-mailbox]')?.addEventListener('click', () => { void api.downloadMailbox(mailbox, selectedAccountId).then(refreshUtilities).catch(error => { app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = String(error) }) })
 app.querySelector('[data-cancel-download]')?.addEventListener('click', () => { void api.cancelDownload().then(refreshUtilities).catch(error => { app.querySelector<HTMLElement>('[data-offline-status]')!.textContent = String(error) }) })
-window.addEventListener('offline', () => setDownloadedMode(true))
+window.addEventListener('offline', () => { if (!offlineMode) elements.mailSource.textContent = 'Waiting for connection' })
 renderRecoveryList()
 scheduleDraftSync()
 void refreshUtilities()
@@ -2992,7 +3006,7 @@ let refreshRequest: Promise<void> | undefined
 let lastAutomaticRefresh = 0
 function requestMailRefresh(reason: 'manual' | 'wake' | 'foreground' = 'manual'): Promise<void> {
   if (offlineMode || refreshRequest) return refreshRequest ?? Promise.resolve()
-  if (reason !== 'manual' && Date.now() - lastAutomaticRefresh < 10_000) return Promise.resolve()
+  if (reason === 'foreground' && Date.now() - lastAutomaticRefresh < 10_000) return Promise.resolve()
   const button = app.querySelector<HTMLButtonElement>('[data-refresh]')!
   button.disabled = true
   elements.mailSource.textContent = 'Refreshing Gmail…'

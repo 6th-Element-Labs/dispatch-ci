@@ -333,6 +333,8 @@ export class GmailConnectorProvider {
   #syncController: AbortController | undefined
   #syncKind: 'heads' | 'full' | undefined
   #syncStarted = 0
+  #lastWakeRefresh = Number.NEGATIVE_INFINITY
+  #wakeController: AbortController | undefined
   #wakeTimer: ReturnType<typeof setInterval> | undefined
   #mailRevision = Date.now()
   #syncTimer: ReturnType<typeof setInterval> | undefined
@@ -416,7 +418,12 @@ export class GmailConnectorProvider {
   requestRefresh(reason = 'manual'): void {
     if (this.#stopped) return
     const syncAge = Date.now() - this.#syncStarted
-    if (this.#syncPromise && reason === 'wake' && syncAge < 15_000) return
+    if (reason === 'wake') {
+      const now = Date.now()
+      // Join another wake detector's replacement, never an arbitrary pre-wake scan.
+      if (this.#syncPromise && this.#wakeController === this.#syncController && now >= this.#lastWakeRefresh && now - this.#lastWakeRefresh < 15_000) return
+      this.#lastWakeRefresh = now
+    }
     if (this.#syncPromise && (reason === 'wake' || (reason !== 'periodic' && this.#syncKind === 'full') || syncAge > 180_000)) {
       this.#syncController?.abort()
       this.#syncPromise = undefined
@@ -426,6 +433,7 @@ export class GmailConnectorProvider {
       if (error?.name === 'AbortError' || this.#stopped) return
       this.#scheduleSync(/fetch failed|ECONN|network/i.test(String(error)) ? 5_000 : 60_000)
     })
+    if (reason === 'wake') this.#wakeController = this.#syncController
   }
 
   #runSync(kind: 'heads' | 'full', work: (signal: AbortSignal) => Promise<void>): Promise<void> {
