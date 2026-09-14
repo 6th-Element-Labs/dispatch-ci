@@ -2993,12 +2993,12 @@ let lastAutomaticRefresh = 0
 function requestMailRefresh(reason: 'manual' | 'wake' | 'foreground' = 'manual'): Promise<void> {
   if (offlineMode || refreshRequest) return refreshRequest ?? Promise.resolve()
   if (reason !== 'manual' && Date.now() - lastAutomaticRefresh < 10_000) return Promise.resolve()
-  lastAutomaticRefresh = Date.now()
   const button = app.querySelector<HTMLButtonElement>('[data-refresh]')!
   button.disabled = true
   elements.mailSource.textContent = 'Refreshing Gmail…'
   elements.mailError.hidden = true
   refreshRequest = api.refreshMail(reason).then((sync) => {
+    lastAutomaticRefresh = Date.now()
     observedSyncCompletedAt = sync.completedAt
     return loadConversations(true)
   }).catch((error) => {

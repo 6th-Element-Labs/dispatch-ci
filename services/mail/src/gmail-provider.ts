@@ -415,7 +415,9 @@ export class GmailConnectorProvider {
 
   requestRefresh(reason = 'manual'): void {
     if (this.#stopped) return
-    if (this.#syncPromise && (reason === 'wake' || (reason !== 'periodic' && this.#syncKind === 'full') || Date.now() - this.#syncStarted > 180_000)) {
+    const syncAge = Date.now() - this.#syncStarted
+    if (this.#syncPromise && reason === 'wake' && syncAge < 15_000) return
+    if (this.#syncPromise && (reason === 'wake' || (reason !== 'periodic' && this.#syncKind === 'full') || syncAge > 180_000)) {
       this.#syncController?.abort()
       this.#syncPromise = undefined
     }

@@ -54,6 +54,9 @@ it('publishes healthy Inbox results before another account or folder finishes', 
 })
 
 it('wake replaces a pre-sleep read without cancelling draft writes, and refresh returns 202', async () => {
+  const realNow = Date.now.bind(Date)
+  let timeOffset = 0
+  const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + timeOffset)
   let entered!: () => void; let release!: () => void
   const firstRead = new Promise<void>(resolve => { entered = resolve })
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -82,6 +85,7 @@ it('wake replaces a pre-sleep read without cancelling draft writes, and refresh 
   const mail = createMailServer(p)
   await new Promise<void>(resolve => mail.listen(0, '127.0.0.1', resolve))
   try {
+    timeOffset = 20_000
     const response = await fetch(`http://127.0.0.1:${(mail.address() as AddressInfo).port}/v1/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: 'wake' }), signal: AbortSignal.timeout(1000) })
     expect(response.status).toBe(202)
     await p.refreshNow()
@@ -91,5 +95,5 @@ it('wake replaces a pre-sleep read without cancelling draft writes, and refresh 
     expect(p.syncStatus()?.state).toBe('ready')
     expect(writeSettled).toBe(false)
     releaseWrite(); expect((await updating).bodyMarkdown).toBe('Keep my edits')
-  } finally { release(); releaseWrite(); await updating; await old; p.stopBackgroundSync(); mail.closeAllConnections(); await new Promise<void>(resolve => mail.close(() => resolve())); agent.closeAllConnections(); await new Promise<void>(resolve => agent.close(() => resolve())) }
+  } finally { nowSpy.mockRestore(); release(); releaseWrite(); await updating; await old; p.stopBackgroundSync(); mail.closeAllConnections(); await new Promise<void>(resolve => mail.close(() => resolve())); agent.closeAllConnections(); await new Promise<void>(resolve => agent.close(() => resolve())) }
 })
