@@ -76,24 +76,22 @@ app.innerHTML = `
         <div data-reader hidden>
           <header class="dispatch-reader-header">
             <h2 class="dispatch-reader-subject" data-subject></h2>
-            <div class="dispatch-reader-toolbar">
+            <div class="dispatch-reader-toolbar" role="toolbar" aria-label="Message actions">
               <button class="btn btn-icon btn-ghost-secondary btn-sm dispatch-mobile-back" type="button" data-mobile-back aria-label="Back to Inbox"><i class="ti ti-arrow-left" aria-hidden="true"></i></button>
-              <button class="btn btn-outline-secondary btn-sm" type="button" data-reply><i class="ti ti-arrow-back-up me-1" aria-hidden="true"></i>Reply</button>
-              <div class="btn-group" role="group" aria-label="Reply options">
-                <button class="btn btn-icon btn-sm" type="button" data-reply-all aria-label="Reply all" title="Reply all"><i class="ti ti-arrow-back-up-double" aria-hidden="true"></i></button>
-                <button class="btn btn-icon btn-sm" type="button" data-forward aria-label="Forward" title="Forward"><i class="ti ti-arrow-forward-up" aria-hidden="true"></i></button>
-              </div>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-reply aria-label="Reply"><i class="ti ti-arrow-back-up" aria-hidden="true"></i><span>Reply</span></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-reply-all aria-label="Reply all"><i class="ti ti-arrow-back-up-double" aria-hidden="true"></i><span>Reply all</span></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-forward aria-label="Forward"><i class="ti ti-arrow-forward-up" aria-hidden="true"></i><span>Forward</span></button>
               <span class="dispatch-reader-divider" aria-hidden="true"></span>
-              <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-move-inbox aria-label="Move to Inbox" title="Move to Inbox" hidden><i class="ti ti-inbox" aria-hidden="true"></i></button>
-              <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-archive aria-label="Archive" title="Archive"><i class="ti ti-archive" aria-hidden="true"></i></button>
-              <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-spam aria-label="Mark as spam" title="Mark as spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i></button>
-              <button class="btn btn-icon btn-ghost-danger btn-sm" type="button" data-trash aria-label="Move to Trash" title="Move to Trash"><i class="ti ti-trash" aria-hidden="true"></i></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-move-inbox aria-label="Move to Inbox" hidden><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-archive aria-label="Archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-spam aria-label="Mark as spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-trash aria-label="Move to Trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-read-state aria-label="Mark unread"><i class="ti ti-mail" aria-hidden="true"></i><span>Unread</span></button>
+              <span class="dispatch-reader-spacer"></span>
+              <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-ask aria-label="Ask Codex"><i class="ti ti-sparkles" aria-hidden="true"></i><span>Codex</span></button>
               <div class="dispatch-reader-more">
-                <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-reader-more aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><i class="ti ti-dots" aria-hidden="true"></i></button>
+                <button class="btn btn-ghost-secondary dispatch-reader-action" type="button" data-reader-more aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><i class="ti ti-dots" aria-hidden="true"></i><span>More</span></button>
                 <div class="dropdown-menu dropdown-menu-end dispatch-reader-menu" data-reader-menu role="menu" hidden>
-                  <button class="dropdown-item" type="button" role="menuitem" data-read-state>Mark unread</button>
-                  <button class="dropdown-item" type="button" role="menuitem" data-ask><i class="ti ti-sparkles dropdown-item-icon" aria-hidden="true"></i>Ask Codex</button>
-                  <div class="dropdown-divider"></div>
                   <button class="dropdown-item dispatch-pane-collapse" type="button" role="menuitem" data-collapse-reader>Hide email panel</button>
                 </div>
               </div>
@@ -205,6 +203,8 @@ const elements = {
   sync: app.querySelector<HTMLElement>('.dispatch-sync')!,
   stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
+  readStateIcon: app.querySelector<HTMLElement>('[data-read-state] > i')!,
+  readStateLabel: app.querySelector<HTMLElement>('[data-read-state] > span')!,
   archive: app.querySelector<HTMLButtonElement>('[data-archive]')!,
   spam: app.querySelector<HTMLButtonElement>('[data-spam]')!,
   trash: app.querySelector<HTMLButtonElement>('[data-trash]')!,
@@ -1049,7 +1049,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     elements.readState.hidden = !conversation.accountId
     const acceptedUnread = selectedConversationId ? acceptedReadState.get(selectedConversationId) : undefined
     if (acceptedUnread !== undefined) selected = { ...selected, unread: acceptedUnread }
-    elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
+    renderReadState(selected.unread)
     elements.subject.textContent = conversation.subject
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
     const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
@@ -1154,7 +1154,7 @@ function applyLocalReadState(conversationId: string, unread: boolean): void {
   conversations = conversations
     .map((conversation) => conversation.id === conversationId ? { ...conversation, unread } : conversation)
     .filter((conversation) => mailState !== 'unread' || conversation.unread)
-  if (selectedConversationId === conversationId) elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
+  if (selectedConversationId === conversationId) renderReadState(unread)
   renderList()
 }
 
@@ -1182,20 +1182,28 @@ function syncSelectedReadState(): void {
     ?? conversations.find((conversation) => conversation.id === selectedConversationId)?.unread
   if (unread === undefined || selected.unread === unread) return
   selected = { ...selected, unread }
-  elements.readState.textContent = unread ? 'Mark read' : 'Mark unread'
+  renderReadState(unread)
+}
+
+function renderReadState(unread: boolean, busy = false): void {
+  const label = unread ? 'Mark read' : 'Mark unread'
+  elements.readState.setAttribute('aria-label', busy ? (unread ? 'Marking read…' : 'Marking unread…') : label)
+  elements.readState.title = label
+  elements.readStateIcon.className = unread ? 'ti ti-mail-opened' : 'ti ti-mail'
+  elements.readStateLabel.textContent = unread ? 'Read' : 'Unread'
 }
 
 async function applyReadState(nextUnread: boolean): Promise<void> {
   if (!selected?.accountId) return
   const conversationId = selected.id
   elements.readState.disabled = true
-  elements.readState.textContent = nextUnread ? 'Marking unread…' : 'Marking read…'
+  renderReadState(!nextUnread, true)
   try {
     await api.setConversationUnread(selected.threadId, selected.accountId, nextUnread, selected.messages.map((message) => message.id))
     if (selectedConversationId !== conversationId) return
     applyLocalReadState(conversationId, nextUnread)
   } catch (error) {
-    elements.readState.textContent = selected.unread ? 'Mark read' : 'Mark unread'
+    renderReadState(selected.unread)
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
   } finally {

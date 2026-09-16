@@ -1,0 +1,70 @@
+# Reader toolbar, multi-select, drag to folder, Delete key
+
+Date: 2026-09-17
+Status: approved by Steve on 2026-09-17 (option D toolbar with the Codex sparkle; multi-select, drag, and Delete as specified here)
+
+## Problem
+
+The reader toolbar mixes four button treatments in one row: an outlined "Reply" text pill, a bordered Reply-all/Forward group, borderless ghost icons for folder actions, and a red Trash. Heights differ and the row ends mid-header. The list has no multi-select, rows cannot be dragged to a folder, and the Delete key does nothing.
+
+## Goal
+
+- One consistent reader toolbar: icon over an 11px label for every action, same size, same ghost treatment.
+- Shift-click and Cmd-click select several conversations; the toolbar acts on the whole selection.
+- Rows drag onto folder targets (rail, folder dropdown) and drop runs the existing folder command.
+- Delete and Backspace move the selection to Trash. In Trash they permanently delete after a confirm.
+
+## Non-goals
+
+- Redesigning message rows or the top window toolbar.
+- Flag, Mute, Move to arbitrary label.
+- Native drag images or a native drop into Finder.
+- Undo.
+
+## Constraints
+
+- `services/web` owns presentation. `services/mail` remains the only Gmail writer. `apps/desktop` learns nothing new.
+- Keep Tabler 1.4 tokens and the 36px minimum hit target. Labels never wrap; the toolbar scrolls horizontally rather than overflowing the pane.
+- Keys are ignored while focus is in a text field, textarea, or contenteditable.
+- Failures stay visible per conversation. No whole-list rollback.
+
+## PR 1: Toolbar D
+
+Markup: every reader action becomes `.btn.btn-ghost-secondary.dispatch-reader-action` with an `<i class="ti">` above a `<span>` label. Order, left to right:
+
+| Command | Icon | Label | Shown |
+|---|---|---|---|
+| reply | ti-arrow-back-up | Reply | always |
+| replyAll | ti-arrow-back-up-double | Reply all | always |
+| forward | ti-arrow-forward-up | Forward | always |
+| divider | | | |
+| inbox | ti-inbox | Inbox | archive, spam, trash |
+| archive | ti-archive | Archive | inbox |
+| spam | ti-alert-octagon | Spam | not spam, not trash |
+| trash | ti-trash | Trash | not trash; label "Delete" in trash (PR 3) |
+| readState | ti-mail-opened / ti-mail | Unread / Read | when the thread has an account |
+| spacer | | | |
+| ask | ti-sparkles | Codex | always |
+| more | ti-dots | More | always |
+
+The More menu keeps "Hide email panel" only. Mark read/unread and Ask Codex move into the toolbar. Trash loses the red. Size: 44px tall, min 52px wide, icon 1.25rem, label .6875rem, gap 2px. The existing `data-*` hooks stay so handlers and tests keep working. Playwright: toolbar buttons all visible ones have the same height, label text is present, no button narrower than 44px.
+
+## PR 2: Multi-select and drag
+
+State: `selectedIds: Set<string>` and `selectionAnchor?: string` beside the existing `selectedConversationId`. Plain click sets the anchor and a single selection and opens the reader as today. Shift-click selects the range from the anchor to the row in the listed order. Cmd-click toggles one row; the anchor stays. Arrow keys with focus in the list move the anchor; Shift-arrow extends. Escape collapses to the anchor.
+
+Rendering: rows carry `aria-selected` and `.active` for every id in the set. With two or more selected the reader shows the empty state "N conversations selected" and the toolbar stays visible with reply, replyAll, forward, and ask hidden.
+
+Actions: `mutateSelected(action)` becomes `mutateConversations(ids, action)`. It removes all rows optimistically, calls the mail API once per thread in parallel, and re-inserts only the rows whose call failed, with the mail error naming the count. The context menu acts on the whole selection when the right-clicked row is part of it.
+
+Drag: rows are `draggable`. `dragstart` sets `text/x-dispatch-conversations` to the selected ids (or the dragged row if it is not selected) and a custom drag image showing the count. Drop targets are `[data-mailbox]` in the rail and the folder dropdown items, plus the folder title button, which opens the dropdown on `dragenter`. Targets whose mailbox equals the current one, or `sent`/`drafts`, refuse the drop. A drop maps mailbox to action: inbox→inbox, archive→archive, spam→spam, trash→trash, and runs `mutateConversations`. `.dispatch-drop-target` highlights the hovered target.
+
+## PR 3: Delete key and permanent delete
+
+Keys: with focus outside a text field, Delete or Backspace runs `trash` on the selection in any mailbox except trash. Cmd-Backspace does the same. In trash the same keys and the Trash button (relabelled "Delete") open a confirm dialog "Delete N conversations permanently?" and run `delete`.
+
+Mail: `GmailConversationAction` gains `'delete'`. The mail service adds the provider call for permanent delete (Gmail `threads.delete` through the connector, or trash-then-delete if the connector exposes only message delete) and removes the thread from the local index. If the connector cannot delete permanently, the action returns 501 and the web shows "Permanent delete is not available for this account" and leaves the row.
+
+## Testing
+
+Vitest for pure selection logic (`selection.ts`: range, toggle, anchor, collapse) and for drag payload encoding. Playwright for the toolbar shape, Shift and Cmd selection, drag-and-drop onto the rail, the Delete key, and the trash confirm. Native UAT from a worktree build for the drag image and the key routing inside Tauri.

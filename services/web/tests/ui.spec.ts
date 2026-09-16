@@ -586,11 +586,9 @@ test('updates read state only after the Gmail command is accepted', async ({ pag
     await route.fulfill({ json: { accepted: true, result: { unread: false } } })
   })
   await page.goto('/')
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await page.getByRole('menuitem', { name: 'Mark read' }).click()
+  await page.getByRole('button', { name: 'Mark read' }).click()
   await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible()
 })
 
 test('marks an unread Gmail conversation read after a 5 second selection dwell', async ({ page }) => {
@@ -615,8 +613,7 @@ test('marks an unread Gmail conversation read after a 5 second selection dwell',
   expect(command).toBeUndefined()
   await page.clock.fastForward(1)
   await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible()
   await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
 })
 
@@ -639,8 +636,7 @@ test('keeps a dwell-marked row read when a later list still says unread', async 
   await page.clock.fastForward(5000)
   await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: false })
   await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible()
 })
 
 test('keeps a dwell-marked row read when a late thread fetch still says unread', async ({ page }) => {
@@ -670,8 +666,7 @@ test('keeps a dwell-marked row read when a late thread fetch still says unread',
   await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
   releaseThread?.()
   await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible()
   await page.getByRole('button', { name: 'Refresh' }).click()
   await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
 })
@@ -710,8 +705,7 @@ test('keeps the conversation unread when the dwell mark-read command fails', asy
   await page.locator('[data-conversation-id="demo:t1"]').click()
   await page.clock.fastForward(5000)
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Mark read' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible()
   await expect(page.locator('[data-mail-error]')).toBeVisible()
 })
 
@@ -738,8 +732,7 @@ test('removes a dwell-marked conversation from Unread and keeps the reader open'
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveCount(0)
   await expect(page.locator('[data-conversation-id="demo:t2"]')).toHaveCount(1)
   await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
-  await page.getByRole('button', { name: 'More actions' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Mark unread' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible()
 })
 
 test('makes unread conversation rows bolder and tinted', async ({ page }) => {
@@ -1652,6 +1645,21 @@ test('puts the reader subject on its own row above the actions', async ({ page }
   expect(style.fontSize).toBe(18)
 })
 
+test('reader actions share one icon-over-label treatment', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  const actions = page.locator('.dispatch-reader-toolbar .dispatch-reader-action:visible')
+  await expect(actions).toHaveCount(8)
+  await expect(actions).toHaveText(['Reply', 'Reply all', 'Forward', 'Archive', 'Spam', 'Trash', 'Codex', 'More'])
+  const boxes = await actions.evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { width: box.width, height: box.height, direction: getComputedStyle(node).flexDirection, color: getComputedStyle(node).color } }))
+  expect(new Set(boxes.map((box) => Math.round(box.height))).size).toBe(1)
+  expect(new Set(boxes.map((box) => box.color)).size).toBe(1)
+  for (const box of boxes) { expect(box.height).toBeGreaterThanOrEqual(44); expect(box.width).toBeGreaterThanOrEqual(44); expect(box.direction).toBe('column') }
+  await expect(page.locator('.dispatch-reader-toolbar [data-ask]')).toBeVisible()
+  await page.getByRole('button', { name: 'More actions' }).click()
+  await expect(page.locator('[data-reader-menu] [role="menuitem"]')).toHaveCount(1)
+})
+
 test('a wide HTML email scrolls inside its card instead of being clipped', async ({ page }) => {
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2/, (route) => {
     if (route.request().url().includes('/actions') || route.request().url().includes('/read-state')) return route.fallback()
@@ -1846,8 +1854,8 @@ test('clears an earlier thread attachment before asking about another account', 
   await page.locator('[data-conversation-id="demo:t2"]').click()
   await expect(page.locator('[data-body]')).toContainText('Hello')
   await expect(page.getByText('History for thread-conversation%3Aaccount-B%3At2', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('Ask Codex')).toBeVisible()
-  await page.getByLabel('Ask Codex').fill('Summarize the selected thread')
+  await expect(page.getByRole('textbox', { name: 'Ask Codex' })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Summarize the selected thread')
   await page.locator('[data-send]').click()
   await expect.poll(()=>sent?.mailContext?.threadId).toBe('t2')
   expect(sent.mailContext.attachment).toBeUndefined()
@@ -2363,7 +2371,7 @@ test('restores an ongoing compose turn after working on another email', async ({
   await expect(page.getByText('Still preparing the draft')).toHaveCount(0)
   await page.getByRole('button', { name: 'Working · New email / general chat', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
-  await page.getByLabel('Ask Codex').fill('Use the shorter version')
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Use the shorter version')
   await page.locator('[data-send]').click()
   await expect.poll(() => steering).toEqual({ expectedTurnId: 'running-turn', text: 'Use the shorter version' })
   expect(interruptions).toBe(0)
