@@ -530,3 +530,13 @@ it('serves offline account/list reads without Gmail and refuses attachment cache
   expect(invalid.status).toBe(400)
   expect((await fetch(`${base}/health`)).status).toBe(200)
 })
+
+it('serves demo mailbox counts when no Gmail account is connected', async () => {
+  const base = await start()
+  const response = await fetch(`${base}/v1/mailboxes/counts`)
+  expect(response.status).toBe(200)
+  const body = await response.json() as { source: string; counts: { inbox: number; drafts: number; spam: number } }
+  expect(body.source).toBe('demo')
+  expect(body.counts.inbox).toBeGreaterThan(0)
+  expect(body.counts).toMatchObject({ drafts: 0, spam: 0 })
+})

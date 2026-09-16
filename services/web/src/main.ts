@@ -10,7 +10,7 @@ import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent, emailPlainText } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
-import type { OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
@@ -34,13 +34,13 @@ app.innerHTML = `
         <div class="dispatch-folder">
           <button class="btn btn-ghost-secondary btn-sm dispatch-folder-button" type="button" data-folder-toggle aria-haspopup="menu" aria-expanded="false"><h1 class="dispatch-folder-title" data-mailbox-title>Inbox</h1><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
           <div class="dropdown-menu dispatch-folder-menu" data-folder-menu role="menu" hidden>
-            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="inbox"><i class="ti ti-inbox dropdown-item-icon" aria-hidden="true"></i>Inbox</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="inbox"><i class="ti ti-inbox dropdown-item-icon" aria-hidden="true"></i>Inbox<span class="dispatch-mailbox-count dispatch-mailbox-count-menu" data-mailbox-count="inbox" hidden></span></button>
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="sent"><i class="ti ti-send dropdown-item-icon" aria-hidden="true"></i>Sent</button>
-            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="drafts"><i class="ti ti-file-pencil dropdown-item-icon" aria-hidden="true"></i>Drafts</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="drafts"><i class="ti ti-file-pencil dropdown-item-icon" aria-hidden="true"></i>Drafts<span class="dispatch-mailbox-count dispatch-mailbox-count-menu" data-mailbox-count="drafts" hidden></span></button>
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="archive"><i class="ti ti-archive dropdown-item-icon" aria-hidden="true"></i>Archive</button>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item" type="button" role="menuitem" data-collapse-messages aria-label="Collapse thread list">Hide message list <span class="ms-auto">⌃&#96;</span></button>
-            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="spam"><i class="ti ti-alert-octagon dropdown-item-icon" aria-hidden="true"></i>Spam</button>
+            <button class="dropdown-item" type="button" role="menuitem" data-mailbox="spam"><i class="ti ti-alert-octagon dropdown-item-icon" aria-hidden="true"></i>Spam<span class="dispatch-mailbox-count dispatch-mailbox-count-menu" data-mailbox-count="spam" hidden></span></button>
             <button class="dropdown-item" type="button" role="menuitem" data-mailbox="trash"><i class="ti ti-trash dropdown-item-icon" aria-hidden="true"></i>Trash</button>
           </div>
         </div>
@@ -62,7 +62,7 @@ app.innerHTML = `
       </div>
     </header>
     <div class="dispatch-workspace">
-      <nav class="dispatch-rail nav nav-pills flex-column" aria-label="Mail folders" hidden><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
+      <nav class="dispatch-rail nav nav-pills flex-column" aria-label="Mail folders" hidden><button type="button" class="nav-link active" data-mailbox="inbox"><i class="ti ti-inbox" aria-hidden="true"></i><span>Inbox</span><span class="dispatch-mailbox-count" data-mailbox-count="inbox" hidden></span></button><button type="button" class="nav-link" data-mailbox="sent"><i class="ti ti-send" aria-hidden="true"></i><span>Sent</span></button><button type="button" class="nav-link" data-mailbox="drafts"><i class="ti ti-file-pencil" aria-hidden="true"></i><span>Drafts</span><span class="dispatch-mailbox-count" data-mailbox-count="drafts" hidden></span></button><button type="button" class="nav-link" data-mailbox="archive"><i class="ti ti-archive" aria-hidden="true"></i><span>Archive</span></button><span class="dispatch-rail-spacer"></span><button type="button" class="nav-link" data-mailbox="spam"><i class="ti ti-alert-octagon" aria-hidden="true"></i><span>Spam</span><span class="dispatch-mailbox-count" data-mailbox-count="spam" hidden></span></button><button type="button" class="nav-link" data-mailbox="trash"><i class="ti ti-trash" aria-hidden="true"></i><span>Trash</span></button></nav>
       <aside class="card rounded-0 border-0 dispatch-messages" aria-label="Messages">
         <nav class="dispatch-mail-tabs" aria-label="Message state"><button class="dispatch-mail-tab active" type="button" data-mail-state="all" aria-pressed="true">All</button><button class="dispatch-mail-tab" type="button" data-mail-state="unread" aria-pressed="false">Unread</button><button class="dispatch-mail-tab" type="button" data-mail-state="read" aria-pressed="false">Read</button><button class="btn btn-sm btn-icon ms-auto" data-density aria-label="Use comfortable message list" aria-pressed="true" title="Message density"><i class="ti ti-list-details" aria-hidden="true"></i></button></nav>
         <div class="dispatch-search-status" data-search-status hidden><span data-search-summary role="status"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-clear-search aria-label="Return to mailbox">Clear</button></div>
@@ -2975,6 +2975,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     conversations = applyAcceptedReadState(result.conversations).filter(c => !pendingMailboxRemovals.has(`${mailbox}:${c.id}`))
     syncSelectedReadState()
     noteArrivals()
+    void refreshMailboxCounts()
     if (mailReconnectTimer !== undefined) window.clearTimeout(mailReconnectTimer)
     mailReconnectTimer = undefined
     nextConversationCursor = result.nextCursor ?? null
@@ -3061,8 +3062,29 @@ function syncTime(value: string | null): string {
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value))
 }
 
+let mailboxCountsFlight: Promise<void> | undefined
+
+function renderMailboxCounts(counts: MailboxCounts): void {
+  for (const [name, value] of Object.entries(counts) as Array<[keyof MailboxCounts, number]>) {
+    app.querySelectorAll<HTMLElement>(`[data-mailbox-count="${name}"]`).forEach((badge) => {
+      badge.hidden = value <= 0
+      badge.textContent = value > 99 ? '99+' : String(value)
+      badge.classList.toggle('dispatch-mailbox-count-unread', name === 'inbox')
+    })
+  }
+}
+
+async function refreshMailboxCounts(): Promise<void> {
+  if (offlineMode || mailboxCountsFlight) return
+  mailboxCountsFlight = (async () => {
+    try { renderMailboxCounts(await api.mailboxCounts(selectedAccountId)) } catch { /* the badges keep their last value until the next poll */ }
+  })().finally(() => { mailboxCountsFlight = undefined })
+  await mailboxCountsFlight
+}
+
 async function refreshSyncStatus(): Promise<void> {
   if (offlineMode) { elements.mailSource.textContent = 'Downloaded mail'; return }
+  void refreshMailboxCounts()
   try {
     const sync = await api.syncStatus()
     if (sync.mailRevision !== undefined && observedMailRevision !== sync.mailRevision) {

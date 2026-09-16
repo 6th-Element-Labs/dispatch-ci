@@ -70,6 +70,9 @@ export interface DraftProjection {
 
 export type MailStateFilter = 'all' | 'unread' | 'read'
 export type GmailMailbox = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash'
+
+/** Folder badges: unread conversations in Inbox, total conversations in Drafts and Spam. */
+export interface MailboxCounts { readonly inbox: number; readonly drafts: number; readonly spam: number }
 export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface ConversationSummary {

@@ -9,7 +9,7 @@ import { resolveAttachmentBytes } from './open-attachment.js'
 import { homedir } from 'node:os'
 import { join, resolve, isAbsolute, basename, extname } from 'node:path'
 import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage, type IndexStreamFlag } from './gmail-index.js'
-import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './model.js'
+import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MailboxCounts, MessageProjection, MessageSummary } from './model.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -576,6 +576,12 @@ export class GmailConnectorProvider {
     if (!this.#index) return []
     await this.#ensureIndex()
     return this.#index.recipients(query, accountId)
+  }
+
+  async mailboxCounts(accountId?: string): Promise<MailboxCounts> {
+    if (!this.#index) throw new Error('Durable Gmail index is required for mailbox counts')
+    await this.#ensureIndex()
+    return this.#index.mailboxCounts(accountId)
   }
 
   async listMailboxConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): Promise<readonly ConversationSummary[]> {

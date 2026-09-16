@@ -38,6 +38,12 @@ button { cursor: pointer; }
 .dispatch-rail .nav-link { min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem; padding: .35rem; font-size: .7rem; }
 .dispatch-rail .nav-link i { font-size: 1.25rem; }
 .dispatch-rail-spacer { flex: 1; }
+.dispatch-rail .nav-link { position: relative; }
+.dispatch-mailbox-count { position: absolute; top: 2px; right: 4px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 5px; border-radius: 8px; background: var(--tblr-gray-200, #e6e9ee); color: var(--tblr-body-color); font-size: .625rem; font-weight: 600; line-height: 16px; text-align: center; }
+.dispatch-mailbox-count-unread { background: var(--tblr-primary); color: #fff; }
+.dispatch-rail[data-style="expanded"] .dispatch-mailbox-count { position: static; margin-left: auto; }
+.dispatch-mailbox-count-menu { position: static; margin-left: auto; }
+.dispatch-folder-menu .dropdown-item { display: flex; align-items: center; gap: .5rem; }
 .dispatch-divider { position: relative; z-index: 4; cursor: col-resize; touch-action: none; background: var(--tblr-bg-surface-secondary); }
 .dispatch-divider::after { content: ""; position: absolute; inset-block: 0; left: 4px; width: 1px; background: var(--tblr-border-color); }
 .dispatch-divider:hover::after, .dispatch-divider:active::after { left: 3px; width: 3px; background: var(--tblr-primary); }

@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { groupConversations } from './conversation.js'
-import type { ConversationSummary, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageSummary } from './model.js'
+import type { ConversationSummary, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MailboxCounts, MessageSummary } from './model.js'
 
 export interface IndexedGmailMessage extends MessageSummary {
   readonly inInbox: boolean
@@ -524,6 +524,19 @@ export class GmailIndex {
       filterSearch(this.messages(accountId), query).filter((message) => folderMember(message, mailbox)),
       state,
     )
+  }
+
+  mailboxCounts(accountId?: string): MailboxCounts {
+    const inbox = new Set<string>()
+    const drafts = new Set<string>()
+    const spam = new Set<string>()
+    for (const message of this.messages(accountId)) {
+      const key = `${message.accountId}:${message.threadId}`
+      if (message.inInbox && message.unread) inbox.add(key)
+      if (message.inDrafts) drafts.add(key)
+      if (message.inSpam) spam.add(key)
+    }
+    return { inbox: inbox.size, drafts: drafts.size, spam: spam.size }
   }
 
   count(): number {

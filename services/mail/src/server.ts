@@ -38,7 +38,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -345,6 +345,19 @@ export function createMailServer(
       return demoEnabled
         ? writeJson(response, 200, { recipients: provider.listRecipients(query) })
         : writeJson(response, 503, { error: 'gmail_not_connected', detail: 'No Gmail connector accounts are available.' })
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/mailboxes/counts') {
+      const accountId = url.searchParams.get('account') ?? undefined
+      try {
+        const cached = gmail.cachedAccounts?.() ?? []
+        const accounts = cached.length ? cached : await gmail.accounts()
+        if (accounts.length > 0 && gmail.mailboxCounts) return writeJson(response, 200, { source: 'gmail', counts: await gmail.mailboxCounts(accountId) })
+      } catch (error) {
+        return writeJson(response, 502, { error: 'gmail_counts_failed', detail: error instanceof Error ? error.message : String(error) })
+      }
+      return demoEnabled
+        ? writeJson(response, 200, { source: 'demo', counts: { inbox: provider.listConversations('unread').length, drafts: 0, spam: 0 } })
+        : writeJson(response, 503, { error: 'gmail_not_connected' })
     }
     if (request.method === 'GET' && url.pathname === '/v1/sync/status') {
       const status = gmail.syncStatus?.()

@@ -1,4 +1,4 @@
-import type { SendReceipt, OfflineStatus, AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary } from './contracts.js'
+import type { SendReceipt, OfflineStatus, AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary, MailboxCounts } from './contracts.js'
 
 declare const __DISPATCH_LOCAL_PROXY__: boolean
 const MAIL = __DISPATCH_LOCAL_PROXY__ ? `${location.origin}/mail` : 'http://127.0.0.1:8411'
@@ -40,6 +40,11 @@ export const api = {
     if (accountId) params.set('account', accountId)
     const result = await request<{ recipients: MailAddress[] }>(`${MAIL}/v1/recipients?${params}`)
     return result.recipients
+  },
+  async mailboxCounts(accountId?: string): Promise<MailboxCounts> {
+    const query = accountId ? `?account=${encodeURIComponent(accountId)}` : ''
+    const result = await request<{ counts: MailboxCounts }>(`${MAIL}/v1/mailboxes/counts${query}`)
+    return result.counts
   },
   async syncStatus(): Promise<GmailSyncStatus> {
     const result = await request<{ sync: GmailSyncStatus }>(`${MAIL}/v1/sync/status`)

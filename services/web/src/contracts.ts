@@ -84,6 +84,7 @@ export interface GmailAccount {
 
 export type MailStateFilter = 'all' | 'unread' | 'read'
 export type GmailMailbox = 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash'
+export interface MailboxCounts { readonly inbox: number; readonly drafts: number; readonly spam: number }
 export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface GmailSyncStatus {

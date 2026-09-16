@@ -288,4 +288,22 @@ describe('folderFlagsFromLabels', () => {
     expect(folderFlagsFromLabels(['SENT', 'TRASH'])).toMatchObject({ inSent: false, inTrash: true })
     expect(folderFlagsFromLabels(['DRAFT'])).toMatchObject({ inDrafts: true, inTrash: false })
   })
+
+  it('counts unread inbox conversations and total drafts and spam per thread', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-counts-'))
+    directories.push(directory)
+    const index = new GmailIndex(join(directory, 'index.sqlite'))
+    index.replaceAccount('account-1', [
+      message('m1', true, true, { threadId: 'shared' }),
+      message('m2', true, true, { threadId: 'shared' }),
+      message('m3', false, true),
+      message('m4', true, false, { inDrafts: true }),
+      message('m5', false, false, { inSpam: true }),
+      message('m6', true, false, { inSpam: true }),
+    ], 'run', true)
+    index.replaceAccount('account-2', [message('m7', true, true, { accountId: 'account-2' })], 'run', true)
+    expect(index.mailboxCounts()).toEqual({ inbox: 2, drafts: 1, spam: 2 })
+    expect(index.mailboxCounts('account-1')).toEqual({ inbox: 1, drafts: 1, spam: 2 })
+    index.close()
+  })
 })

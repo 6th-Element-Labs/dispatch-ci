@@ -37,6 +37,7 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route(/8411\/v1\/mailboxes\/counts/, (route) => route.fulfill({ json: { source: 'demo', counts: { inbox: 0, drafts: 0, spam: 0 } } }))
   await page.route('http://127.0.0.1:8412/v1/activity', route => route.fulfill({ contentType: 'text/event-stream', body: 'data: []\n\n' }))
   await page.route(/8411\/v1\/send-receipts/, route => route.fulfill({ json: { receipts: [] } }))
   await page.route(/8411\/v1\/offline/, route => route.fulfill({ json: { offline: { conversations: 0, bytes: 0 } } }))
@@ -407,6 +408,25 @@ test('Cmd-Z undoes the last move while the toast is showing and the toast times 
   await page.keyboard.press('Meta+z')
   await page.clock.fastForward(500)
   expect(fixture.actions.filter((item) => item.threadId === 't2')).toHaveLength(1)
+})
+
+test('the rail and folder menu show unread and folder counts', async ({ page }) => {
+  let counts = { inbox: 12, drafts: 2, spam: 140 }
+  await page.route(/8411\/v1\/mailboxes\/counts/, (route) => route.fulfill({ json: { source: 'gmail', counts } }))
+  await page.goto('/')
+  const rail = page.locator('.dispatch-rail')
+  if (await rail.isHidden()) await page.getByRole('button', { name: 'Show mailboxes' }).click()
+  await expect(rail.locator('[data-mailbox-count="inbox"]')).toHaveText('12')
+  await expect(rail.locator('[data-mailbox-count="inbox"]')).toHaveClass(/dispatch-mailbox-count-unread/)
+  await expect(rail.locator('[data-mailbox-count="drafts"]')).toHaveText('2')
+  await expect(rail.locator('[data-mailbox-count="spam"]')).toHaveText('99+')
+  await expect(rail.locator('[data-mailbox="sent"] .dispatch-mailbox-count')).toHaveCount(0)
+  await page.locator('[data-folder-toggle]').click()
+  await expect(page.locator('[data-folder-menu] [data-mailbox-count="inbox"]')).toHaveText('12')
+  counts = { inbox: 0, drafts: 2, spam: 0 }
+  await page.locator('[data-refresh]').click()
+  await expect(rail.locator('[data-mailbox-count="inbox"]')).toBeHidden()
+  await expect(rail.locator('[data-mailbox-count="spam"]')).toBeHidden()
 })
 
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {
