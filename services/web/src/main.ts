@@ -98,8 +98,7 @@ app.innerHTML = `
                 </div>
               </div>
             </div>
-            <div class="dispatch-thread-meta" data-thread-meta><span data-message-count></span><span class="dispatch-meta-sep">·</span><span data-thread-mailbox></span><span class="dispatch-meta-sep" data-account-sep hidden>·</span><span class="dispatch-account-dot" data-account-dot hidden aria-hidden="true"></span><span data-address hidden></span><button type="button" class="btn btn-sm btn-ghost-primary dispatch-thread-files-toggle" data-thread-files-toggle aria-expanded="false" aria-controls="dispatch-thread-files" hidden></button></div>
-            <div class="dispatch-copy-status" data-copy-status hidden role="status"></div>
+            <div class="dispatch-thread-meta" data-thread-meta><span class="dispatch-account-dot" data-account-dot hidden aria-hidden="true"></span><span data-address hidden></span><span class="dispatch-meta-sep" data-account-sep hidden>·</span><span data-thread-mailbox></span><span class="dispatch-meta-sep" data-count-sep hidden>·</span><span data-message-count hidden></span><span class="dispatch-copy-chip" data-copy-status data-mode="live" hidden role="status"><i class="ti ti-cloud-down" aria-hidden="true"></i><span data-copy-label></span></span><button type="button" class="btn btn-sm btn-ghost-primary dispatch-thread-files-toggle" data-thread-files-toggle aria-expanded="false" aria-controls="dispatch-thread-files" hidden></button></div>
           </header>
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
@@ -164,6 +163,8 @@ const elements = {
   accountDot: app.querySelector<HTMLElement>('[data-account-dot]')!,
   accountSep: app.querySelector<HTMLElement>('[data-account-sep]')!,
   copyStatus: app.querySelector<HTMLElement>('[data-copy-status]')!,
+  copyLabel: app.querySelector<HTMLElement>('[data-copy-label]')!,
+  countSep: app.querySelector<HTMLElement>('[data-count-sep]')!,
   recoveryStatus: app.querySelector<HTMLElement>('[data-recovery-status]')!,
   readerMore: app.querySelector<HTMLButtonElement>('[data-reader-more]')!,
   readerMenu: app.querySelector<HTMLElement>('[data-reader-menu]')!,
@@ -810,8 +811,20 @@ function accountColor(accountId: string | undefined): string {
   return accountPalette[index < 0 ? 0 : index % accountPalette.length]!
 }
 
+function renderCopyChip(availability: ConversationProjection['availability']): void {
+  elements.copyStatus.hidden = !availability
+  if (!availability) return
+  const downloaded = availability.mode === 'downloaded'
+  elements.copyStatus.dataset.mode = availability.mode
+  elements.copyLabel.textContent = downloaded ? 'Downloaded copy' : 'Offline'
+  elements.copyStatus.title = `${downloaded ? 'Showing the copy saved on this Mac' : 'Saved on this Mac'} · ${new Date(availability.cachedAt).toLocaleString()}${availability.reason ? ` · ${availability.reason}` : ''}`
+}
+
 function renderThreadMeta(summary: Pick<ConversationSummary, 'messageCount' | 'accountId' | 'accountLabel'>): void {
-  elements.messageCount.textContent = summary.messageCount === 1 ? '1 message' : `${summary.messageCount} messages`
+  const showCount = summary.messageCount > 1
+  elements.messageCount.hidden = !showCount
+  elements.countSep.hidden = !showCount
+  elements.messageCount.textContent = showCount ? `${summary.messageCount} messages` : ''
   elements.threadMailbox.textContent = searchView ? 'Search result' : mailboxLabels[mailbox]
   const showAccount = Boolean(summary.accountLabel) && accounts.length > 1
   elements.address.hidden = !showAccount
@@ -1062,8 +1075,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     if (sequence !== selectionSequence || selectedConversationId !== id) return
     selected = conversation
     readerNeedsRetry = !offlineMode && conversation.availability?.mode === 'downloaded'
-    elements.copyStatus.hidden = !conversation.availability
-    elements.copyStatus.textContent = conversation.availability ? `${conversation.availability.mode === 'downloaded' ? 'Downloaded copy' : 'Available offline'} · ${new Date(conversation.availability.cachedAt).toLocaleString()}${conversation.availability.reason ? ` · ${conversation.availability.reason}` : ''}` : ''
+    renderCopyChip(conversation.availability)
     if (conversation.availability?.mode === 'downloaded') markReadDwell.cancel()
     elements.readState.hidden = !conversation.accountId
     const acceptedUnread = selectedConversationId ? acceptedReadState.get(selectedConversationId) : undefined
@@ -2064,6 +2076,8 @@ function renderMultiSelection(): void {
   elements.threadFilesToggle.hidden = true
   elements.copyStatus.hidden = true
   app.querySelector<HTMLElement>('[data-message-count]')!.textContent = `${count} conversations`
+  app.querySelector<HTMLElement>('[data-message-count]')!.hidden = false
+  elements.countSep.hidden = false
   app.querySelector<HTMLElement>('[data-thread-mailbox]')!.textContent = mailboxLabels[mailbox]
   app.querySelector<HTMLElement>('[data-account-sep]')!.hidden = true
   app.querySelector<HTMLElement>('[data-account-dot]')!.hidden = true

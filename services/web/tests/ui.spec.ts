@@ -475,6 +475,36 @@ test('? opens the shortcut sheet and toolbar buttons carry their key', async ({ 
   await expect(page.locator('.dispatch-agent-error').last()).toContainText('Connect a Gmail account before composing mail.')
 })
 
+test('the reader meta line reads account, folder, count, and an offline chip in one row', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [
+    { id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' },
+    { id: 'link-two', connectorId: 'gmail-app', name: 'Home', email: 'home@example.com' },
+  ] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [
+    { ...conversations[0]!, id: 'gmail:link-one:t1', accountId: 'link-one', accountLabel: 'work@example.com', messageCount: 2 },
+    { ...conversations[1]!, id: 'gmail:link-one:t2', accountId: 'link-one', accountLabel: 'work@example.com', messageCount: 1 },
+  ], nextCursor: null, total: 2 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t1\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', source: 'gmail', availability: { mode: 'live', cachedAt: '2026-09-17T07:37:06Z' }, messages: [
+    { ...messages[0]!, id: 'm0', accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'First' }, attachments: [] },
+    { ...messages[0]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Second' }, attachments: [] },
+  ] } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/t2\?account=link-one/, (route) => route.fulfill({ json: { conversation: { ...conversations[1]!, accountId: 'link-one', accountLabel: 'work@example.com', source: 'gmail', availability: { mode: 'downloaded', cachedAt: '2026-09-17T07:37:06Z', reason: 'Gmail is unavailable' }, messages: [{ ...messages[1]!, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Only' }, attachments: [] }] } } }))
+  await page.goto('/')
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  const meta = page.locator('[data-thread-meta]')
+  await expect(meta).toHaveText(/work@example\.com\s*·\s*Inbox\s*·\s*2 messages\s*Offline/)
+  await expect(page.locator('[data-copy-status]')).toHaveAttribute('data-mode', 'live')
+  await expect(page.locator('[data-copy-status]')).toHaveAttribute('title', /Saved on this Mac/)
+  await expect(page.locator('.dispatch-copy-status')).toHaveCount(0)
+  const [metaBox, chipBox] = await Promise.all([meta.boundingBox(), page.locator('[data-copy-status]').boundingBox()])
+  expect(Math.abs(chipBox!.y - metaBox!.y)).toBeLessThan(8)
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').click()
+  await expect(meta).not.toContainText('message')
+  await expect(page.locator('[data-copy-status]')).toHaveText(/Downloaded copy/)
+  await expect(page.locator('[data-copy-status]')).toHaveAttribute('data-mode', 'downloaded')
+  await expect(page.locator('[data-copy-status]')).toHaveAttribute('title', /Gmail is unavailable/)
+})
+
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {
   let draftRequest: unknown
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
