@@ -284,3 +284,12 @@ button { cursor: pointer; }
 .dispatch-recovery-row { padding: 1rem 0; border-bottom: 1px solid var(--tblr-border-color); }
 .dispatch-copy-status { font-size: .72rem; color: var(--tblr-secondary-color); margin-top: .4rem; }
 [data-offline-status] { white-space: pre-wrap; }
+
+.dispatch-undo-toast { position: fixed; left: 50%; bottom: 20px; z-index: 60; transform: translateX(-50%); display: flex; align-items: center; gap: .75rem; padding: .55rem .5rem .6rem 1rem; border-radius: 10px; background: #1d273b; color: #fff; box-shadow: 0 8px 24px rgba(29, 39, 59, .28); font-size: .8125rem; white-space: nowrap; }
+.dispatch-undo-button { border: 0; border-radius: 6px; background: #fff; color: #1d273b; font-weight: 600; }
+.dispatch-undo-button:hover { background: #e8ecf1; color: #1d273b; }
+.dispatch-undo-key { padding: 0; border: 0; background: transparent; color: #9aa5b5; font-size: .7rem; }
+.dispatch-undo-close { border: 0; background: transparent; color: #9aa5b5; min-width: 28px; min-height: 28px; }
+.dispatch-undo-close:hover { color: #fff; background: transparent; }
+.dispatch-undo-progress { position: absolute; left: 12px; right: 12px; bottom: 4px; height: 2px; border-radius: 2px; background: #3b4a66; overflow: hidden; }
+.dispatch-undo-progress > span { display: block; height: 2px; width: 100%; background: #fff; transition: width .1s linear; }

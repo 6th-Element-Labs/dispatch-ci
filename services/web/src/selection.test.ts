@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, pruneSelection, selectionAfterArrow, selectionAfterClick } from './selection.js'
+import { EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, moveLabel, pruneSelection, selectionAfterArrow, selectionAfterClick, undoActionsFor } from './selection.js'
 
 const order = ['a', 'b', 'c', 'd', 'e']
 
@@ -82,5 +82,24 @@ describe('dropActionForMailbox', () => {
     expect(dropActionForMailbox('sent', 'inbox')).toBeUndefined()
     expect(dropActionForMailbox('drafts', 'inbox')).toBeUndefined()
     expect(dropActionForMailbox('trash', 'drafts')).toBeUndefined()
+  })
+})
+
+describe('undo', () => {
+  it('labels a move by action and count', () => {
+    expect(moveLabel('trash', 1)).toBe('Moved 1 conversation to Trash')
+    expect(moveLabel('archive', 3)).toBe('Archived 3 conversations')
+    expect(moveLabel('spam', 2)).toBe('Marked 2 conversations as spam')
+    expect(moveLabel('inbox', 2)).toBe('Moved 2 conversations to Inbox')
+  })
+
+  it('restores a thread to the folder it came from', () => {
+    expect(undoActionsFor('archive', 'inbox')).toEqual(['inbox'])
+    expect(undoActionsFor('trash', 'inbox')).toEqual(['inbox'])
+    expect(undoActionsFor('trash', 'archive')).toEqual(['inbox', 'archive'])
+    expect(undoActionsFor('spam', 'archive')).toEqual(['inbox', 'archive'])
+    expect(undoActionsFor('inbox', 'trash')).toEqual(['trash'])
+    expect(undoActionsFor('inbox', 'archive')).toEqual(['archive'])
+    expect(undoActionsFor('inbox', 'inbox')).toEqual([])
   })
 })

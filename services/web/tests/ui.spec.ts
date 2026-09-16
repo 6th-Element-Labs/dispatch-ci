@@ -234,7 +234,16 @@ function gmailInbox(page: Page, count: number): { summaries: Array<typeof conver
 }
 
 async function routeGmailInbox(page: Page, fixture: ReturnType<typeof gmailInbox>): Promise<void> {
-  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => { const listed = fixture.summaries.filter((summary) => !fixture.actions.some((item) => item.threadId === summary.threadId)); return route.fulfill({ json: { source: 'gmail', conversations: listed, nextCursor: null, total: listed.length } }) })
+  const location = (threadId: string): string => {
+    let where = 'inbox'
+    for (const item of fixture.actions.filter((entry) => entry.threadId === threadId)) where = String(item.body.action)
+    return where
+  }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
+    const wanted = new URL(route.request().url()).searchParams.get('mailbox') ?? 'inbox'
+    const listed = fixture.summaries.filter((summary) => location(summary.threadId) === wanted)
+    return route.fulfill({ json: { source: 'gmail', conversations: listed, nextCursor: null, total: listed.length } })
+  })
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(t\d+)\?account=link-one/, (route) => {
     const threadId = new URL(route.request().url()).pathname.split('/').pop()
     const summary = fixture.summaries.find((item) => item.threadId === threadId)!
@@ -348,6 +357,7 @@ test('Delete and Backspace move the selection to Trash unless a field has focus'
 
 test('the Delete key in Trash explains that permanent delete is unavailable', async ({ page }) => {
   const fixture = gmailInbox(page, 2)
+  fixture.actions.push({ threadId: 't1', body: { action: 'trash' } })
   await routeGmailInbox(page, fixture)
   await page.goto('/')
   await page.getByRole('button', { name: 'Trash', exact: true }).first().click()
@@ -355,8 +365,48 @@ test('the Delete key in Trash explains that permanent delete is unavailable', as
   await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
   await page.keyboard.press('Delete')
   await expect(page.locator('[data-mail-error]')).toHaveText(/Empty the trash in Gmail/)
-  expect(fixture.actions).toEqual([])
+  expect(fixture.actions).toHaveLength(1)
   await expect(page.locator('[data-conversation-id="gmail:link-one:t1"]')).toHaveCount(1)
+})
+
+test('a move shows an undo toast that puts the conversations back', async ({ page }) => {
+  const fixture = gmailInbox(page, 4)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').click()
+  await page.locator('[data-conversation-id="gmail:link-one:t3"]').click({ modifiers: ['Shift'] })
+  await page.locator('[data-archive]').click()
+  const toast = page.locator('[data-undo-toast]')
+  await expect(toast).toBeVisible()
+  await expect(toast).toContainText('Archived 2 conversations')
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t2"]')).toHaveCount(0)
+  await page.locator('[data-undo]').click()
+  await expect(toast).toBeHidden()
+  await expect.poll(() => fixture.actions.filter((item) => item.body.action === 'inbox').map((item) => item.threadId).sort()).toEqual(['t2', 't3'])
+  await expect(page.locator('.dispatch-message')).toHaveText([/Thread 1/, /Thread 2/, /Thread 3/, /Thread 4/])
+})
+
+test('Cmd-Z undoes the last move while the toast is showing and the toast times out', async ({ page }) => {
+  const fixture = gmailInbox(page, 2)
+  await routeGmailInbox(page, fixture)
+  await page.clock.install()
+  await page.goto('/')
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  await page.keyboard.press('Delete')
+  const toast = page.locator('[data-undo-toast]')
+  await expect(toast).toContainText('Moved 1 conversation to Trash')
+  await page.keyboard.press('Meta+z')
+  await expect(toast).toBeHidden()
+  await expect.poll(() => fixture.actions.map((item) => `${item.threadId}:${item.body.action}`)).toEqual(['t1:trash', 't1:inbox'])
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t1"]')).toHaveCount(1)
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').click()
+  await page.locator('[data-trash]').click()
+  await expect(toast).toBeVisible()
+  await page.clock.fastForward(7000)
+  await expect(toast).toBeHidden()
+  await page.keyboard.press('Meta+z')
+  await page.clock.fastForward(500)
+  expect(fixture.actions.filter((item) => item.threadId === 't2')).toHaveLength(1)
 })
 
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {

@@ -16,7 +16,7 @@ import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
 import { codexMailEffect, visibleUserPrompt, type CodexMailEffect } from './codex-mail-effect.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
-import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, pruneSelection, selectionAfterArrow, selectionAfterClick, type SelectionState } from './selection.js'
+import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, moveLabel, pruneSelection, selectionAfterArrow, selectionAfterClick, undoActionsFor, type SelectionState } from './selection.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -135,6 +135,7 @@ app.innerHTML = `
   </div>`
 
 app.insertAdjacentHTML('beforeend', `
+  <div class="dispatch-undo-toast" data-undo-toast role="status" aria-live="polite" hidden><span data-undo-text></span><button class="btn btn-sm dispatch-undo-button" type="button" data-undo>Undo</button><kbd class="dispatch-undo-key" aria-hidden="true">⌘Z</kbd><button class="btn btn-icon btn-sm dispatch-undo-close" type="button" data-undo-dismiss aria-label="Dismiss"><i class="ti ti-x" aria-hidden="true"></i></button><span class="dispatch-undo-progress" aria-hidden="true"><span data-undo-bar></span></span></div>
   <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
 
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
@@ -2124,6 +2125,86 @@ async function mutateSelected(action: GmailConversationAction): Promise<void> {
   await mutateConversations(ids, action)
 }
 
+interface LastMove {
+  readonly action: GmailConversationAction
+  readonly mailbox: GmailMailbox
+  readonly rows: ReadonlyArray<{ readonly summary: ConversationSummary; readonly index: number }>
+}
+
+let lastMove: LastMove | undefined
+let undoTimer: number | undefined
+let undoDeadline = 0
+let undoRemaining = 0
+const UNDO_WINDOW_MS = 6_000
+
+const undoToast = {
+  root: app.querySelector<HTMLElement>('[data-undo-toast]')!,
+  text: app.querySelector<HTMLElement>('[data-undo-text]')!,
+  bar: app.querySelector<HTMLElement>('[data-undo-bar]')!,
+}
+
+function showUndoToast(move: LastMove): void {
+  lastMove = move
+  undoToast.text.textContent = moveLabel(move.action, move.rows.length)
+  undoToast.root.hidden = false
+  startUndoCountdown(UNDO_WINDOW_MS)
+}
+
+function startUndoCountdown(ms: number): void {
+  if (undoTimer !== undefined) window.clearInterval(undoTimer)
+  undoDeadline = Date.now() + ms
+  undoRemaining = ms
+  undoToast.bar.style.width = `${Math.round((ms / UNDO_WINDOW_MS) * 100)}%`
+  undoTimer = window.setInterval(() => {
+    undoRemaining = Math.max(0, undoDeadline - Date.now())
+    undoToast.bar.style.width = `${Math.round((undoRemaining / UNDO_WINDOW_MS) * 100)}%`
+    if (undoRemaining === 0) hideUndoToast()
+  }, 100)
+}
+
+function pauseUndoCountdown(): void {
+  if (undoTimer === undefined) return
+  window.clearInterval(undoTimer)
+  undoTimer = undefined
+  undoRemaining = Math.max(0, undoDeadline - Date.now())
+}
+
+function hideUndoToast(): void {
+  if (undoTimer !== undefined) window.clearInterval(undoTimer)
+  undoTimer = undefined
+  undoToast.root.hidden = true
+  lastMove = undefined
+}
+
+async function undoLastMove(): Promise<void> {
+  const move = lastMove
+  if (!move) return
+  hideUndoToast()
+  const steps = undoActionsFor(move.action, move.mailbox)
+  if (steps.length === 0) return
+  const ids = new Set(move.rows.map((row) => row.summary.id))
+  if (mailbox === move.mailbox && !searchView) {
+    conversations = conversations.filter((conversation) => !ids.has(conversation.id))
+    for (const row of [...move.rows].sort((left, right) => left.index - right.index)) {
+      conversations.splice(Math.min(row.index, conversations.length), 0, row.summary)
+    }
+    renderList()
+  }
+  const results = await Promise.allSettled(move.rows.map(async (row) => {
+    for (const step of steps) await api.mutateConversation(row.summary.threadId, row.summary.accountId!, [], step)
+  }))
+  const failed = results.filter((result) => result.status === 'rejected').length
+  if (failed) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = failed === move.rows.length ? 'The move could not be undone. Try again.' : `${failed} of ${move.rows.length} conversations could not be restored. Try again.`
+  }
+  await loadConversations(true)
+  if (mailbox === move.mailbox && !selectedConversationId && selection.ids.length === 0) {
+    const first = move.rows[0]?.summary.id
+    if (first && conversations.some((conversation) => conversation.id === first)) void selectConversation(first)
+  }
+}
+
 async function mutateConversations(ids: readonly string[], action: GmailConversationAction): Promise<void> {
   const listedBefore = listedConversations()
   const targets = listedBefore.filter((conversation) => ids.includes(conversation.id))
@@ -2182,6 +2263,8 @@ async function mutateConversations(ids: readonly string[], action: GmailConversa
       elements.mailError.hidden = false
       elements.mailError.textContent = writable.length === 1 ? 'The change could not be saved. Try again.' : `${failed.length} of ${writable.length} conversations could not be moved. Try again.`
     }
+    const moved = writable.filter((conversation) => !failed.includes(conversation))
+    if (moved.length && removing) showUndoToast({ action, mailbox: originalMailbox, rows: moved.map((summary) => ({ summary, index: originalIndexes.get(summary.id)! })) })
     if (failed.length < writable.length) await loadConversations(true)
   } finally {
     for (const conversation of writable) pendingMailboxRemovals.delete(`${originalMailbox}:${conversation.id}`)
@@ -3547,6 +3630,16 @@ elements.list.addEventListener('keydown', (event) => {
   void applySelection(next).then(() => { elements.list.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(focusId ?? '')}"]`)?.focus() })
 })
 installDropTargets()
+app.querySelector('[data-undo]')!.addEventListener('click', () => { void undoLastMove() })
+app.querySelector('[data-undo-dismiss]')!.addEventListener('click', hideUndoToast)
+undoToast.root.addEventListener('mouseenter', pauseUndoCountdown)
+undoToast.root.addEventListener('mouseleave', () => { if (!undoToast.root.hidden && undoTimer === undefined) startUndoCountdown(undoRemaining || UNDO_WINDOW_MS) })
+window.addEventListener('keydown', (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'z') return
+  if (undoToast.root.hidden || isEditableTarget(event.target) || isEditableTarget(document.activeElement)) return
+  event.preventDefault()
+  void undoLastMove()
+})
 
 renderMailbox()
 renderPanels()

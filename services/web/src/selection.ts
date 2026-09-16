@@ -74,3 +74,21 @@ function union(left: readonly string[], right: readonly string[]): string[] {
   const seen = new Set(left)
   return [...left, ...right.filter((id) => !seen.has(id))]
 }
+
+export function moveLabel(action: GmailConversationAction, count: number): string {
+  const noun = count === 1 ? '1 conversation' : `${count} conversations`
+  if (action === 'archive') return `Archived ${noun}`
+  if (action === 'spam') return `Marked ${noun} as spam`
+  if (action === 'trash') return `Moved ${noun} to Trash`
+  return `Moved ${noun} to Inbox`
+}
+
+/** Actions that put a thread back where it came from, in the order the mail service must apply them. */
+export function undoActionsFor(action: GmailConversationAction, from: GmailMailbox): GmailConversationAction[] {
+  if (action === 'inbox') return from === 'archive' || from === 'spam' || from === 'trash' ? [from] : []
+  if (from === 'inbox') return ['inbox']
+  if (from === 'archive') return ['inbox', 'archive']
+  if (from === 'spam') return ['inbox', 'spam']
+  if (from === 'trash') return ['inbox', 'trash']
+  return []
+}

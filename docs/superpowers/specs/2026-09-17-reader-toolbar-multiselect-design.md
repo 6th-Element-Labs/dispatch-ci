@@ -65,6 +65,20 @@ Keys: with focus outside a text field, textarea, select, contenteditable, or ope
 
 In trash the keys show a mail error, "Gmail does not allow Dispatch to delete permanently. Empty the trash in Gmail." The Codex Gmail connector's only delete tool, `gmail.delete_emails`, is documented as "Move one or more existing Gmail messages to Trash … does not permanently delete the messages" (checked live on 2026-09-17), so no `delete` action is added to the mail service and the Trash button stays hidden in Trash.
 
+## Follow-ups approved 2026-09-17 (wireframes: https://claude.ai/artifact/UpLVHvedpyTxvXMJ4E41DL)
+
+### Undo toast (PR 4)
+After any move that removes rows from the current list, a dark toast at the bottom centre says "Moved N conversations to Trash" (or "Archived N", "Marked N as spam", "Moved N to Inbox") with an Undo button, a ⌘Z hint, a dismiss control, and a 6 s countdown bar that pauses on hover. Undo re-inserts the rows at their old positions when the list is still the same mailbox, then applies the inverse actions per thread in order: from Inbox → `inbox`; from Archive → `inbox`, `archive`; from Spam → `inbox`, `spam`; from Trash → `inbox`, `trash`; a move to Inbox → the source folder's action. ⌘Z triggers Undo only while the toast is visible and focus is outside a text field. Only the latest move is undoable.
+
+### Rail counts (PR 5)
+Inbox shows its unread count in blue; Drafts and Spam show totals in grey; Sent, Archive, Trash show nothing. Badges hide at zero and cap at 99+. Counts come from a new mail route `GET /v1/mailboxes/counts?account=` served from the index and polled with sync status.
+
+### Keyboard shortcuts (PR 6)
+Single letters with focus in the list or reader: R reply, A reply all, F forward, E archive, ! spam, # trash, U toggle read, J/K next/previous, C compose, G then I/S/D/A/T go to a folder, ? cheat sheet. Hovering a toolbar action shows a tip with its key. The cheat sheet is a dialog closed by Escape.
+
+### Reader meta line (PR 7)
+One row: account dot and address (when more than one account), folder, message count only when above one, an "Offline" chip whose tooltip holds the cached time (amber "Downloaded copy" when serving the local download), attachments toggle at the right. The separate "Available offline" line goes away.
+
 ## Testing
 
 Vitest for pure selection logic (`selection.ts`: range, toggle, anchor, collapse) and for drag payload encoding. Playwright for the toolbar shape, Shift and Cmd selection, drag-and-drop onto the rail, the Delete key, and the message shown in Trash. Native UAT from a worktree build for the drag image and the key routing inside Tauri.
