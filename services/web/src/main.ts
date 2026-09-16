@@ -3510,6 +3510,28 @@ window.addEventListener('keydown', (event) => {
   renderPanels()
 })
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null
+  if (!element) return false
+  return Boolean(element.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], dialog[open]'))
+}
+
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return
+  if (event.altKey || event.ctrlKey || event.shiftKey || (event.metaKey && event.key === 'Delete')) return
+  if (isEditableTarget(event.target) || isEditableTarget(document.activeElement)) return
+  if (activeDraft && !selectedConversationId && selection.ids.length <= 1) return
+  const ids = selection.ids.length > 1 ? selection.ids : selectedConversationId ? [selectedConversationId] : []
+  if (ids.length === 0) return
+  event.preventDefault()
+  if (mailbox === 'trash') {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = 'Gmail does not allow Dispatch to delete permanently. Empty the trash in Gmail.'
+    return
+  }
+  void mutateConversations(ids, 'trash')
+})
+
 elements.list.addEventListener('keydown', (event) => {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Escape' && !((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a')) return
   const order = listedIds()

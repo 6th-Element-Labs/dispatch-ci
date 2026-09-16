@@ -234,7 +234,7 @@ function gmailInbox(page: Page, count: number): { summaries: Array<typeof conver
 }
 
 async function routeGmailInbox(page: Page, fixture: ReturnType<typeof gmailInbox>): Promise<void> {
-  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => route.fulfill({ json: { source: 'gmail', conversations: fixture.summaries, nextCursor: null, total: fixture.summaries.length } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => { const listed = fixture.summaries.filter((summary) => !fixture.actions.some((item) => item.threadId === summary.threadId)); return route.fulfill({ json: { source: 'gmail', conversations: listed, nextCursor: null, total: listed.length } }) })
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(t\d+)\?account=link-one/, (route) => {
     const threadId = new URL(route.request().url()).pathname.split('/').pop()
     const summary = fixture.summaries.find((item) => item.threadId === threadId)!
@@ -325,6 +325,38 @@ test('arrow keys move the selection and shift extends it', async ({ page }) => {
   await expect(page.locator('[data-subject]')).toHaveText('Thread 2')
   await page.keyboard.press('Meta+a')
   await expect(page.locator('[data-subject]')).toHaveText('4 conversations selected')
+})
+
+test('Delete and Backspace move the selection to Trash unless a field has focus', async ({ page }) => {
+  const fixture = gmailInbox(page, 3)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('keep me')
+  await page.keyboard.press('Backspace')
+  await page.keyboard.press('Delete')
+  await expect(page.getByRole('textbox', { name: 'Ask Codex' })).toHaveValue('keep m')
+  expect(fixture.actions).toEqual([])
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  await page.keyboard.press('Delete')
+  await expect.poll(() => fixture.actions.map((item) => `${item.threadId}:${item.body.action}`)).toEqual(['t1:trash'])
+  await expect(page.locator('[data-subject]')).toHaveText('Thread 2')
+  await page.locator('[data-conversation-id="gmail:link-one:t3"]').click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Backspace')
+  await expect.poll(() => fixture.actions.map((item) => item.threadId).sort()).toEqual(['t1', 't2', 't3'])
+  await expect(page.locator('.dispatch-message')).toHaveCount(0)
+})
+
+test('the Delete key in Trash explains that permanent delete is unavailable', async ({ page }) => {
+  const fixture = gmailInbox(page, 2)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Trash', exact: true }).first().click()
+  await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible()
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  await page.keyboard.press('Delete')
+  await expect(page.locator('[data-mail-error]')).toHaveText(/Empty the trash in Gmail/)
+  expect(fixture.actions).toEqual([])
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t1"]')).toHaveCount(1)
 })
 
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {
@@ -1766,6 +1798,20 @@ test('reader actions share one icon-over-label treatment', async ({ page }) => {
   await expect(page.locator('.dispatch-reader-toolbar [data-ask]')).toBeVisible()
   await page.getByRole('button', { name: 'More actions' }).click()
   await expect(page.locator('[data-reader-menu] [role="menuitem"]')).toHaveCount(1)
+})
+
+test('a narrow reader keeps every toolbar action inside the pane', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 820 })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  const pane = await page.locator('.dispatch-reader').boundingBox()
+  const boxes = await page.locator('.dispatch-reader-toolbar .dispatch-reader-action:visible').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()))
+  expect(boxes.length).toBe(8)
+  for (const box of boxes) {
+    expect(box.right).toBeLessThanOrEqual(pane!.x + pane!.width + 0.5)
+    expect(box.left).toBeGreaterThanOrEqual(pane!.x - 0.5)
+  }
+  await expect(page.locator('[data-ask]')).toBeInViewport()
 })
 
 test('a wide HTML email scrolls inside its card instead of being clipped', async ({ page }) => {

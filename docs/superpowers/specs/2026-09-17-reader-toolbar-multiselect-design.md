@@ -12,7 +12,7 @@ The reader toolbar mixes four button treatments in one row: an outlined "Reply" 
 - One consistent reader toolbar: icon over an 11px label for every action, same size, same ghost treatment.
 - Shift-click and Cmd-click select several conversations; the toolbar acts on the whole selection.
 - Rows drag onto folder targets (rail, folder dropdown) and drop runs the existing folder command.
-- Delete and Backspace move the selection to Trash. In Trash they permanently delete after a confirm.
+- Delete and Backspace move the selection to Trash. In Trash they explain that the Gmail connector cannot delete permanently.
 
 ## Non-goals
 
@@ -41,7 +41,7 @@ Markup: every reader action becomes `.btn.btn-ghost-secondary.dispatch-reader-ac
 | inbox | ti-inbox | Inbox | archive, spam, trash |
 | archive | ti-archive | Archive | inbox |
 | spam | ti-alert-octagon | Spam | not spam, not trash |
-| trash | ti-trash | Trash | not trash; label "Delete" in trash (PR 3) |
+| trash | ti-trash | Trash | not trash |
 | readState | ti-mail-opened / ti-mail | Unread / Read | when the thread has an account |
 | spacer | | | |
 | ask | ti-sparkles | Codex | always |
@@ -59,12 +59,12 @@ Actions: `mutateSelected(action)` becomes `mutateConversations(ids, action)`. It
 
 Drag: rows are `draggable`. `dragstart` sets `text/x-dispatch-conversations` to the selected ids (or the dragged row if it is not selected) and a custom drag image showing the count. Drop targets are `[data-mailbox]` in the rail and the folder dropdown items, plus the folder title button, which opens the dropdown on `dragenter`. Targets whose mailbox equals the current one, or `sent`/`drafts`, refuse the drop. A drop maps mailbox to action: inbox→inbox, archive→archive, spam→spam, trash→trash, and runs `mutateConversations`. `.dispatch-drop-target` highlights the hovered target.
 
-## PR 3: Delete key and permanent delete
+## PR 3: Delete key
 
-Keys: with focus outside a text field, Delete or Backspace runs `trash` on the selection in any mailbox except trash. Cmd-Backspace does the same. In trash the same keys and the Trash button (relabelled "Delete") open a confirm dialog "Delete N conversations permanently?" and run `delete`.
+Keys: with focus outside a text field, textarea, select, contenteditable, or open dialog, Delete or Backspace runs `trash` on the selection in any mailbox except trash. Cmd-Backspace does the same. Shift, Ctrl, and Alt combinations are left alone. Composing a new message with nothing selected ignores the keys.
 
-Mail: `GmailConversationAction` gains `'delete'`. The mail service adds the provider call for permanent delete (Gmail `threads.delete` through the connector, or trash-then-delete if the connector exposes only message delete) and removes the thread from the local index. If the connector cannot delete permanently, the action returns 501 and the web shows "Permanent delete is not available for this account" and leaves the row.
+In trash the keys show a mail error, "Gmail does not allow Dispatch to delete permanently. Empty the trash in Gmail." The Codex Gmail connector's only delete tool, `gmail.delete_emails`, is documented as "Move one or more existing Gmail messages to Trash … does not permanently delete the messages" (checked live on 2026-09-17), so no `delete` action is added to the mail service and the Trash button stays hidden in Trash.
 
 ## Testing
 
-Vitest for pure selection logic (`selection.ts`: range, toggle, anchor, collapse) and for drag payload encoding. Playwright for the toolbar shape, Shift and Cmd selection, drag-and-drop onto the rail, the Delete key, and the trash confirm. Native UAT from a worktree build for the drag image and the key routing inside Tauri.
+Vitest for pure selection logic (`selection.ts`: range, toggle, anchor, collapse) and for drag payload encoding. Playwright for the toolbar shape, Shift and Cmd selection, drag-and-drop onto the rail, the Delete key, and the message shown in Trash. Native UAT from a worktree build for the drag image and the key routing inside Tauri.
