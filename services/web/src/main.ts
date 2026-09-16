@@ -17,6 +17,7 @@ import { gmailAppId, isNativeShell } from './model.js'
 import { codexMailEffect, visibleUserPrompt, type CodexMailEffect } from './codex-mail-effect.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, moveLabel, pruneSelection, selectionAfterArrow, selectionAfterClick, undoActionsFor, type SelectionState } from './selection.js'
+import { SHORTCUT_GROUPS, TOOLBAR_KEYS, resolveShortcut } from './shortcuts.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -138,6 +139,7 @@ app.insertAdjacentHTML('beforeend', `
   <div class="dispatch-undo-toast" data-undo-toast role="status" aria-live="polite" hidden><span data-undo-text></span><button class="btn btn-sm dispatch-undo-button" type="button" data-undo>Undo</button><kbd class="dispatch-undo-key" aria-hidden="true">⌘Z</kbd><button class="btn btn-icon btn-sm dispatch-undo-close" type="button" data-undo-dismiss aria-label="Dismiss"><i class="ti ti-x" aria-hidden="true"></i></button><span class="dispatch-undo-progress" aria-hidden="true"><span data-undo-bar></span></span></div>
   <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
 
+  <dialog class="dispatch-utility-dialog dispatch-shortcuts-dialog" data-shortcuts-dialog aria-label="Keyboard shortcuts"><div class="d-flex justify-content-between align-items-center"><h2 class="m-0">Keyboard shortcuts</h2><span class="text-secondary small">Press <kbd>?</kbd> any time</span><button class="btn btn-sm" data-dialog-close>Close</button></div><div class="dispatch-shortcut-groups" data-shortcut-groups></div><p class="text-secondary small mb-0">Single letters work only with focus in the list or the reader, never inside a text field.</p></dialog>
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
 `)
 
@@ -3311,12 +3313,13 @@ elements.account.addEventListener('change', () => {
   selectedAccountId = elements.account.value || undefined
   void loadConversations()
 })
-app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => button.addEventListener('click', () => {
+function switchMailbox(next: GmailMailbox): void {
   clearSearchView()
-  mailbox = button.dataset.mailbox as GmailMailbox
+  mailbox = next
   renderMailbox()
   void loadConversations()
-}))
+}
+app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => button.addEventListener('click', () => switchMailbox(button.dataset.mailbox as GmailMailbox)))
 elements.search.addEventListener('input', () => {
   searchQuery = elements.search.value.trim()
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
@@ -3647,9 +3650,70 @@ elements.list.addEventListener('keydown', (event) => {
     return
   }
   if (event.key.toLowerCase() === 'a') { void applySelection({ ids: order, anchor: selection.anchor ?? order[0] }); return }
-  const next = selectionAfterArrow(pruneSelection(selection, order), order, event.key === 'ArrowDown' ? 1 : -1, event.shiftKey)
-  const focusId = event.key === 'ArrowDown' ? next.ids[next.ids.length - 1] : next.ids[0]
+  moveSelection(event.key === 'ArrowDown' ? 1 : -1, event.shiftKey)
+})
+
+function moveSelection(direction: 1 | -1, extend: boolean): void {
+  const order = listedIds()
+  if (order.length === 0) return
+  const next = selectionAfterArrow(pruneSelection(selection, order), order, direction, extend)
+  const focusId = direction === 1 ? next.ids[next.ids.length - 1] : next.ids[0]
   void applySelection(next).then(() => { elements.list.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(focusId ?? '')}"]`)?.focus() })
+}
+
+const shortcutsDialog = app.querySelector<HTMLDialogElement>('[data-shortcuts-dialog]')!
+shortcutsDialog.querySelector<HTMLElement>('[data-shortcut-groups]')!.replaceChildren(...SHORTCUT_GROUPS.map((group) => {
+  const section = document.createElement('section')
+  const heading = document.createElement('h3')
+  heading.textContent = group.title
+  const list = document.createElement('dl')
+  for (const item of group.items) {
+    const term = document.createElement('dt'); term.textContent = item.label
+    const keys = document.createElement('dd'); const kbd = document.createElement('kbd'); kbd.textContent = item.keys; keys.append(kbd)
+    list.append(term, keys)
+  }
+  section.append(heading, list)
+  return section
+}))
+for (const [name, key] of Object.entries(TOOLBAR_KEYS)) {
+  const selector = name === 'replyAll' ? '[data-reply-all]' : name === 'readState' ? '[data-read-state]' : `[data-${name}]`
+  const button = app.querySelector<HTMLElement>(`.dispatch-reader-toolbar ${selector}`)
+  if (button) button.dataset.shortcut = key
+}
+
+let pendingGo = false
+let pendingGoTimer: number | undefined
+window.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || isEditableTarget(event.target) || isEditableTarget(document.activeElement)) return
+  if (app.querySelector('dialog[open]')) return
+  const resolved = resolveShortcut(event, pendingGo)
+  const wasPending = pendingGo
+  pendingGo = false
+  if (pendingGoTimer !== undefined) { window.clearTimeout(pendingGoTimer); pendingGoTimer = undefined }
+  if (!resolved) { if (wasPending) event.preventDefault(); return }
+  event.preventDefault()
+  if ('pendingGo' in resolved) {
+    pendingGo = true
+    pendingGoTimer = window.setTimeout(() => { pendingGo = false }, 1_500)
+    return
+  }
+  const command = resolved.command
+  const hasThread = Boolean(selectedConversationId) || selection.ids.length > 1
+  if (typeof command === 'object') { switchMailbox(command.goto); return }
+  switch (command) {
+    case 'reply': if (selected) void openDraft(false).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))); return
+    case 'replyAll': if (selected) void openDraft(true).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))); return
+    case 'forward': if (selected) void openForward().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))); return
+    case 'archive': if (hasThread && !elements.archive.hidden) void mutateSelected('archive'); return
+    case 'spam': if (hasThread && !elements.spam.hidden) void mutateSelected('spam'); return
+    case 'trash': if (hasThread && !elements.trash.hidden) void mutateSelected('trash'); return
+    case 'toggleRead': if (selected && !elements.readState.hidden) void toggleReadState(); return
+    case 'next': moveSelection(1, false); return
+    case 'previous': moveSelection(-1, false); return
+    case 'compose': openCompose(); return
+    case 'ask': if (selected) askCodex(); return
+    case 'help': shortcutsDialog.showModal(); return
+  }
 })
 installDropTargets()
 app.querySelector('[data-undo]')!.addEventListener('click', () => { void undoLastMove() })

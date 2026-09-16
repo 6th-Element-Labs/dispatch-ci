@@ -299,3 +299,15 @@ button { cursor: pointer; }
 .dispatch-undo-close:hover { color: #fff; background: transparent; }
 .dispatch-undo-progress { position: absolute; left: 12px; right: 12px; bottom: 4px; height: 2px; border-radius: 2px; background: #3b4a66; overflow: hidden; }
 .dispatch-undo-progress > span { display: block; height: 2px; width: 100%; background: #fff; transition: width .1s linear; }
+
+.dispatch-reader-action { position: relative; }
+.dispatch-reader-action[data-shortcut]::after { content: attr(aria-label) "  " attr(data-shortcut); position: absolute; top: calc(100% + 4px); left: 50%; z-index: 30; transform: translateX(-50%); padding: .3rem .55rem; border-radius: 6px; background: #1d273b; color: #fff; font-size: .72rem; font-weight: 500; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s ease .4s; }
+.dispatch-reader-action[data-shortcut]:hover::after, .dispatch-reader-action[data-shortcut]:focus-visible::after { opacity: 1; }
+.dispatch-shortcuts-dialog { width: min(640px, 92vw); }
+.dispatch-shortcut-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 2rem; margin: 1rem 0; }
+.dispatch-shortcut-groups h3 { margin: 0 0 .4rem; font-size: .7rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--tblr-secondary-color); }
+.dispatch-shortcut-groups dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; margin: 0; font-size: .8125rem; }
+.dispatch-shortcut-groups dt { font-weight: 400; }
+.dispatch-shortcut-groups dd { margin: 0; text-align: right; }
+.dispatch-shortcuts-dialog kbd { padding: .1rem .45rem; border: 1px solid var(--tblr-border-color); border-radius: 4px; background: var(--tblr-bg-surface-secondary); color: var(--tblr-body-color); font-family: inherit; font-size: .75rem; white-space: nowrap; }
+@media (max-width: 640px) { .dispatch-shortcut-groups { grid-template-columns: minmax(0, 1fr); } }
