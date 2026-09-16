@@ -20,9 +20,10 @@ export function threadContextMenuItems(input: {
   readonly mailbox: GmailMailbox
   readonly unread: boolean
   readonly hasAccountId: boolean
+  readonly count?: number
 }): ContextMenuItem[] {
   const writes = input.hasAccountId
-  const items: ContextMenuItem[] = [
+  const items: ContextMenuItem[] = (input.count ?? 1) > 1 ? [] : [
     command('reply', 'Reply', true),
     command('replyAll', 'Reply All', true),
     command('forward', 'Forward', writes),
@@ -38,6 +39,7 @@ export function threadContextMenuItems(input: {
   }
   if (input.mailbox !== 'spam' && input.mailbox !== 'trash') items.push(command('spam', 'Mark as Spam', writes))
   if (input.mailbox !== 'trash') items.push(command('trash', 'Move to Trash', writes))
+  if ((input.count ?? 1) > 1) return items
   items.push({ kind: 'separator' }, command('ask', 'Ask Codex', true))
   return items
 }

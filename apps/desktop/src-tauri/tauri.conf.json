@@ -25,7 +25,8 @@
           "x": 18,
           "y": 20
         },
-        "create": false
+        "create": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const messages = [
   {
@@ -217,6 +217,114 @@ test('navigates native Gmail folders and routes accepted message actions', async
   await expect(page.locator('[data-trash]')).toBeEnabled()
   releaseAction()
   await expect(page.getByRole('heading', { name: 'Services agreement' })).toBeVisible()
+})
+
+function gmailInbox(page: Page, count: number): { summaries: Array<typeof conversations[number] & { accountId: string; accountLabel: string }>; actions: Array<{ threadId: string; body: Record<string, unknown> }> } {
+  const summaries = Array.from({ length: count }, (_, index) => ({
+    ...conversations[index % conversations.length]!,
+    id: `gmail:link-one:t${index + 1}`,
+    threadId: `t${index + 1}`,
+    subject: `Thread ${index + 1}`,
+    unread: false,
+    accountId: 'link-one',
+    accountLabel: 'work@example.com',
+  }))
+  const actions: Array<{ threadId: string; body: Record<string, unknown> }> = []
+  return { summaries, actions }
+}
+
+async function routeGmailInbox(page: Page, fixture: ReturnType<typeof gmailInbox>): Promise<void> {
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => route.fulfill({ json: { source: 'gmail', conversations: fixture.summaries, nextCursor: null, total: fixture.summaries.length } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(t\d+)\?account=link-one/, (route) => {
+    const threadId = new URL(route.request().url()).pathname.split('/').pop()
+    const summary = fixture.summaries.find((item) => item.threadId === threadId)!
+    return route.fulfill({ json: { conversation: { ...summary, source: 'gmail', messages: [{ ...messages[0]!, id: `${threadId}-m1`, threadId, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: `Body ${threadId}` }, attachments: [] }] } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(t\d+)\/actions/, async (route) => {
+    const threadId = new URL(route.request().url()).pathname.split('/')[3]!
+    fixture.actions.push({ threadId, body: await route.request().postDataJSON() })
+    await route.fulfill({ status: 202, json: { accepted: true } })
+  })
+}
+
+test('shift-click selects a range and the toolbar archives every selected conversation', async ({ page }) => {
+  const fixture = gmailInbox(page, 4)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').click()
+  await page.locator('[data-conversation-id="gmail:link-one:t4"]').click({ modifiers: ['Shift'] })
+  await expect(page.locator('.dispatch-message[aria-selected="true"]')).toHaveCount(3)
+  await expect(page.locator('[data-subject]')).toHaveText('3 conversations selected')
+  await expect(page.locator('[data-reply]')).toBeHidden()
+  await expect(page.locator('[data-archive]')).toBeVisible()
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').click({ modifiers: ['Meta'] })
+  await expect(page.locator('.dispatch-message[aria-selected="true"]')).toHaveCount(2)
+  await expect(page.locator('[data-subject]')).toHaveText('2 conversations selected')
+  await page.locator('[data-archive]').click()
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t3"]')).toHaveCount(0)
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t4"]')).toHaveCount(0)
+  await expect.poll(() => fixture.actions.map((item) => item.threadId).sort()).toEqual(['t3', 't4'])
+  expect(fixture.actions.every((item) => item.body.action === 'archive' && item.body.accountId === 'link-one')).toBe(true)
+  await expect(page.locator('[data-subject]')).toHaveText('Thread 2')
+})
+
+test('dragging selected conversations onto a rail folder moves them', async ({ page }) => {
+  const fixture = gmailInbox(page, 3)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  if (await page.locator('.dispatch-rail').isHidden()) await page.getByRole('button', { name: 'Show mailboxes' }).click()
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').click({ modifiers: ['Shift'] })
+  const target = page.locator('.dispatch-rail [data-mailbox="trash"]')
+  await page.locator('[data-conversation-id="gmail:link-one:t2"]').dragTo(target)
+  await expect.poll(() => fixture.actions.map((item) => item.threadId).sort()).toEqual(['t1', 't2'])
+  expect(fixture.actions.every((item) => item.body.action === 'trash')).toBe(true)
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t1"]')).toHaveCount(0)
+  await expect(page.locator('[data-subject]')).toHaveText('Thread 3')
+  await expect(page.locator('.dispatch-drop-target')).toHaveCount(0)
+})
+
+test('a drop onto the current folder or Sent is refused', async ({ page }) => {
+  const fixture = gmailInbox(page, 2)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  if (await page.locator('.dispatch-rail').isHidden()) await page.getByRole('button', { name: 'Show mailboxes' }).click()
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').dragTo(page.locator('.dispatch-rail [data-mailbox="inbox"]'))
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').dragTo(page.locator('.dispatch-rail [data-mailbox="sent"]'))
+  await page.waitForTimeout(300)
+  expect(fixture.actions).toEqual([])
+  await expect(page.locator('[data-conversation-id="gmail:link-one:t1"]')).toHaveCount(1)
+})
+
+test('a multi-selection context menu offers folder actions for the whole selection', async ({ page }) => {
+  const fixture = gmailInbox(page, 3)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  await page.locator('[data-conversation-id="gmail:link-one:t3"]').click({ modifiers: ['Meta'] })
+  await page.locator('[data-conversation-id="gmail:link-one:t3"]').click({ button: 'right' })
+  const menu = page.locator('[data-thread-context-menu]')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem')).toHaveText(['Archive', 'Mark as Spam', 'Move to Trash'])
+  await menu.getByRole('menuitem', { name: 'Move to Trash' }).click()
+  await expect.poll(() => fixture.actions.map((item) => item.threadId).sort()).toEqual(['t1', 't3'])
+  await expect(page.locator('[data-subject]')).toHaveText('Thread 2')
+})
+
+test('arrow keys move the selection and shift extends it', async ({ page }) => {
+  const fixture = gmailInbox(page, 4)
+  await routeGmailInbox(page, fixture)
+  await page.goto('/')
+  await page.locator('[data-conversation-id="gmail:link-one:t1"]').click()
+  await page.keyboard.press('ArrowDown')
+  await expect(page.locator('[data-subject]')).toHaveText('Thread 2')
+  await page.keyboard.press('Shift+ArrowDown')
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect(page.locator('.dispatch-message[aria-selected="true"]')).toHaveCount(3)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-subject]')).toHaveText('Thread 2')
+  await page.keyboard.press('Meta+a')
+  await expect(page.locator('[data-subject]')).toHaveText('4 conversations selected')
 })
 
 test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {

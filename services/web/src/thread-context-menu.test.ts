@@ -57,4 +57,10 @@ describe('threadContextMenuItems', () => {
       ask: true,
     })
   })
+
+  it('offers only folder actions for a multi-selection', () => {
+    expect(ids(threadContextMenuItems({ mailbox: 'inbox', unread: false, hasAccountId: true, count: 3 }))).toEqual(['archive', 'spam', 'trash'])
+    expect(ids(threadContextMenuItems({ mailbox: 'trash', unread: false, hasAccountId: true, count: 2 }))).toEqual(['inbox'])
+    expect(commands(threadContextMenuItems({ mailbox: 'inbox', unread: false, hasAccountId: false, count: 2 })).every((item) => !item.enabled)).toBe(true)
+  })
 })

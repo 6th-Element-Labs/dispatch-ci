@@ -16,6 +16,7 @@ import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
 import { codexMailEffect, visibleUserPrompt, type CodexMailEffect } from './codex-mail-effect.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
+import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, pruneSelection, selectionAfterArrow, selectionAfterClick, type SelectionState } from './selection.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -342,6 +343,7 @@ let mailbox: GmailMailbox = 'inbox'
 let selected: ConversationProjection | undefined
 let selectedSummary: ConversationSummary | undefined
 let selectedConversationId: string | undefined
+let selection: SelectionState = EMPTY_SELECTION
 let readerNeedsRetry = false
 let selectionSequence = 0
 const markReadDwell = createMarkReadDwell()
@@ -667,6 +669,14 @@ function attachmentIndicator(count?: number): HTMLElement {
 }
 
 function renderList(emptyMessage = defaultEmptyListMessage()): void {
+  const focusedId = elements.list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.conversationId : undefined
+  renderListRows(emptyMessage)
+  if (focusedId === undefined) return
+  const focusId = selection.ids.length > 1 ? (selection.ids.includes(focusedId) ? focusedId : selection.anchor) : selectedConversationId ?? focusedId
+  elements.list.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(focusId ?? focusedId)}"]`)?.focus()
+}
+
+function renderListRows(emptyMessage: string): void {
   elements.list.innerHTML = ''
   let localDrafts: RecoveryDraft[] = []
   if (mailbox === 'drafts' && !searchView) {
@@ -703,10 +713,12 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     button.type = 'button'
     button.className = 'list-group-item list-group-item-action dispatch-message'
     button.dataset.conversationId = conversation.id
-    button.setAttribute('aria-selected', String(selectedConversationId === conversation.id))
+    const rowSelected = selection.ids.length > 1 ? selection.ids.includes(conversation.id) : selectedConversationId === conversation.id
+    button.setAttribute('aria-selected', String(rowSelected))
     button.setAttribute('aria-label', `${conversation.sender.name}, ${conversation.subject}${conversation.unread ? ', unread' : ''}`)
     button.classList.toggle('dispatch-message-unread', conversation.unread)
-    button.classList.toggle('active', selectedConversationId === conversation.id)
+    button.classList.toggle('active', rowSelected)
+    button.draggable = true
     const avatar = document.createElement('span')
     avatar.className = 'avatar avatar-sm bg-blue-lt text-blue dispatch-avatar'
     avatar.textContent = conversation.sender.initials
@@ -752,7 +764,8 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
     }
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
-    button.addEventListener('click', () => { void selectConversation(conversation.id, { revealOnMobile: true, startReadDwell: true }) })
+    button.addEventListener('click', (event) => { void handleRowClick(conversation.id, event) })
+    button.addEventListener('dragstart', (event) => startConversationDrag(conversation.id, event))
     button.addEventListener('contextmenu', (event) => {
       event.preventDefault()
       void openThreadContextMenu(event, conversation.id)
@@ -969,6 +982,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     renderPanels()
   }
   selectedConversationId = id
+  selection = { ids: [id], anchor: id }
   selectedSummary = summary
   selected = undefined
   activeDraft = undefined
@@ -982,6 +996,8 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   elements.reader.hidden = false
   elements.reader.classList.remove('dispatch-drafting')
   elements.reader.classList.remove('dispatch-composing')
+  elements.reader.classList.remove('dispatch-multi')
+  elements.body.hidden = false
   renderMailbox()
   elements.draft.hidden = true
   elements.body.hidden = false
@@ -1222,6 +1238,18 @@ function askCodex(): void {
 }
 
 async function openThreadContextMenu(event: MouseEvent, conversationId: string): Promise<void> {
+  if (selection.ids.length > 1 && selection.ids.includes(conversationId)) {
+    const targets = listedConversations().filter((conversation) => selection.ids.includes(conversation.id))
+    const items = threadContextMenuItems({ mailbox, unread: false, hasAccountId: targets.every((conversation) => Boolean(conversation.accountId)), count: targets.length })
+    try {
+      const chosen = await popupContextMenu(items, { clientX: event.clientX, clientY: event.clientY })
+      if (chosen === 'archive' || chosen === 'inbox' || chosen === 'spam' || chosen === 'trash') await mutateConversations(targets.map((conversation) => conversation.id), chosen)
+    } catch (error) {
+      elements.mailError.hidden = false
+      elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+    }
+    return
+  }
   const load = selectConversation(conversationId, { revealOnMobile: true })
   const summary = conversations.find((conversation) => conversation.id === conversationId)
   if (!summary) return
@@ -1975,52 +2003,188 @@ async function attachDraftFiles(): Promise<void> {
   }
 }
 
-async function mutateSelected(action: GmailConversationAction): Promise<void> {
-  const accountId = selected?.accountId ?? selectedSummary?.accountId
-  const threadId = selected?.threadId ?? selectedSummary?.threadId
-  if (!accountId || !threadId) {
-    elements.mailError.hidden = false
-    elements.mailError.textContent = 'This message is still loading. Refresh it before moving it.'
+function listedConversations(): ConversationSummary[] {
+  return (searchView ? searchView.results.map((result) => result.conversation) : conversations).filter((conversation) => !pendingMailboxRemovals.has(`${mailbox}:${conversation.id}`))
+}
+
+function listedIds(): string[] {
+  return listedConversations().map((conversation) => conversation.id)
+}
+
+async function handleRowClick(id: string, event: MouseEvent): Promise<void> {
+  const toggle = event.metaKey || event.ctrlKey
+  if (!event.shiftKey && !toggle) {
+    await selectConversation(id, { revealOnMobile: true, startReadDwell: true })
     return
   }
-  const messageIds = selected?.messages.map((message) => message.id) ?? []
+  event.preventDefault()
+  await applySelection(selectionAfterClick(selection, listedIds(), id, { shift: event.shiftKey, toggle }))
+}
+
+async function applySelection(next: SelectionState): Promise<void> {
+  if (next.ids.length === 1) {
+    await selectConversation(next.ids[0]!, { revealOnMobile: true })
+    return
+  }
+  if (next.ids.length === 0) {
+    selection = next
+    renderList()
+    return
+  }
+  markReadDwell.cancel()
+  if (activeDraft && draftDirty) {
+    if (!checkpointDraft()) return
+    scheduleDraftSync(0)
+  }
+  selectionSequence += 1
+  selection = next
+  selected = undefined
+  selectedSummary = undefined
+  selectedConversationId = undefined
+  activeDraft = undefined
+  recoveryKey = undefined
+  draftEditSession += 1
+  draftDirty = false
+  renderMultiSelection()
+}
+
+function renderMultiSelection(): void {
+  const count = selection.ids.length
+  elements.readerEmpty.hidden = true
+  elements.reader.hidden = false
+  elements.reader.classList.remove('dispatch-drafting', 'dispatch-composing')
+  elements.reader.classList.add('dispatch-multi')
+  elements.subject.textContent = `${count} conversations selected`
+  elements.body.hidden = true
+  elements.attachments.hidden = true
+  elements.draft.hidden = true
+  elements.threadFilesToggle.hidden = true
+  elements.copyStatus.hidden = true
+  app.querySelector<HTMLElement>('[data-message-count]')!.textContent = `${count} conversations`
+  app.querySelector<HTMLElement>('[data-thread-mailbox]')!.textContent = mailboxLabels[mailbox]
+  app.querySelector<HTMLElement>('[data-account-sep]')!.hidden = true
+  app.querySelector<HTMLElement>('[data-account-dot]')!.hidden = true
+  app.querySelector<HTMLElement>('[data-address]')!.hidden = true
+  renderMailbox()
+  renderList()
+}
+
+function startConversationDrag(id: string, event: DragEvent): void {
+  if (!event.dataTransfer) return
+  if (!selection.ids.includes(id) || selection.ids.length <= 1) selection = { ids: [id], anchor: id }
+  const ids = selection.ids.length > 1 ? [...selection.ids] : [id]
+  event.dataTransfer.setData(CONVERSATION_DRAG_TYPE, encodeDragPayload(ids))
+  event.dataTransfer.setData('text/plain', `${ids.length} conversation${ids.length === 1 ? '' : 's'}`)
+  event.dataTransfer.effectAllowed = 'move'
+  const badge = document.createElement('div')
+  badge.className = 'dispatch-drag-badge'
+  badge.textContent = ids.length === 1 ? (listedConversations().find((conversation) => conversation.id === id)?.subject || '1 conversation') : `${ids.length} conversations`
+  document.body.append(badge)
+  event.dataTransfer.setDragImage(badge, 12, 16)
+  window.setTimeout(() => badge.remove(), 0)
+  // Do not re-render here: replacing the source row mid-drag cancels the drag.
+}
+
+function installDropTargets(): void {
+  app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((target) => {
+    const targetMailbox = target.dataset.mailbox as GmailMailbox
+    const accepts = (event: DragEvent): GmailConversationAction | undefined => {
+      if (!event.dataTransfer || ![...event.dataTransfer.types].includes(CONVERSATION_DRAG_TYPE)) return undefined
+      return dropActionForMailbox(targetMailbox, mailbox)
+    }
+    target.addEventListener('dragover', (event) => {
+      const action = accepts(event)
+      if (!action) return
+      event.preventDefault()
+      event.dataTransfer!.dropEffect = 'move'
+      target.classList.add('dispatch-drop-target')
+    })
+    target.addEventListener('dragleave', () => target.classList.remove('dispatch-drop-target'))
+    target.addEventListener('drop', (event) => {
+      target.classList.remove('dispatch-drop-target')
+      const action = accepts(event)
+      if (!action) return
+      event.preventDefault()
+      const ids = decodeDragPayload(event.dataTransfer!.getData(CONVERSATION_DRAG_TYPE))
+      setFolderMenu(false)
+      if (ids.length) void mutateConversations(ids, action)
+    })
+  })
+  elements.folderToggle.addEventListener('dragenter', (event) => {
+    if (event.dataTransfer && [...event.dataTransfer.types].includes(CONVERSATION_DRAG_TYPE)) setFolderMenu(true)
+  })
+  document.addEventListener('dragend', () => {
+    app.querySelectorAll('.dispatch-drop-target').forEach((node) => node.classList.remove('dispatch-drop-target'))
+    setFolderMenu(false)
+  })
+}
+
+async function mutateSelected(action: GmailConversationAction): Promise<void> {
+  const ids = selection.ids.length > 1 ? selection.ids : selectedConversationId ? [selectedConversationId] : []
+  await mutateConversations(ids, action)
+}
+
+async function mutateConversations(ids: readonly string[], action: GmailConversationAction): Promise<void> {
+  const listedBefore = listedConversations()
+  const targets = listedBefore.filter((conversation) => ids.includes(conversation.id))
+  const writable = targets.filter((conversation) => conversation.accountId && conversation.threadId)
+  if (writable.length === 0) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = targets.length ? 'These messages are still loading. Refresh them before moving them.' : 'This message is still loading. Refresh it before moving it.'
+    return
+  }
+  const loadedId = selected?.id
+  const loadedMessageIds = selected?.messages.map((message) => message.id) ?? []
   const originalMailbox = mailbox
-  const previousConversations = (searchView?.results.map(item => item.conversation) ?? conversations).filter(c => !pendingMailboxRemovals.has(`${mailbox}:${c.id}`))
-  const originalSummary = selectedSummary ?? conversations.find((conversation) => conversation.id === selectedConversationId)
-  const originalIndex = originalSummary ? previousConversations.findIndex((conversation) => conversation.id === originalSummary.id) : -1
+  const originalIndexes = new Map(writable.map((conversation) => [conversation.id, listedBefore.findIndex((item) => item.id === conversation.id)]))
   const remainsInMailbox = (value: GmailConversationAction): boolean => {
     if (value === 'archive') return mailbox === 'sent'
     if (value === 'spam') return mailbox === 'spam'
     if (value === 'trash') return mailbox === 'trash'
     return mailbox === 'inbox'
   }
-  if (!remainsInMailbox(action)) {
+  const removing = !remainsInMailbox(action)
+  if (removing) {
     conversationLoadSequence += 1
-    if (originalSummary) pendingMailboxRemovals.add(`${originalMailbox}:${originalSummary.id}`)
-    const nextSummary = originalIndex >= 0 ? previousConversations[originalIndex + 1] ?? previousConversations[originalIndex - 1] : undefined
-    if (searchView) searchView = { ...searchView, results: searchView.results.filter(item => item.conversation.id !== originalSummary?.id) }
-    conversations = conversations.filter((conversation) => conversation.id !== selectedSummary?.id && conversation.id !== selected?.id)
+    for (const conversation of writable) pendingMailboxRemovals.add(`${originalMailbox}:${conversation.id}`)
+    const removedIds = new Set(writable.map((conversation) => conversation.id))
+    const lastIndex = Math.max(...originalIndexes.values())
+    const firstIndex = Math.min(...originalIndexes.values())
+    const remaining = listedBefore.filter((conversation) => !removedIds.has(conversation.id))
+    const indexOf = (conversation: ConversationSummary): number => listedBefore.indexOf(conversation)
+    const nextSummary = remaining.find((conversation) => indexOf(conversation) > lastIndex)
+      ?? remaining.find((conversation) => indexOf(conversation) > firstIndex)
+      ?? [...remaining].reverse().find((conversation) => indexOf(conversation) < firstIndex)
+    if (searchView) searchView = { ...searchView, results: searchView.results.filter((item) => !removedIds.has(item.conversation.id)) }
+    conversations = conversations.filter((conversation) => !removedIds.has(conversation.id))
+    selection = EMPTY_SELECTION
     selected = undefined
     selectedSummary = undefined
     selectedConversationId = undefined
     elements.reader.hidden = true
+    elements.reader.classList.remove('dispatch-multi')
     elements.readerEmpty.hidden = false
     elements.readerEmpty.textContent = defaultEmptyListMessage()
     renderList()
     if (nextSummary) void selectConversation(nextSummary.id)
   }
+  const results = await Promise.allSettled(writable.map((conversation) => api.mutateConversation(conversation.threadId, conversation.accountId!, conversation.id === loadedId ? loadedMessageIds : [], action)))
+  const failed = writable.filter((_, index) => results[index]!.status === 'rejected')
   try {
-    await api.mutateConversation(threadId, accountId, messageIds, action)
-    await loadConversations(true)
-  } catch (error) {
-    if (mailbox === originalMailbox && originalSummary && !conversations.some(item => item.id === originalSummary.id)) {
-      conversations.splice(Math.min(Math.max(originalIndex, 0), conversations.length), 0, originalSummary)
+    if (failed.length && mailbox === originalMailbox) {
+      for (const conversation of [...failed].sort((left, right) => originalIndexes.get(left.id)! - originalIndexes.get(right.id)!)) {
+        if (conversations.some((item) => item.id === conversation.id)) continue
+        conversations.splice(Math.min(Math.max(originalIndexes.get(conversation.id)!, 0), conversations.length), 0, conversation)
+      }
       renderList()
     }
-    elements.mailError.hidden = false
-    elements.mailError.textContent = 'The change could not be saved. Try again.'
+    if (failed.length) {
+      elements.mailError.hidden = false
+      elements.mailError.textContent = writable.length === 1 ? 'The change could not be saved. Try again.' : `${failed.length} of ${writable.length} conversations could not be moved. Try again.`
+    }
+    if (failed.length < writable.length) await loadConversations(true)
   } finally {
-    if (originalSummary) pendingMailboxRemovals.delete(`${originalMailbox}:${originalSummary.id}`)
+    for (const conversation of writable) pendingMailboxRemovals.delete(`${originalMailbox}:${conversation.id}`)
     renderList()
   }
 }
@@ -3345,6 +3509,22 @@ window.addEventListener('keydown', (event) => {
   }
   renderPanels()
 })
+
+elements.list.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Escape' && !((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a')) return
+  const order = listedIds()
+  if (order.length === 0) return
+  event.preventDefault()
+  if (event.key === 'Escape') {
+    if (selection.ids.length > 1) void applySelection({ ids: [selection.anchor ?? selection.ids[0]!], anchor: selection.anchor ?? selection.ids[0] })
+    return
+  }
+  if (event.key.toLowerCase() === 'a') { void applySelection({ ids: order, anchor: selection.anchor ?? order[0] }); return }
+  const next = selectionAfterArrow(pruneSelection(selection, order), order, event.key === 'ArrowDown' ? 1 : -1, event.shiftKey)
+  const focusId = event.key === 'ArrowDown' ? next.ids[next.ids.length - 1] : next.ids[0]
+  void applySelection(next).then(() => { elements.list.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(focusId ?? '')}"]`)?.focus() })
+})
+installDropTargets()
 
 renderMailbox()
 renderPanels()
