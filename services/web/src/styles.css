@@ -313,3 +313,5 @@ button { cursor: pointer; }
 .dispatch-shortcut-groups dd { margin: 0; text-align: right; }
 .dispatch-shortcuts-dialog kbd { padding: .1rem .45rem; border: 1px solid var(--tblr-border-color); border-radius: 4px; background: var(--tblr-bg-surface-secondary); color: var(--tblr-body-color); font-family: inherit; font-size: .75rem; white-space: nowrap; }
 @media (max-width: 640px) { .dispatch-shortcut-groups { grid-template-columns: minmax(0, 1fr); } }
+.dispatch-agent-notice { border-color: var(--tblr-warning, #f59f00); }
+.dispatch-agent-notice .card-body { padding: .75rem 1rem; }

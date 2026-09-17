@@ -163,6 +163,11 @@ function resumeThreadParams(threadId: string) {
   }
 }
 
+/** Codex allows one writer per thread across every app sharing ~/.codex; another app holding it is a user-visible state, not a failure. */
+function isThreadBusy(error: unknown): boolean {
+  return /already has an active writer/i.test(errorMessage(error))
+}
+
 /** Only a confirmed missing task permits replacing a durable history binding. */
 function isMissingThread(error: unknown, threadId: string): boolean {
   const message = errorMessage(error).trim()
@@ -563,12 +568,19 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
         await bindings.load()
         const adopt = typeof payload.adoptThreadId === 'string' ? payload.adoptThreadId : ''
         const existing = bindings.get(key) ?? (adopt || undefined)
+        if (existing && payload.replace === true) {
+          // The user chose a fresh chat because the old thread is held elsewhere; the old rollout stays on disk.
+          const threadId = threadIdFrom(await runtime.request('thread/start', startThreadParams()))
+          await bindings.replace(key, threadId)
+          return json(response, 200, { binding: { key, threadId, created: true, replaced: true, detail: 'A new chat was started for this email.' } })
+        }
         if (existing) {
           try {
             await runtime.request('thread/resume', resumeThreadParams(existing))
             if (!bindings.get(key)) await bindings.put(key, existing)
             return json(response, 200, { binding: { key, threadId: existing, created: false, replaced: false } })
           } catch (error) {
+            if (isThreadBusy(error)) return json(response, 409, { error: 'codex_thread_busy', detail: errorMessage(error), threadId: existing })
             if (bindings.get(key) !== existing || !isMissingThread(error, existing)) throw error
             const threadId = threadIdFrom(await runtime.request('thread/start', startThreadParams()))
             await bindings.replace(key, threadId)

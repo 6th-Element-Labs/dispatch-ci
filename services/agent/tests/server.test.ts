@@ -601,6 +601,26 @@ describe('dispatch-agent', () => {
     expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({ threadId: 'thread-t1' }))
   })
 
+  it('reports a thread another Codex app holds as busy and starts a new chat on request', async () => {
+    const { base, fake } = await startWithBindings()
+    let started = 0
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'thread/start') { started += 1; return { thread: { id: `thread-${started}` } } }
+      if (method === 'thread/resume') throw new Error('thread thread-1 already has an active writer')
+      return { ok: true }
+    })
+    const body = { kind: 'conversation', accountId: 'one', gmailThreadId: 't-busy' }
+    const post = (payload: unknown) => fetch(`${base}/v1/threads/bindings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+    expect((await post(body)).status).toBe(200)
+    const busy = await post(body)
+    expect(busy.status).toBe(409)
+    await expect(busy.json()).resolves.toEqual({ error: 'codex_thread_busy', detail: 'thread thread-1 already has an active writer', threadId: 'thread-1' })
+    const replaced = await post({ ...body, replace: true })
+    expect(replaced.status).toBe(200)
+    await expect(replaced.json()).resolves.toEqual({ binding: { key: body, threadId: 'thread-2', created: true, replaced: true, detail: 'A new chat was started for this email.' } })
+    expect(started).toBe(2)
+  })
+
   it('gives two conversations two thread ids', async () => {
     const { base, fake } = await startWithBindings()
     let n = 0

@@ -2769,7 +2769,7 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   }
 }
 
-async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: string; sequence?: number } = {}): Promise<boolean> {
+async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: string; sequence?: number; replace?: boolean } = {}): Promise<boolean> {
   const request = ++bindingSequence
   const selection = options.sequence ?? selectionSequence
   const current = () => request === bindingSequence && selection === selectionSequence && bindingCacheKey(key) === bindingCacheKey(desiredCodexKey)
@@ -2777,7 +2777,7 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
   try {
     if (!await api.agentReady()) { if (current()) scheduleAgentReconnect(); return false }
     if (!current()) return false
-    const binding = await api.bindThread(key, options.adoptThreadId ?? readBindingCache()[bindingCacheKey(key)])
+    const binding = await api.bindThread(key, options.adoptThreadId ?? readBindingCache()[bindingCacheKey(key)], { replace: options.replace })
     if (!current()) return false
     writeBindingCache(key, binding.threadId)
     await showCodexThread(binding.threadId, binding.created, binding.replaced, binding.detail)
@@ -2796,13 +2796,44 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
   } catch (error) {
     if (!current()) return false
     const message = error instanceof Error ? error.message : String(error)
-    setAgentStatus('Reconnecting')
     codexContextReady = false
     elements.stream.replaceChildren()
+    if (requestErrorCode(message) === 'codex_thread_busy') {
+      setAgentStatus('Needs attention', 'This chat is open in another Codex app')
+      renderThreadBusyCard(key, options.sequence)
+      return false
+    }
+    setAgentStatus('Reconnecting')
     addAgentMessage('error', message)
     scheduleAgentReconnect()
     return false
   }
+}
+
+/** Codex allows one writer per thread across apps; offer a retry once the other app lets go, or a fresh chat now. */
+function renderThreadBusyCard(key: CodexPaneKey, sequence?: number): void {
+  const card = document.createElement('div')
+  card.className = 'card dispatch-agent-message dispatch-agent-notice'
+  card.dataset.threadBusy = 'true'
+  const body = document.createElement('div')
+  body.className = 'card-body'
+  const title = document.createElement('strong')
+  title.textContent = 'This chat is open in another Codex app'
+  const text = document.createElement('p')
+  text.className = 'mb-2 mt-1 text-secondary small'
+  text.textContent = 'Codex lets one app write to a chat at a time, and another app (usually ChatGPT) has this one open. Close it there and retry, or start a new chat for this email. The old chat stays in Codex.'
+  const actions = document.createElement('div')
+  actions.className = 'd-flex gap-2'
+  const retry = document.createElement('button')
+  retry.type = 'button'; retry.className = 'btn btn-sm btn-outline-secondary'; retry.textContent = 'Retry'
+  retry.addEventListener('click', () => { void bindAndShowCodex(key, { sequence: sequence ?? selectionSequence }) })
+  const fresh = document.createElement('button')
+  fresh.type = 'button'; fresh.className = 'btn btn-sm btn-primary'; fresh.textContent = 'Start new chat'
+  fresh.addEventListener('click', () => { void bindAndShowCodex(key, { sequence: sequence ?? selectionSequence, replace: true }) })
+  actions.append(retry, fresh)
+  body.append(title, text, actions)
+  card.append(body)
+  elements.stream.append(card)
 }
 
 async function connectAgent(): Promise<void> {

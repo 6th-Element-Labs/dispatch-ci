@@ -1637,6 +1637,33 @@ test('a Codex draft that Gmail no longer has is reported as sent or replaced, no
   await expect(page.locator('.dispatch-agent-stream')).not.toContainText('Request failed')
 })
 
+test('a chat held by another Codex app offers Retry and Start new chat', async ({ page }) => {
+  const bindings: Array<Record<string, unknown>> = []
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: 'data: {"method":"turn/started","params":{"threadId":"thread-fresh","turn":{"status":"inProgress"}}}\n\n' }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    bindings.push(body)
+    if (body.replace === true) return route.fulfill({ json: { binding: { key: body, threadId: 'thread-fresh', created: true, replaced: true, detail: 'A new chat was started for this email.' } } })
+    return route.fulfill({ status: 409, json: { error: 'codex_thread_busy', detail: 'thread thread-old already has an active writer', threadId: 'thread-old' } })
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  const card = page.locator('[data-thread-busy]')
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('open in another Codex app')
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Needs attention')
+  await expect(page.locator('.dispatch-agent-error')).toHaveCount(0)
+  await card.getByRole('button', { name: 'Retry' }).click()
+  await expect.poll(() => bindings.length).toBeGreaterThanOrEqual(2)
+  await expect(page.locator('[data-thread-busy]')).toHaveCount(1)
+  await page.locator('[data-thread-busy]').getByRole('button', { name: 'Start new chat' }).click()
+  await expect.poll(() => bindings.some((body) => body.replace === true)).toBe(true)
+  await expect(page.locator('[data-thread-busy]')).toHaveCount(0)
+  await expect(page.locator('[data-agent-status]')).not.toHaveAttribute('data-status', 'Needs attention')
+})
+
 test('raw service errors in the Codex pane are rewritten as sentences', async ({ page }) => {
   await page.unroute('http://127.0.0.1:8412/ready')
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
