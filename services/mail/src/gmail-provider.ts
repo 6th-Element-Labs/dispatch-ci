@@ -104,6 +104,11 @@ export function mergeIndexedMessages(messages: readonly IndexedGmailMessage[]): 
   return [...merged.values()]
 }
 
+/** The connector wraps Gmail's 404 in a tool error; the draft is gone or replaced. */
+function isGmailNotFound(error: unknown): boolean {
+  return /HTTP status: 404|not[ _]found/i.test(error instanceof Error ? error.message : String(error))
+}
+
 function draftConnectorError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error)
   if (/html|mime_type|text\/html/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_html_unsupported' })
@@ -349,6 +354,8 @@ export class GmailConnectorProvider {
   readonly #draftRefreshAt = new Map<string, number>()
   #draftsRevision = Date.now()
   #draftCacheSequence = 0
+  /** Gmail's draft list lags a fresh create or update by a few seconds; a miss is rechecked once after this long. */
+  readonly #draftListLagMs: number
   readonly #draftCacheRequests = new Map<string, number>()
   #actionFlight: Promise<void> | undefined
   #actionTimer: ReturnType<typeof setInterval> | undefined
@@ -356,13 +363,14 @@ export class GmailConnectorProvider {
 
   constructor(
     agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412',
-    options: { localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number } = {},
+    options: { localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number; draftListLagMs?: number } = {},
   ) {
     this.#agentBase = agentBase
     const indexPath = options.indexPath === false
       ? undefined
       : options.indexPath ?? process.env.DISPATCH_MAIL_DB ?? defaultIndexPath()
     this.#index = indexPath ? new GmailIndex(indexPath) : undefined
+    this.#draftListLagMs = options.draftListLagMs ?? 1_500
     this.#local = new LocalMailStore(options.localPath ?? (indexPath && indexPath !== ':memory:' ? `${indexPath}.local` : ':memory:'))
     this.#download = this.#local.download()
     this.#syncIntervalMs = options.syncIntervalMs ?? 6 * 60 * 60 * 1000
@@ -947,13 +955,7 @@ export class GmailConnectorProvider {
       const prior = this.#local.draftCreate(accountId, clientId)
       let id = prior?.draftId
       if (prior && !id) {
-        const candidates: GmailDraftSummary[] = []
-        await this.#findGmailDraft(accountId, draft => { candidates.push(draft); return false })
-        for (const candidate of candidates) {
-          const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: candidate.messageId, format: 'full' })
-          const mime = record(structured(raw).payload) ?? {}
-          if ([mime, ...parts(mime)].some(part => partContentId(part) === `dispatch-${clientId}@draft.dispatch.local`)) { id = candidate.draftId; break }
-        }
+        id = await this.#findDraftByClientMarker(accountId, clientId)
         if (!id && !prior.rejected) throw Object.assign(new Error('Waiting for Gmail to confirm the existing draft save.'), { code: 'draft_sync_pending' })
         if (id) this.#local.putDraftCreate(accountId, clientId, { draftId: id })
         else this.#local.removeDraftCreate(accountId, clientId)
@@ -1005,7 +1007,7 @@ export class GmailConnectorProvider {
     }
   }
 
-  async updateGmailDraft(draft: DraftProjection): Promise<DraftProjection> {
+  async updateGmailDraft(draft: DraftProjection, clientId?: string): Promise<DraftProjection> {
     if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
     const existing = this.#drafts.get(`${draft.accountId}:${draft.id}`) ?? this.#local.draft(draft.accountId, draft.id)
     const attachments = await this.#resolveDraftAttachments(draft.accountId, draft.attachments, existing?.attachments ?? [])
@@ -1023,6 +1025,16 @@ export class GmailConnectorProvider {
       void this.#refreshIndexedDrafts(draft.accountId)
       return saved
     } catch (error) {
+      if (isGmailNotFound(error)) {
+        const replacement = await this.#replacementDraftId(draft.accountId, draft.id, saved.gmailThreadId, clientId)
+        if (replacement) {
+          this.#drafts.delete(`${draft.accountId}:${draft.id}`)
+          this.#local.removeDraft(draft.accountId, draft.id)
+          return this.updateGmailDraft({ ...draft, id: replacement })
+        }
+        this.#local.removeDraft(draft.accountId, draft.id)
+        throw Object.assign(new Error(`Gmail draft ${draft.id} was not found`), { code: 'gmail_draft_not_found' })
+      }
       throw draftConnectorError(error)
     }
   }
@@ -1070,7 +1082,11 @@ export class GmailConnectorProvider {
     const key = `${accountId}:${draftId}`
     const request = ++this.#draftCacheSequence
     this.#draftCacheRequests.set(key, request)
-    const summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId)
+    let summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId)
+    if (!summary && this.#draftListLagMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.#draftListLagMs))
+      summary = await this.#findGmailDraft(accountId, (draft) => draft.draftId === draftId)
+    }
     if (!summary) {
       if (this.#draftCacheRequests.get(key) !== request && this.#drafts.has(key)) return this.#drafts.get(key)!
       this.#local.removeDraft(accountId, draftId)
@@ -1232,6 +1248,35 @@ export class GmailConnectorProvider {
     const account = (await this.accounts()).find((candidate) => candidate.id === accountId)
     if (!account) throw new Error('Unknown Gmail account')
     return account
+  }
+
+  /** Drafts Dispatch creates carry a Content-ID marker, so a draft whose Gmail id went stale can still be found. */
+  async #findDraftByClientMarker(accountId: string, clientId: string): Promise<string | undefined> {
+    const candidates: GmailDraftSummary[] = []
+    await this.#findGmailDraft(accountId, draft => { candidates.push(draft); return false })
+    for (const candidate of candidates) {
+      const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: candidate.messageId, format: 'full' })
+      const mime = record(structured(raw).payload) ?? {}
+      if ([mime, ...parts(mime)].some(part => partContentId(part) === `dispatch-${clientId}@draft.dispatch.local`)) return candidate.draftId
+    }
+    return undefined
+  }
+
+  /**
+   * A Gmail draft id goes stale when Gmail replaces the draft (a Codex update,
+   * another client). The thread survives and Dispatch's own drafts carry a
+   * marker, so the replacement can usually be found before giving up.
+   */
+  async #replacementDraftId(accountId: string, staleId: string, gmailThreadId?: string, clientId?: string): Promise<string | undefined> {
+    if (gmailThreadId) {
+      const byThread = await this.#findGmailDraft(accountId, (draft) => draft.threadId === gmailThreadId && draft.draftId !== staleId)
+      if (byThread) return byThread.draftId
+    }
+    if (clientId) {
+      const byMarker = await this.#findDraftByClientMarker(accountId, clientId)
+      if (byMarker && byMarker !== staleId) return byMarker
+    }
+    return undefined
   }
 
   async #findGmailDraft(accountId: string, matches: (draft: GmailDraftSummary) => boolean): Promise<GmailDraftSummary | undefined> {

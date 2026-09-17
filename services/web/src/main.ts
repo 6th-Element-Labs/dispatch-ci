@@ -18,6 +18,7 @@ import { codexMailEffect, visibleUserPrompt, type CodexMailEffect } from './code
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, moveLabel, pruneSelection, selectionAfterArrow, selectionAfterClick, undoActionsFor, type SelectionState } from './selection.js'
 import { SHORTCUT_GROUPS, TOOLBAR_KEYS, resolveShortcut } from './shortcuts.js'
+import { describeRequestError, requestErrorCode } from './request-errors.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -318,8 +319,14 @@ async function syncPendingDrafts(): Promise<void> {
     backgroundDraftSaves.set(record.key, save)
     try { await save; draftSyncDelay = 3000 }
     catch (error) {
-      pending ||= retryableDraftError(error)
-      if (!retryableDraftError(error)) { draftSyncErrors.set(record.key, String(error)); renderRecoveryList() }
+      if (requestErrorCode(String(error)) === 'gmail_draft_not_found' && record.gmailDraftId) {
+        // Gmail replaced or dropped the draft under us: forget the ghost id and let the next pass create or re-find it.
+        recovery.clearGmailIdentity(record.key, record.accountId!)
+        pending = true
+      } else {
+        pending ||= retryableDraftError(error)
+        if (!retryableDraftError(error)) { draftSyncErrors.set(record.key, describeRequestError(String(error))); renderRecoveryList() }
+      }
     }
     finally { backgroundDraftSaves.delete(record.key) }
   }
@@ -1580,7 +1587,7 @@ function draftError(error: unknown): void {
   }
   elements.draftError.hidden = false
   const detail = error instanceof Error ? error.message : String(error)
-  elements.draftError.textContent = /Request failed|\{"error"/.test(detail) ? 'Gmail could not complete this action. Your edits are kept. Check the account connection and try again.' : detail
+  elements.draftError.textContent = describeRequestError(detail)
 }
 
 function replyQuoteMarkdown(message: MessageProjection): string {
@@ -2292,6 +2299,11 @@ function addAgentMessage(kind: 'user' | 'agent' | 'tool' | 'error', text: string
   const item = document.createElement('div')
   item.className = `dispatch-agent-message dispatch-agent-${kind}`
   item.dataset.rawMessage = text
+  if (kind === 'error') {
+    const described = describeRequestError(text)
+    if (described !== text) console.error('Dispatch request failed:', text)
+    text = described
+  }
   const timestamp = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
   if (kind === 'user') {
     item.classList.add('d-flex', 'justify-content-end')
@@ -2642,7 +2654,15 @@ async function refreshCodexDraft(draftId: string, accountId: string, createdByCo
     else if (createdByCodex) addAgentMessage('tool', 'Gmail saved the draft. Your current edits were kept; open Drafts to review the saved version.')
     if (createdByCodex && mailbox === 'drafts') void loadConversations(true)
   } catch (error) {
-    if (snapshot.selection === selectionSequence && snapshot.pane === paneSequence) addAgentMessage('error', error instanceof Error ? error.message : String(error))
+    if (snapshot.selection !== selectionSequence || snapshot.pane !== paneSequence) return
+    if (requestErrorCode(String(error)) === 'gmail_draft_not_found') {
+      // Codex sent the draft or Gmail replaced it; the id in the event is already stale.
+      if (activeDraft?.id === draftId && activeDraft.accountId === accountId && !draftDirty && !draftSaveFlight) { clearRecovery(); hideDraftEditor() }
+      addAgentMessage('tool', 'Gmail no longer has that draft; it was sent or replaced. Drafts has been refreshed.')
+      if (mailbox === 'drafts') void loadConversations(true)
+      return
+    }
+    addAgentMessage('error', error instanceof Error ? error.message : String(error))
   } finally { codexDraftFlights -= 1 }
 }
 

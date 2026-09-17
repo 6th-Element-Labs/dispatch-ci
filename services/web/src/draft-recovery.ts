@@ -63,6 +63,14 @@ export class DraftRecovery {
     if (gmailThreadId) record.gmailThreadId = gmailThreadId
     this.storage.setItem(KEY, JSON.stringify(records))
   }
+  /** Forgets a Gmail draft id Gmail no longer knows, so the next sync creates or re-finds the draft instead of updating a ghost. */
+  clearGmailIdentity(key: string, accountId: string): void {
+    const records = this.list()
+    const record = records.find(item => item.key === key && item.accountId === accountId)
+    if (!record?.gmailDraftId) return
+    record.gmailDraftId = ''
+    this.storage.setItem(KEY, JSON.stringify(records))
+  }
   remove(key: string): void { this.storage.setItem(KEY, JSON.stringify(this.list().filter(item => item.key !== key))) }
   removeSavedRevision(key: string, revision: number): void {
     const item = this.list().find(record => record.key === key)

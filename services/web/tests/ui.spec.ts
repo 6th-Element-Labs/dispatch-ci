@@ -1614,6 +1614,41 @@ test('recovers the mail list automatically after a transient service failure', a
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
 
+test('a Codex draft that Gmail no longer has is reported as sent or replaced, not as raw JSON', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'connector-gmail', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/, (route) => route.fulfill({ json: { source: 'gmail', conversations: [], nextCursor: null, total: 0 } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/r-7734/, (route) => route.fulfill({ status: 404, json: { error: 'gmail_draft_not_found', detail: 'Gmail draft r-7734 was not found' } }))
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/apps', (route) => route.fulfill({ json: { data: [{ id: 'gmail', name: 'Gmail', isAccessible: true, isEnabled: true }] } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ json: { binding: { key: { kind: 'unbound' }, threadId: 'thread-mcp', created: true, replaced: false } } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    await route.fulfill({ contentType: 'text/event-stream', body: [
+      'data: {"method":"turn/started","params":{"threadId":"thread-mcp","turn":{"status":"inProgress"}}}\n\n',
+      'data: {"method":"item/completed","params":{"threadId":"thread-mcp","item":{"type":"mcpToolCall","status":"completed","tool":"gmail.update_draft","arguments":{"link_id":"link-one"},"result":{"structuredContent":{"draft_id":"r-7734"}}}}}\n\n',
+    ].join('') })
+  })
+  await page.goto('/')
+  await expect(page.locator('.dispatch-agent-tool').last()).toContainText('Gmail no longer has that draft')
+  await expect(page.locator('.dispatch-agent-error')).toHaveCount(0)
+  await expect(page.locator('.dispatch-agent-stream')).not.toContainText('Request failed')
+})
+
+test('raw service errors in the Codex pane are rewritten as sentences', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8412/ready')
+  await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ json: { status: 'ready' } }))
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings', (route) => route.fulfill({ status: 502, json: { error: 'codex_binding_failed', detail: 'thread 01a0 already has an active writer' } }))
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  const error = page.locator('.dispatch-agent-error').last()
+  await expect(error).toContainText('Codex could not open the chat for this email.')
+  await expect(error).not.toContainText('Request failed')
+  await expect(error).toHaveAttribute('data-raw-message', /codex_binding_failed/)
+})
+
 test('opens a Gmail draft that Codex created through MCP', async ({ page }) => {
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)

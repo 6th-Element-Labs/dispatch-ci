@@ -548,7 +548,7 @@ export function createMailServer(
       try {
         const body = draftObject(await readJson(request))
         if (!body) return writeJson(response, 400, { error: 'invalid_json' })
-        const draft = await gmail.updateGmailDraft(projectDraft({ id: decodeURIComponent(draftMatch[1]), inReplyToMessageId: String(body.messageId ?? ''), to: [{ name: String(body.to ?? ''), address: String(body.to ?? ''), initials: '@' }], cc: String(body.cc ?? ''), bcc: String(body.bcc ?? ''), subject: String(body.subject ?? ''), bodyMarkdown: String(body.bodyMarkdown ?? body.bodyText ?? ''), attachments: draftAttachments(body.attachments), accountId: String(body.accountId ?? '') }))
+        const draft = await gmail.updateGmailDraft(projectDraft({ id: decodeURIComponent(draftMatch[1]), inReplyToMessageId: String(body.messageId ?? ''), to: [{ name: String(body.to ?? ''), address: String(body.to ?? ''), initials: '@' }], cc: String(body.cc ?? ''), bcc: String(body.bcc ?? ''), subject: String(body.subject ?? ''), bodyMarkdown: String(body.bodyMarkdown ?? body.bodyText ?? ''), attachments: draftAttachments(body.attachments), accountId: String(body.accountId ?? '') }), typeof body.clientDraftId === 'string' ? body.clientDraftId : undefined)
         return writeJson(response, 200, { draft })
       } catch (error) { return writeJson(response, 502, draftError(error, 'gmail_draft_update_failed')) }
     }
