@@ -97,11 +97,26 @@ fn stage(resources: &Path, home: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+/// Boots the job out and waits until launchd has released its registration.
+/// `bootout` returns as soon as the request is accepted; the agent, which has a
+/// Codex child to tear down, can stay listed for a while afterwards, and a
+/// caller that saw it as still loaded would skip bootstrapping the new job.
 fn unload(service: Service) -> Result<(), String> {
     if !loaded(service) { return Ok(()); }
     let result = Command::new("/bin/launchctl").args(["bootout", &target(service)]).output().map_err(|e| e.to_string())?;
     if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).to_string()); }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while loaded(service) {
+        if Instant::now() >= deadline { return Err(format!("The {} service did not stop within 15 seconds. Quit Dispatch and open it again.", service.name())); }
+        std::thread::sleep(Duration::from_millis(200));
+    }
     Ok(())
+}
+
+/// A loaded job is kept only when it answers with the runtime this app ships;
+/// a job that is listed but silent or on another runtime is replaced.
+fn needs_bootstrap(loaded: bool, health_runtime: Option<&str>, id: &str) -> bool {
+    !loaded || health_runtime != Some(id)
 }
 
 fn bootstrap(service: Service, path: &Path, id: &str) -> Result<(), String> {
@@ -141,7 +156,10 @@ pub fn start(resources: &Path, home: &Path, logs: &Path, codex: Option<&Path>) -
     fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
     fs::create_dir_all(logs).map_err(|e| e.to_string())?;
     for service in Service::ALL {
-        if loaded(service) { continue; }
+        let is_loaded = loaded(service);
+        let health_runtime = if is_loaded { probe(service, "/health").ok().and_then(|value| value["runtimeId"].as_str().map(str::to_owned)) } else { None };
+        if !needs_bootstrap(is_loaded, health_runtime.as_deref(), id) { continue; }
+        if is_loaded { unload(service)?; }
         let path = agents.join(format!("{}.plist", label(service)));
         let temporary = path.with_extension("plist.tmp");
         fs::write(&temporary, plist(service, &runtime, logs, codex, id)).map_err(|e| e.to_string())?;
@@ -171,6 +189,13 @@ mod tests {
         assert!(value.contains("Codex &amp; Tools"));
         assert!(!value.contains("DISPATCH_PARENT_PID"));
         assert!(value.contains("DISPATCH_RUNTIME_ID"));
+    }
+    #[test]
+    fn a_job_is_kept_only_when_it_answers_with_the_shipped_runtime() {
+        assert!(needs_bootstrap(false, None, "abc"));
+        assert!(needs_bootstrap(true, None, "abc"), "listed but silent: launchd is still tearing it down or it is crash-looping");
+        assert!(needs_bootstrap(true, Some("old"), "abc"));
+        assert!(!needs_bootstrap(true, Some("abc"), "abc"));
     }
     #[test]
     fn labels_keep_mail_and_agent_as_independent_jobs() {
