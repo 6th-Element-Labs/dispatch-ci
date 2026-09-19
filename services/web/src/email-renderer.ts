@@ -18,6 +18,7 @@ function sanitizeEmailNode(node: Element): void {
 function renderRoot(kind: 'sanitized-html' | 'plain-text', value: string, downloaded: boolean): HTMLElement {
   const root = document.createElement('div')
   root.className = 'dispatch-thread-body'
+  root.dataset.kind = kind
   if (kind === 'plain-text') {
     const paragraph = document.createElement('p')
     paragraph.textContent = value

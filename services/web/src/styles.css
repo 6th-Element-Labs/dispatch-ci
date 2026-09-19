@@ -1,4 +1,6 @@
-:root { color-scheme: light; }
+:root { color-scheme: light dark; }
+:root[data-bs-theme="light"] { color-scheme: light; }
+:root[data-bs-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body, #app { width: 100%; height: 100%; margin: 0; }
@@ -131,6 +133,9 @@ button { cursor: pointer; }
 .dispatch-thread-body table { max-width: 100%; }
 .dispatch-thread-body [width] { max-width: 100%; }
 .dispatch-thread-body { font-size: .875rem; line-height: 1.65; overflow-wrap: anywhere; }
+/* HTML mail carries its own colours, often text without a background. Keep it on light paper in dark mode; plain text follows the theme. */
+[data-bs-theme="dark"] .dispatch-thread-body[data-kind="sanitized-html"] { color-scheme: light; background: #fff; color: #1d1d1f; padding: .75rem 1rem; border-radius: var(--tblr-border-radius); }
+[data-bs-theme="dark"] .dispatch-thread-body[data-kind="sanitized-html"] .dispatch-quoted-history { border-top-color: #dfe1e5; color: #60656d; }
 .dispatch-thread-body p { max-width: 720px; margin: 0 0 1rem; }
 .dispatch-thread-body > p { white-space: pre-wrap; }
 .dispatch-thread-body img { max-width: 100%; height: auto; }

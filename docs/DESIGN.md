@@ -12,6 +12,10 @@ The leading sidebar contains mailboxes only. It defaults to the compact icon-and
 
 Compact message rows are the default. They retain sender, subject, time, account, unread state and attachment indicators. The density button restores avatars and previews. Grounded AI search excerpts remain visible in either density. Density and sidebar choices persist in this browser.
 
+## Appearance
+
+Dispatch follows the macOS appearance by default. The toolbar menu beside the sidebar toggle offers System, Light, and Dark; an explicit choice persists in this browser. All surfaces use Tabler theme tokens so both appearances share one stylesheet. HTML mail keeps a light paper surface in dark mode because provider markup carries its own colours; plain-text mail follows the theme.
+
 ## Reading and writing
 
 Use a clear 18px subject, 14px message content, 13px controls and 12px supporting information. Keep the title above actions. Reserve stronger colour for selection and intentional actions. The thread and composer are the only main content surfaces that need cards.

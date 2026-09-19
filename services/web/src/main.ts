@@ -6,10 +6,17 @@ import '@tabler/core/dist/css/tabler.min.css'
 import '@tabler/icons-webfont/dist/tabler-icons.min.css'
 import './styles.css'
 import './apple-ui.css'
+import { THEME_PREFERENCES, createThemeController, type ThemePreference } from './theme.js'
 import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
 import { renderEmailContent, emailPlainText } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
+
+const theme = createThemeController({
+  root: document.documentElement,
+  storage: localStorage,
+  media: typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null,
+})
 import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
@@ -32,7 +39,7 @@ app.innerHTML = `
   <div class="page dispatch-window">
     <header class="dispatch-toolbar" data-tauri-drag-region>
       <div class="dispatch-toolbar-cluster dispatch-toolbar-messages" data-toolbar-messages data-tauri-drag-region>
-        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-mailboxes-toggle aria-label="Show mailboxes" aria-expanded="false" title="Show mailboxes"><i class="ti ti-layout-sidebar" aria-hidden="true"></i></button><button class="btn btn-sm btn-ghost-secondary dispatch-sidebar-options" data-sidebar-options aria-label="Folder rail style" aria-haspopup="menu" aria-expanded="false"><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-mailboxes-toggle aria-label="Show mailboxes" aria-expanded="false" title="Show mailboxes"><i class="ti ti-layout-sidebar" aria-hidden="true"></i></button><button class="btn btn-sm btn-ghost-secondary dispatch-sidebar-options" data-sidebar-options aria-label="Sidebar and appearance" aria-haspopup="menu" aria-expanded="false"><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
         <button class="btn btn-icon btn-ghost-primary btn-sm" type="button" data-compose aria-label="Compose" title="Compose"><i class="ti ti-pencil" aria-hidden="true"></i></button>
         <div class="dispatch-folder">
           <button class="btn btn-ghost-secondary btn-sm dispatch-folder-button" type="button" data-folder-toggle aria-haspopup="menu" aria-expanded="false"><h1 class="dispatch-folder-title" data-mailbox-title>Inbox</h1><i class="ti ti-chevron-down" aria-hidden="true"></i></button>
@@ -162,7 +169,7 @@ app.innerHTML = `
 
 app.insertAdjacentHTML('beforeend', `
   <div class="dispatch-undo-toast" data-undo-toast role="status" aria-live="polite" hidden><span data-undo-text></span><button class="btn btn-sm dispatch-undo-button" type="button" data-undo>Undo</button><kbd class="dispatch-undo-key" aria-hidden="true">⌘Z</kbd><button class="btn btn-icon btn-sm dispatch-undo-close" type="button" data-undo-dismiss aria-label="Dismiss"><i class="ti ti-x" aria-hidden="true"></i></button><span class="dispatch-undo-progress" aria-hidden="true"><span data-undo-bar></span></span></div>
-  <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
+  <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Sidebar and appearance" data-sidebar-menu hidden><span class="dropdown-header">Folder rail</span><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button><div class="dropdown-divider"></div><span class="dropdown-header">Appearance</span><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-theme-pref="system">System</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-theme-pref="light">Light</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-theme-pref="dark">Dark</button></div>
 
   <dialog class="dispatch-utility-dialog dispatch-shortcuts-dialog" data-shortcuts-dialog aria-label="Keyboard shortcuts"><div class="d-flex justify-content-between align-items-center"><h2 class="m-0">Keyboard shortcuts</h2><span class="text-secondary small">Press <kbd>?</kbd> any time</span><button class="btn btn-sm" data-dialog-close>Close</button></div><div class="dispatch-shortcut-groups" data-shortcut-groups></div><p class="text-secondary small mb-0">Single letters work only with focus in the list or the reader, never inside a text field.</p></dialog>
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
@@ -3328,11 +3335,21 @@ app.querySelectorAll<HTMLButtonElement>('[data-sidebar-style]').forEach(button =
   sidebarStyle = button.dataset.sidebarStyle as SidebarStyle; mailboxesVisible = true; persistSidebar(); renderPanels(); setSidebarMenu(false)
   app.querySelector<HTMLButtonElement>('[data-sidebar-options]')!.focus()
 }))
+function renderTheme(): void {
+  app.querySelectorAll<HTMLButtonElement>('[data-theme-pref]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.themePref === theme.preference)))
+}
+app.querySelectorAll<HTMLButtonElement>('[data-theme-pref]').forEach(button => button.addEventListener('click', () => {
+  const next = button.dataset.themePref
+  if (THEME_PREFERENCES.includes(next as ThemePreference)) theme.set(next as ThemePreference)
+  renderTheme(); setSidebarMenu(false)
+  app.querySelector<HTMLButtonElement>('[data-sidebar-options]')!.focus()
+}))
+renderTheme()
 app.querySelector('[data-sidebar-menu]')?.addEventListener('keydown', event => {
   const key = (event as KeyboardEvent).key
   if (!['ArrowDown','ArrowUp','Home','End'].includes(key)) return
   event.preventDefault()
-  const buttons = [...app.querySelectorAll<HTMLButtonElement>('[data-sidebar-style]')]
+  const buttons = [...app.querySelectorAll<HTMLButtonElement>('[data-sidebar-menu] [role="menuitemradio"]')]
   const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
   buttons[key === 'Home' ? 0 : key === 'End' ? buttons.length - 1 : (current + (key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
 })
