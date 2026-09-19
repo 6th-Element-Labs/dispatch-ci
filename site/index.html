@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dispatch for Mac</title>
+<meta name="description" content="Dispatch is a free, open source Mac email client that keeps your Gmail beside the Codex agent you already use.">
+<meta property="og:title" content="Dispatch – Email with Codex beside it">
+<meta property="og:description" content="Free, open source, and always yours. Every Gmail account in one queue, the message you are reading in the middle, Codex on the right.">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B0D12'/%3E%3Cpath d='M23 19l13 13-13 13' fill='none' stroke='%23C8F51A' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --ink: #101114;
+    --ink-2: #3a3c42;
+    --muted: #6f727a;
+    --line: #e4e5e8;
+    --ground: #ffffff;
+    --ground-2: #f4f4f5;
+    --ground-3: #eceef0;
+    --volt: #c8f51a;
+    --volt-deep: #9cc700;
+    --window: #16181d;
+    --window-2: #1e2127;
+    --window-3: #262a31;
+    --window-text: #e8e9ec;
+    --window-muted: #8b8f98;
+    --window-line: #2d3138;
+    --blue: #3b82f6;
+    --radius-pill: 999px;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 24px; }
+
+  /* Top bar */
+  .top { display: flex; justify-content: space-between; align-items: center; padding-block: 22px; font-size: 14px; color: var(--ink-2); }
+  .top .back { display: inline-flex; align-items: center; gap: 6px; }
+  .top .back:hover { color: var(--ink); }
+  .top .stamp { color: var(--muted); }
+
+  /* Hero */
+  .hero { text-align: center; padding-block: 72px 0; }
+  .hero h1 {
+    font-family: var(--font-display);
+    font-size: clamp(40px, 7vw, 68px);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    font-weight: 700;
+    margin: 0 auto 18px;
+    max-width: 14ch;
+    text-wrap: balance;
+  }
+  .hero .sub { font-size: clamp(18px, 2.4vw, 22px); color: var(--muted); margin: 0 0 40px; }
+  .cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    height: 46px; padding-inline: 22px;
+    border-radius: var(--radius-pill);
+    font-size: 15px; font-weight: 500;
+    border: 1px solid transparent;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+    white-space: nowrap;
+  }
+  .btn svg { width: 18px; height: 18px; flex: none; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-dark { background: var(--ink); color: #fff; }
+  .btn-dark:hover { background: #000; }
+  .btn-ghost { background: #fff; color: var(--ink); border-color: var(--line); }
+  .btn-ghost:hover { border-color: #c9cbd0; }
+
+  /* Hero mockup */
+  .stage { position: relative; margin-top: 56px; padding-top: 10px; overflow: hidden; }
+  .stage::after {
+    content: ""; position: absolute; inset: auto 0 0 0; height: 140px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0), var(--ground));
+    pointer-events: none;
+  }
+  .window {
+    margin: 0 auto; max-width: 1040px;
+    background: var(--window); color: var(--window-text);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 30px 80px rgba(16,17,20,.28), 0 0 0 1px rgba(255,255,255,.06) inset;
+    overflow: hidden;
+    font-size: 12.5px; line-height: 1.35;
+    text-align: left;
+    aspect-ratio: 16 / 9.4;
+    display: grid; grid-template-rows: 44px 1fr;
+    min-height: 420px;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 14px;
+    padding-inline: 16px; background: var(--window-2); border-bottom: 1px solid var(--window-line);
+  }
+  .lights { display: flex; gap: 7px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .lights i:nth-child(1) { background: #ff5f57; }
+  .lights i:nth-child(2) { background: #febc2e; }
+  .lights i:nth-child(3) { background: #28c840; }
+  .tools { display: flex; gap: 6px; margin-left: 10px; }
+  .tools span { width: 26px; height: 22px; border-radius: 6px; background: rgba(255,255,255,.06); display: grid; place-items: center; color: var(--window-muted); }
+  .tools span svg { width: 14px; height: 14px; }
+  .search { margin-left: auto; width: 220px; height: 24px; border-radius: 6px; background: rgba(255,255,255,.06); color: var(--window-muted); display: flex; align-items: center; gap: 6px; padding-inline: 8px; font-size: 12px; }
+  .panes { display: grid; grid-template-columns: 52px 268px 1fr 300px; min-height: 0; }
+  .rail { background: var(--window-2); border-right: 1px solid var(--window-line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 10px; }
+  .rail span { width: 36px; height: 34px; border-radius: 8px; display: grid; place-items: center; color: var(--window-muted); position: relative; }
+  .rail span.on { background: rgba(200,245,26,.12); color: var(--volt); }
+  .rail span svg { width: 16px; height: 16px; }
+  .rail b { position: absolute; top: 4px; right: 3px; font-size: 9px; font-weight: 600; background: var(--blue); color: #fff; border-radius: 8px; padding: 0 4px; line-height: 13px; }
+  .list { border-right: 1px solid var(--window-line); overflow: hidden; }
+  .list-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; color: var(--window-muted); font-size: 11.5px; }
+  .list-head b { color: var(--window-text); font-weight: 600; font-size: 13px; margin-right: auto; }
+  .list-head span { padding: 2px 7px; border-radius: 6px; }
+  .list-head span.on { background: rgba(255,255,255,.08); color: var(--window-text); }
+  .row { display: grid; grid-template-columns: 26px 1fr auto; column-gap: 10px; padding: 8px 12px; border-top: 1px solid var(--window-line); align-items: start; }
+  .row .av { width: 26px; height: 26px; border-radius: 50%; background: var(--window-3); display: grid; place-items: center; font-size: 10px; font-weight: 600; color: var(--window-muted); }
+  .row .from { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .subj { color: var(--window-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85; }
+  .row .snip { color: var(--window-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
+  .row .time { color: var(--window-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .row.unread .av { background: var(--blue); color: #fff; }
+  .row.unread { background: rgba(59,130,246,.10); }
+  .row.sel { background: rgba(255,255,255,.08); }
+  .row .clip { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-left: 4px; color: var(--window-muted); }
+  .reader { padding: 16px 22px; overflow: hidden; background: var(--window); }
+  .reader h3 { margin: 0 0 8px; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .reader .acts { display: flex; gap: 6px; margin-bottom: 14px; }
+  .reader .acts span { padding: 4px 9px; border-radius: 6px; background: rgba(255,255,255,.06); color: var(--window-muted); font-size: 11.5px; display: inline-flex; align-items: center; gap: 5px; }
+  .reader .acts span svg { width: 12px; height: 12px; }
+  .msg { border: 1px solid var(--window-line); border-radius: 10px; padding: 12px 14px; background: var(--window-2); margin-bottom: 10px; }
+  .msg .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--window-muted); font-size: 11.5px; margin-bottom: 8px; }
+  .msg .meta b { color: var(--window-text); font-weight: 600; }
+  .msg p { margin: 0 0 8px; color: #cfd2d8; }
+  .msg .quote { color: var(--window-muted); font-size: 11.5px; display: inline-flex; align-items: center; gap: 5px; }
+  .codex { border-left: 1px solid var(--window-line); background: var(--window-2); display: flex; flex-direction: column; overflow: hidden; }
+  .codex-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--window-line); font-size: 12px; }
+  .codex-head b { font-weight: 600; }
+  .codex-head .model { margin-left: auto; color: var(--window-muted); font-size: 11px; background: rgba(255,255,255,.06); padding: 2px 7px; border-radius: 6px; }
+  .codex-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .bub { padding: 8px 11px; border-radius: 10px; font-size: 12px; max-width: 92%; }
+  .bub.me { align-self: flex-end; background: var(--window-3); }
+  .bub.ai { color: #d4d7dd; padding-left: 0; }
+  .bub.ai ul { margin: 6px 0 0; padding-left: 16px; }
+  .bub.ai li { margin-bottom: 2px; }
+  .draftcard { border: 1px solid rgba(200,245,26,.35); background: rgba(200,245,26,.06); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; color: var(--window-text); }
+  .draftcard small { display: block; color: var(--volt); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: 10px; margin-bottom: 3px; }
+  .compose { margin: auto 12px 12px; height: 34px; border-radius: 8px; background: var(--window); border: 1px solid var(--window-line); display: flex; align-items: center; padding-inline: 10px; color: var(--window-muted); font-size: 12px; justify-content: space-between; }
+  .compose i { width: 22px; height: 22px; border-radius: 6px; background: var(--volt); display: grid; place-items: center; color: var(--ink); }
+  .compose i svg { width: 12px; height: 12px; }
+
+  /* Purpose */
+  .purpose { display: grid; grid-template-columns: 1fr 1fr; margin-top: 40px; }
+  .purpose .art { background: var(--window); position: relative; overflow: hidden; min-height: 560px; display: grid; grid-template-rows: 1fr 1fr; }
+  .art .tile { display: grid; place-items: center; background: linear-gradient(135deg, #1C1F26, #0B0D12); }
+  .art .tile svg { width: 46%; max-width: 300px; filter: drop-shadow(0 22px 30px rgba(0,0,0,.5)); }
+  .art .chat { padding: 34px 38px; display: flex; flex-direction: column; gap: 14px; justify-content: center; background: var(--window-2); border-top: 1px solid var(--window-line); }
+  .art .chat .bub { font-size: 14px; max-width: 88%; }
+  .art .chat .bub.me { background: var(--window-3); }
+  .art .chat .bub.ai { color: #d4d7dd; }
+  .art .chat .tool { font-family: var(--mono); font-size: 12px; color: var(--window-muted); display: flex; align-items: center; gap: 8px; }
+  .art .chat .tool i { width: 8px; height: 8px; border-radius: 50%; background: var(--volt); box-shadow: 0 0 10px var(--volt); }
+  .purpose .text { background: var(--ground-2); padding: 64px 56px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 16px; }
+  .purpose h2 { font-family: var(--font-display); font-size: clamp(26px, 3vw, 32px); line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 24px; font-weight: 700; text-wrap: balance; max-width: 22ch; }
+  .purpose p { color: var(--ink-2); margin: 0 0 18px; max-width: 58ch; }
+  .features { list-style: none; margin: 40px 0 0; padding: 0; border-top: 1px solid var(--line); }
+  .features li { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+  .features svg { width: 18px; height: 18px; color: var(--ink-2); flex: none; }
+
+  /* Footer */
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding-block: 64px 48px; }
+  .brand { display: flex; align-items: center; gap: 16px; font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+  .brand .icon { width: 56px; height: 56px; border-radius: 22%; overflow: hidden; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+  .brand .icon svg { width: 100%; height: 100%; display: block; }
+  .foot .cta { justify-content: flex-end; }
+  .legal { text-align: center; font-size: 12px; color: var(--muted); padding-block: 0 40px; max-width: 70ch; margin: 0 auto; }
+  .legal a { text-decoration: underline; text-underline-offset: 2px; }
+
+  @media (max-width: 900px) {
+    .panes { grid-template-columns: 44px 220px 1fr; }
+    .codex { display: none; }
+    .purpose { grid-template-columns: 1fr; }
+    .purpose .art { min-height: 420px; }
+    .purpose .text { padding: 44px 24px; }
+  }
+  @media (max-width: 600px) {
+    .top { padding-block: 16px; }
+    .hero { padding-top: 48px; }
+    .panes { grid-template-columns: 1fr; }
+    .rail, .reader { display: none; }
+    .list { border-right: 0; }
+    .window { min-height: 360px; aspect-ratio: auto; }
+    .search { display: none; }
+    .foot { flex-direction: column; align-items: flex-start; }
+    .foot .cta { justify-content: flex-start; }
+  }
+  @media (prefers-reduced-motion: reduce) { .btn { transition: none; } .btn:hover { transform: none; } }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-apple" viewBox="0 0 24 24"><path fill="currentColor" d="M16.37 12.67c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.18-1.73-1.35-.14-2.64.8-3.33.8-.68 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.54 2.67-.39 6.62 1.1 8.79.73 1.06 1.6 2.25 2.75 2.21 1.1-.04 1.52-.71 2.85-.71s1.71.71 2.87.69c1.19-.02 1.94-1.08 2.66-2.14.84-1.23 1.19-2.42 1.2-2.48-.03-.01-2.31-.89-2.33-3.54zM14.19 6.2c.6-.74 1.01-1.76.9-2.78-.87.04-1.93.58-2.55 1.31-.56.65-1.05 1.7-.92 2.7.97.08 1.96-.49 2.57-1.23z"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2.17c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.16 1.18a10.9 10.9 0 0 1 5.75 0c2.2-1.49 3.16-1.18 3.16-1.18.62 1.59.23 2.76.11 3.05.74.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.13v3.16c0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 4h16v10h-4l-1.5 3h-5L8 14H4z M4 14v6h16v-6"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M10 14l11-11M21 3l-6.5 18-4.5-7-7-4.5z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 4h18v4H3zM5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 14l-4-4 4-4M5 10h11a4 4 0 0 1 0 8h-1"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3L18 10a3.5 3.5 0 0 0-5-5L6.5 11.5a5.5 5.5 0 0 0 7.8 7.8L20 13.5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 4l8 4.5-8 4.5-8-4.5zM4 12.5L12 17l8-4.5M4 16.5L12 21l8-4.5"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2c.6 5 4.4 9.4 10 10-5.6.6-9.4 4.4-10 10-.6-5.6-4.4-9.4-10-10 5.6-.6 9.4-5 10-10z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M5 12l5 5L20 7"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3l8 3v6c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V6zM9 12l2 2 4-4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M16 5a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.7"/></symbol>
+  <symbol id="i-columns" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M4 4h16v16H4zM9 4v16M15 4v16"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></symbol>
+  <symbol id="i-select" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M4 6h10M4 12h10M4 18h10M17 9l2 2 3-3"/></symbol>
+  <symbol id="i-mac" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 5h18v11H3zM8 20h8M12 16v4"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9s1.3-6.3 3.8-9z"/></symbol>
+  <symbol id="i-cursor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M5 3l14 7-6 2-2 6z"/></symbol>
+</svg>
+
+<header class="wrap top">
+  <a class="back" href="https://github.com/6th-Element-Labs" id="org-link"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 12H5M11 18l-6-6 6-6"/></svg> 6th Element Labs</a>
+  <span class="stamp">Last update: <span id="stamp">9/20/26</span></span>
+</header>
+
+<main>
+  <section class="wrap hero">
+    <h1>The email client with Codex beside it</h1>
+    <p class="sub">Free, open source, and always yours</p>
+    <div class="cta">
+      <a class="btn btn-dark" href="#" data-href="download"><svg aria-hidden="true"><use href="#i-apple"/></svg> Download for Mac</a>
+      <a class="btn btn-ghost" href="#" data-href="github"><svg aria-hidden="true"><use href="#i-github"/></svg> View on GitHub</a>
+    </div>
+
+    <div class="stage" aria-label="Dispatch window showing example mail, an open thread and a Codex conversation">
+      <div class="window" role="img">
+        <div class="titlebar">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="tools">
+            <span><svg><use href="#i-columns"/></svg></span>
+            <span><svg><use href="#i-pencil"/></svg></span>
+            <span><svg><use href="#i-archive"/></svg></span>
+            <span><svg><use href="#i-trash"/></svg></span>
+            <span><svg><use href="#i-reply"/></svg></span>
+          </div>
+          <div class="search">⌕ Search mail</div>
+        </div>
+        <div class="panes">
+          <div class="rail">
+            <span class="on"><svg><use href="#i-inbox"/></svg><b>3</b></span>
+            <span><svg><use href="#i-send"/></svg></span>
+            <span><svg><use href="#i-file"/></svg></span>
+            <span><svg><use href="#i-archive"/></svg></span>
+            <span><svg><use href="#i-trash"/></svg></span>
+          </div>
+          <div class="list">
+            <div class="list-head"><b>Inbox</b><span class="on">All</span><span>Unread</span><span>Read</span></div>
+            <div class="row unread"><div class="av">MR</div><div><div class="from">Maya Reyes</div><div class="subj">Q4 supplier review — updated deck<svg class="clip"><use href="#i-clip"/></svg></div><div class="snip">Attached the revised numbers for the Tuesday call…</div></div><div class="time">9:41 AM</div></div>
+            <div class="row sel"><div class="av">JO</div><div><div class="from">Jonas Okafor</div><div class="subj">Re: Site visit next week</div><div class="snip">Thursday works on our side. Can you confirm the…</div></div><div class="time">8:17 AM</div></div>
+            <div class="row unread"><div class="av">PH</div><div><div class="from">Priya Haldar</div><div class="subj">Contract renewal terms</div><div class="snip">Legal sent back two redlines on section 4…</div></div><div class="time">Yesterday</div></div>
+            <div class="row"><div class="av">GC</div><div><div class="from">GitHub</div><div class="subj">[dispatch] Restore live mail after wake (#79)</div><div class="snip">Merged into main by steve…</div></div><div class="time">Yesterday</div></div>
+            <div class="row"><div class="av">AL</div><div><div class="from">Alex Lindqvist</div><div class="subj">Lunch Friday?</div><div class="snip">There's a new place on Pearl Street…</div></div><div class="time">Sep 18</div></div>
+            <div class="row unread"><div class="av">NT</div><div><div class="from">Northwind Travel</div><div class="subj">Your itinerary — DEN → SFO<svg class="clip"><use href="#i-clip"/></svg></div><div class="snip">Confirmation code XK4R2P. Departs 7:05 AM…</div></div><div class="time">Sep 18</div></div>
+            <div class="row"><div class="av">SR</div><div><div class="from">Sam Ruiz</div><div class="subj">Photos from the offsite</div><div class="snip">Finally got around to uploading these…</div></div><div class="time">Sep 17</div></div>
+          </div>
+          <div class="reader">
+            <h3>Re: Site visit next week</h3>
+            <div class="acts">
+              <span><svg><use href="#i-reply"/></svg> Reply</span>
+              <span><svg><use href="#i-archive"/></svg> Archive</span>
+              <span><svg><use href="#i-trash"/></svg> Trash</span>
+              <span><svg><use href="#i-spark"/></svg> Ask Codex</span>
+            </div>
+            <div class="msg">
+              <div class="meta"><span><b>Jonas Okafor</b> &lt;jonas@okafor-eng.example&gt;</span><span>Sep 20, 2026, 8:17 AM</span></div>
+              <p>Thursday works on our side. Can you confirm the 10 AM start and send the gate list for your team? We'll have the east lot reserved.</p>
+              <p>Also, if the revised drawings are ready before then, it would help to have them in hand.</p>
+              <span class="quote"><svg width="12" height="12"><use href="#i-chev"/></svg> Show quoted history (2 earlier messages)</span>
+            </div>
+            <div class="msg">
+              <div class="meta"><span><b>You</b> &lt;steve@example.com&gt;</span><span>Sep 19, 2026, 4:52 PM</span></div>
+              <p>Jonas, does Thursday or Friday next week work for the walkthrough? We can bring the full crew either day.</p>
+            </div>
+          </div>
+          <div class="codex">
+            <div class="codex-head"><svg width="14" height="14" style="color:var(--volt)"><use href="#i-spark"/></svg><b>Codex</b><span class="model">gpt-5.1 · medium</span></div>
+            <div class="codex-body">
+              <div class="bub me">Draft a reply confirming 10 AM Thursday and say the drawings will follow Wednesday.</div>
+              <div class="bub ai">Here's a draft in the editor. Summary of what it says:
+                <ul><li>Confirms Thursday at 10 AM, east lot</li><li>Promises the gate list by Tuesday</li><li>Revised drawings arrive Wednesday</li></ul>
+              </div>
+              <div class="draftcard"><small>Draft ready</small>Reply to Jonas Okafor · opened in the editor. Nothing sends until you press Send.</div>
+            </div>
+            <div class="compose">Message Codex… <i><svg><use href="#i-send"/></svg></i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="purpose">
+    <div class="art" aria-hidden="true">
+      <div class="tile">
+        <svg viewBox="0 0 1024 1024" role="img" aria-label="Dispatch icon">
+          <defs>
+            <linearGradient id="volt-g" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#F2FF7A"/><stop offset="1" stop-color="#B9F000"/></linearGradient>
+            <filter id="glow-g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>
+          </defs>
+          <path d="M610 300l210 212-210 212" fill="none" stroke="#C8F51A" stroke-width="120" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow-g)" opacity=".55"/>
+          <g fill="none" stroke="url(#volt-g)" stroke-width="96" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M250 300l210 212-210 212" opacity=".35"/>
+            <path d="M430 300l210 212-210 212" opacity=".65"/>
+            <path d="M610 300l210 212-210 212"/>
+          </g>
+          <path transform="translate(795 255) scale(.75)" d="M0-100C6-40 40-6 100 0 40 6 6 40 0 100-6 40-40 6-100 0-40-6-6-40 0-100z" fill="url(#volt-g)"/>
+        </svg>
+      </div>
+      <div class="chat">
+        <div class="bub me">Which of these three threads still needs a reply from me?</div>
+        <div class="tool"><i></i> gmail.read_email · 3 threads</div>
+        <div class="bub ai">Only Priya's. Maya's deck is informational and Jonas already got your confirmation this morning. Want me to draft a response on the section 4 redlines?</div>
+      </div>
+    </div>
+    <div class="text">
+      <p class="eyebrow">Purpose</p>
+      <h2>Your inbox and your agent, in the same window</h2>
+      <p>Most mail clients treat AI as a sidebar gadget. Most agent tools make you paste email into a chat box. Neither keeps the message in front of you while you work on it. That's why I built Dispatch.</p>
+      <p>Dispatch puts every connected Gmail account into one queue, shows the conversation you picked in the middle, and runs the real Codex harness you already have installed on the right. Each conversation gets its own Codex thread, so context follows the email instead of the chat.</p>
+      <p>Codex can read, search, and draft through the Gmail connector, but every send, delete, and recipient change waits for you. Drafts open in the editor where you can change them before anything goes out.</p>
+      <p>Because it's open source, you can read exactly what it does with your mail, run it from source, or change any part of it.</p>
+      <ul class="features">
+        <li><svg><use href="#i-users"/></svg>Unified queue across Gmail accounts</li>
+        <li><svg><use href="#i-layers"/></svg>Conversations, not duplicate messages</li>
+        <li><svg><use href="#i-columns"/></svg>Three panels: messages, reader, Codex</li>
+        <li><svg><use href="#i-spark"/></svg>A Codex thread per conversation</li>
+        <li><svg><use href="#i-pencil"/></svg>Drafts you review before sending</li>
+        <li><svg><use href="#i-shield"/></svg>Send, delete and forward need your approval</li>
+        <li><svg><use href="#i-clip"/></svg>Attachments open in the native app</li>
+        <li><svg><use href="#i-key"/></svg>Gmail-style keyboard shortcuts</li>
+        <li><svg><use href="#i-select"/></svg>Multi-select and drag to folders</li>
+        <li><svg><use href="#i-undo"/></svg>Undo for archive, trash and moves</li>
+        <li><svg><use href="#i-db"/></svg>Local SQLite index for fast folders</li>
+        <li><svg><use href="#i-moon"/></svg>Catches up after sleep and reconnects</li>
+        <li><svg><use href="#i-bell"/></svg>New-mail chime, only for new mail</li>
+        <li><svg><use href="#i-globe"/></svg>Sandboxed web view for links</li>
+        <li><svg><use href="#i-mac"/></svg>Native macOS app</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="wrap foot">
+    <div class="brand">
+      <div class="icon">
+        <svg viewBox="0 0 1024 1024" aria-hidden="true">
+          <defs><linearGradient id="tile-f" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1C1F26"/><stop offset="1" stop-color="#0B0D12"/></linearGradient>
+          <linearGradient id="volt-f" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#F2FF7A"/><stop offset="1" stop-color="#B9F000"/></linearGradient></defs>
+          <rect width="1024" height="1024" fill="url(#tile-f)"/>
+          <g fill="none" stroke="url(#volt-f)" stroke-width="96" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M250 300l210 212-210 212" opacity=".35"/>
+            <path d="M430 300l210 212-210 212" opacity=".65"/>
+            <path d="M610 300l210 212-210 212"/>
+          </g>
+          <path transform="translate(795 255) scale(.75)" d="M0-100C6-40 40-6 100 0 40 6 6 40 0 100-6 40-40 6-100 0-40-6-6-40 0-100z" fill="url(#volt-f)"/>
+        </svg>
+      </div>
+      Dispatch
+    </div>
+    <div class="cta">
+      <a class="btn btn-dark" href="#" data-href="download"><svg aria-hidden="true"><use href="#i-apple"/></svg> Download for Mac</a>
+      <a class="btn btn-ghost" href="#" data-href="github"><svg aria-hidden="true"><use href="#i-github"/></svg> View on GitHub</a>
+    </div>
+  </section>
+
+  <p class="legal">Requires macOS and an installed <a href="https://github.com/openai/codex">Codex</a> CLI. Gmail and Google are trademarks of Google LLC. Codex, ChatGPT and OpenAI are trademarks of OpenAI. Dispatch is not affiliated with or endorsed by Google or OpenAI.</p>
+</main>
+
+<script>
+  // Edit these two lines when the public repo and first release exist.
+  const GITHUB_URL = "https://github.com/6th-Element-Labs/dispatch";
+  const DOWNLOAD_URL = GITHUB_URL + "/releases/latest";
+
+  document.querySelectorAll("[data-href]").forEach(a => {
+    a.href = a.dataset.href === "download" ? DOWNLOAD_URL : GITHUB_URL;
+  });
+</script>
+</body>
+</html>
