@@ -40,7 +40,13 @@ function renderRoot(kind: 'sanitized-html' | 'plain-text', value: string, downlo
   } finally {
     DOMPurify.removeHook('afterSanitizeAttributes')
   }
+  root.dataset.paper = String(bringsOwnColours(root))
   return root
+}
+
+/** Provider HTML that sets any colour keeps a light surface in dark mode; plain markup follows the theme. */
+export function bringsOwnColours(root: Element): boolean {
+  return Boolean(root.querySelector('[bgcolor], [background], [color], [style*="background" i], [style*="color" i]'))
 }
 
 /** Extract source text without disclosure labels or remote-image requests. */

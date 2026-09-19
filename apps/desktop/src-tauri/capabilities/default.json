@@ -10,6 +10,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "allow-popup-context-menu",
-    "allow-open-web-link"
+    "allow-open-web-link",
+    "allow-set-appearance"
   ]
 }

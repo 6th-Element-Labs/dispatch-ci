@@ -4,6 +4,7 @@
 //! and supervises the mail and agent services as bundled-Node sidecars. It owns
 //! no product behavior: mail, agent, and presentation logic stay in `services/`.
 
+mod appearance;
 mod codex_path;
 mod context_menu;
 mod menu;
@@ -32,8 +33,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(context_menu::ContextMenuPending::default())
+        .manage(appearance::AppearanceMenu::<tauri::Wry>::default())
         .manage(web_links::WebLinks::default())
-        .invoke_handler(tauri::generate_handler![context_menu::popup_context_menu, web_links::open_web_link, web_links::web_link_state, web_links::web_link_action])
+        .invoke_handler(tauri::generate_handler![context_menu::popup_context_menu, web_links::open_web_link, web_links::web_link_state, web_links::web_link_action, appearance::set_appearance])
         .setup(|app| {
             let handle = app.handle().clone();
             let resources = handle.path().resource_dir()?;
@@ -87,6 +89,11 @@ pub fn run() {
                     }
                 }
                 menu::RETURN_TO_MAIL => web_links::return_to_mail(app),
+                appearance::SYSTEM | appearance::LIGHT | appearance::DARK => {
+                    if let Err(message) = appearance::choose(app, event.id().as_ref()) {
+                        show_error(app, "Dispatch could not change its appearance", &message);
+                    }
+                }
                 menu::WEB_BACK | menu::WEB_FORWARD | menu::WEB_RELOAD => {
                     let action = match event.id().as_ref() { menu::WEB_BACK => "back", menu::WEB_FORWARD => "forward", _ => "reload" };
                     let app = app.clone();

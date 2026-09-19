@@ -2549,7 +2549,7 @@ test('email web links open through native controls and never replace the mail vi
   await page.addInitScript(() => {
     const w = window as unknown as { isTauri: boolean; __links: unknown[]; __TAURI__: unknown }
     w.isTauri = true; w.__links = []
-    w.__TAURI__ = { core: { invoke: async (command: string, args: unknown) => { w.__links.push({ command, args }); return null } } }
+    w.__TAURI__ = { core: { invoke: async (command: string, args: unknown) => { if (command !== 'set_appearance') w.__links.push({ command, args }); return null } } }
   })
   await page.route(/8411\/v1\/conversations\/t1/, route => route.fulfill({ json: { conversation: { ...conversations[0], source: 'demo', messages: [{ ...messages[0], source: 'demo', body: { kind: 'sanitized-html', content: '<p><a href="https://example.com/page?source=mail">Read the website</a> <a target="_blank" href="https://example.com/other">Another page</a></p>' }, attachments: [] }] } } }))
   await page.goto('/')
@@ -2777,20 +2777,56 @@ test('late history from a previous selection cannot replace the current chat', a
   await expect(page.getByText('Late private history A')).toHaveCount(0)
 })
 
-test('appearance follows the OS by default and remembers an explicit choice', async ({ page }) => {
+test('appearance follows the OS by default and takes the native View menu choice', async ({ page }) => {
   await stubAgent(page)
+  await page.addInitScript(() => {
+    const listeners: Record<string, (event: { payload: unknown }) => void> = {}
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = []
+    Object.assign(window, {
+      isTauri: true,
+      __appearance: { listeners, calls },
+      __TAURI__: {
+        core: { invoke: async (command: string, args?: Record<string, unknown>) => { calls.push({ command, args }); return {} } },
+        event: { listen: async (name: string, handler: (event: { payload: unknown }) => void) => { listeners[name] = handler; return () => {} } },
+      },
+    })
+  })
+  type Bridge = { __appearance: { listeners: Record<string, (event: { payload: unknown }) => void>; calls: Array<{ command: string; args?: Record<string, unknown> }> } }
+  const calls = () => page.evaluate(() => (window as unknown as Bridge).__appearance.calls)
+  const choose = (preference: string) => page.evaluate((value) => (window as unknown as Bridge).__appearance.listeners['dispatch://appearance']!({ payload: value }), preference)
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await expect(page.locator('html')).toHaveAttribute('data-bs-theme', 'dark')
-  await page.getByRole('button', { name: 'Sidebar and appearance' }).click()
-  await page.getByRole('menuitemradio', { name: 'Light' }).click()
+  await expect.poll(calls).toContainEqual({ command: 'set_appearance', args: { preference: 'system' } })
+  await expect(page.getByRole('menuitemradio', { name: 'Light' })).toHaveCount(0)
+  await choose('light')
   await expect(page.locator('html')).toHaveAttribute('data-bs-theme', 'light')
+  await expect.poll(calls).toContainEqual({ command: 'set_appearance', args: { preference: 'light' } })
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-bs-theme', 'light')
-  await page.getByRole('button', { name: 'Sidebar and appearance' }).click()
-  await expect(page.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true')
-  await page.getByRole('menuitemradio', { name: 'System' }).click()
+  await expect.poll(calls).toContainEqual({ command: 'set_appearance', args: { preference: 'light' } })
+  await choose('system')
   await expect(page.locator('html')).toHaveAttribute('data-bs-theme', 'dark')
   await page.emulateMedia({ colorScheme: 'light' })
   await expect(page.locator('html')).toHaveAttribute('data-bs-theme', 'light')
+})
+
+test('plain provider HTML follows the dark theme and coloured HTML keeps a light surface', async ({ page }) => {
+  await stubAgent(page)
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/)
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/, (route) => {
+    const threadId = new URL(route.request().url()).pathname.split('/').pop()
+    const index = threadId === 't2' ? 1 : 0
+    const content = index === 1 ? '<div style="color:#1F497D"><p>Comments added.</p></div>' : '<p>Confirmed for Thursday.</p>'
+    const message = { ...messages[index]!, source: 'demo', body: { kind: 'sanitized-html', content }, attachments: [] }
+    return route.fulfill({ json: { conversation: { ...conversations[index]!, source: 'demo', messages: [message] } } })
+  })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await page.getByText('Opua berth confirmation').first().click()
+  await expect(page.locator('.dispatch-thread-body').first()).toContainText('Confirmed for Thursday.')
+  await expect(page.locator('.dispatch-thread-body').first()).toHaveAttribute('data-paper', 'false')
+  await page.getByText('Services agreement').first().click()
+  await expect(page.locator('.dispatch-thread-body').first()).toContainText('Comments added.')
+  await expect(page.locator('.dispatch-thread-body').first()).toHaveAttribute('data-paper', 'true')
 })

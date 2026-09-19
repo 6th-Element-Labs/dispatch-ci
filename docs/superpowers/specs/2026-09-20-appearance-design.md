@@ -22,3 +22,12 @@ Native menu item for appearance, per-message "show in dark" toggle, and Codex-si
 
 - `theme.test.ts`: defaults, invalid stored values, OS change tracking only under System, persistence, throwing storage, dispose.
 - `tests/ui.spec.ts`: OS dark applies by default, explicit Light survives reload and is shown checked, returning to System follows a live OS change.
+
+## Amendment (2026-09-20, evening)
+
+Steve found the first dark build weird: Tabler's navy-tinted greys, a white message card, and an invisible Offline chip, with the control hidden in the folder-rail menu.
+
+- `services/web/src/dark.css` retunes the Tabler dark tokens to neutral greys (#141416 base, #1c1c1f panels, #242427 raised), hairline borders at 6–8% white, and the macOS blue accent #0a84ff.
+- Mail follows the theme by default. `email-renderer.ts` marks a body `data-paper="true"` only when the provider HTML sets a colour (`bgcolor`, `background`, `color`, or an inline `background`/`color` style); those keep the light surface.
+- The Offline / Downloaded chip uses surface and border tokens instead of `--tblr-gray-100`.
+- The control moves to the native View → Appearance menu (`apps/desktop/src-tauri/src/appearance.rs`): check items for System, Light, Dark. A click is emitted to the web client as `dispatch://appearance`; the web client persists it and reports its preference through the `set_appearance` command on load and after any change, which sets the check marks and the native window theme. The folder-rail menu no longer carries appearance. The browser build follows the OS.

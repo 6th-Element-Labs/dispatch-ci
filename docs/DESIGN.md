@@ -14,7 +14,7 @@ Compact message rows are the default. They retain sender, subject, time, account
 
 ## Appearance
 
-Dispatch follows the macOS appearance by default. The toolbar menu beside the sidebar toggle offers System, Light, and Dark; an explicit choice persists in this browser. All surfaces use Tabler theme tokens so both appearances share one stylesheet. HTML mail keeps a light paper surface in dark mode because provider markup carries its own colours; plain-text mail follows the theme.
+Dispatch follows the macOS appearance by default. In Dispatch.app, View → Appearance offers System, Light, and Dark; the choice persists in the web client and the shell mirrors it in the menu and the native window theme. The browser build follows the OS. Dark uses neutral near-black greys with hairline borders and the macOS blue accent (`services/web/src/dark.css` retunes the Tabler tokens); do not reintroduce tinted greys. Mail follows the theme; provider HTML that sets its own colours keeps a light surface in dark mode so its text stays readable.
 
 ## Reading and writing
 

@@ -1,8 +1,11 @@
-//! Native macOS menu: the standard app, Edit, and Window menus plus two
+//! Native macOS menu: the standard app, Edit, View, and Window menus plus two
 //! service controls. Edit items are required for text editing in WebKit.
+//! View → Appearance is built by `appearance`.
 
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Runtime};
+
+use crate::appearance;
 
 pub const RESTART_SERVICES: &str = "restart-services";
 pub const RETURN_TO_MAIL: &str = "return-to-mail";
@@ -37,6 +40,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .paste()
         .select_all()
         .build()?;
+    let view = SubmenuBuilder::new(app, "View").item(&appearance::submenu(app)?).build()?;
     let back = MenuItemBuilder::with_id(WEB_BACK, "Back").accelerator("CmdOrCtrl+[").build(app)?;
     let forward = MenuItemBuilder::with_id(WEB_FORWARD, "Forward").accelerator("CmdOrCtrl+]").build(app)?;
     let reload = MenuItemBuilder::with_id(WEB_RELOAD, "Reload Web Page").accelerator("CmdOrCtrl+R").build(app)?;
@@ -49,5 +53,5 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .close_window()
         .build()?;
-    MenuBuilder::new(app).items(&[&application, &edit, &navigation, &window]).build()
+    MenuBuilder::new(app).items(&[&application, &edit, &view, &navigation, &window]).build()
 }
