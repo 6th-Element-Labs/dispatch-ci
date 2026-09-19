@@ -11,7 +11,7 @@ export function installWebLinks(root: HTMLElement, win: LinkWindow, onError: (er
     if (!href || href.startsWith('#')) return
     let url: URL
     try { url = new URL(href, root.ownerDocument.baseURI) } catch { event.preventDefault(); onError(new Error('This link is not a valid URL.')); return }
-    if (!['http:', 'https:', 'mailto:'].includes(url.protocol)) {
+    if (!['http:', 'https:', 'mailto:', 'codex:'].includes(url.protocol)) {
       event.preventDefault(); onError(new Error(`Dispatch cannot open this ${url.protocol} link.`)); return
     }
     if (isNativeShell(win)) {

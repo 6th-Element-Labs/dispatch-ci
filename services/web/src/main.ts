@@ -14,6 +14,7 @@ import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, AppSumm
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
+import { markSetupSeen, SETUP_GMAIL_URL, SETUP_INSTALL_URL, setupSeen } from './setup-guide.js'
 import { codexMailEffect, visibleUserPrompt, type CodexMailEffect } from './codex-mail-effect.js'
 import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBaseline } from './new-mail-tone.js'
 import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, moveLabel, pruneSelection, selectionAfterArrow, selectionAfterClick, undoActionsFor, type SelectionState } from './selection.js'
@@ -129,10 +130,34 @@ app.innerHTML = `
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
           <p class="dispatch-agent-state-text" data-agent-state-text role="status" hidden></p><div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
-          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span></span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
+          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-setup-open>Setup</button><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span></span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
         </footer>
       </aside>
     </div>
+      <div class="dispatch-setup" data-setup role="dialog" aria-modal="true" aria-labelledby="dispatch-setup-title" hidden>
+        <div class="card dispatch-setup-card">
+          <div class="card-body">
+            <h2 class="card-title" id="dispatch-setup-title" data-setup-heading tabindex="-1">Set up Dispatch</h2>
+            <p class="text-secondary">Dispatch uses your installed Codex CLI and the Gmail plugin inside Codex. A user who already has both can continue.</p>
+            <ol class="dispatch-setup-steps">
+              <li>
+                <strong>Install Codex</strong>
+                <a class="btn btn-sm btn-outline-primary" data-setup-install href="${SETUP_INSTALL_URL}" target="_blank" rel="noreferrer">Open install guide</a>
+              </li>
+              <li>
+                <strong>Sign in to ChatGPT</strong>
+                <p class="mb-0">Run <code>codex login</code>, or sign in in ChatGPT desktop.</p>
+              </li>
+              <li>
+                <strong>Connect Gmail</strong>
+                <a class="btn btn-sm btn-outline-primary" data-setup-gmail href="${SETUP_GMAIL_URL}">Open Codex</a>
+                <p class="text-secondary small mb-0">If that link does not open, use ChatGPT desktop Plugins, or run <code>codex</code>, then <code>/plugins</code>, then connect Google.</p>
+              </li>
+            </ol>
+            <button class="btn btn-primary" type="button" data-setup-continue>Continue</button>
+          </div>
+        </div>
+      </div>
   </div>`
 
 app.insertAdjacentHTML('beforeend', `
@@ -144,6 +169,7 @@ app.insertAdjacentHTML('beforeend', `
 `)
 
 const elements = {
+  toolbar: app.querySelector<HTMLElement>('.dispatch-toolbar')!,
   workspace: app.querySelector<HTMLElement>('.dispatch-workspace')!,
   messagesPanel: app.querySelector<HTMLElement>('.dispatch-messages')!,
   readerPanel: app.querySelector<HTMLElement>('.dispatch-reader')!,
@@ -215,6 +241,10 @@ const elements = {
   spam: app.querySelector<HTMLButtonElement>('[data-spam]')!,
   trash: app.querySelector<HTMLButtonElement>('[data-trash]')!,
   moveInbox: app.querySelector<HTMLButtonElement>('[data-move-inbox]')!,
+  setup: app.querySelector<HTMLElement>('[data-setup]')!,
+  setupHeading: app.querySelector<HTMLElement>('[data-setup-heading]')!,
+  setupContinue: app.querySelector<HTMLButtonElement>('[data-setup-continue]')!,
+  setupOpen: app.querySelector<HTMLButtonElement>('[data-setup-open]')!,
 }
 
 installWebLinks(app, window as { isTauri?: unknown }, error => {
@@ -3626,6 +3656,31 @@ elements.modelToggle.addEventListener('click', (event) => {
 })
 renderModelPicker()
 void refreshModelCatalog()
+let setupReturnFocus: HTMLElement | null = null
+
+function hideSetup(): void {
+  markSetupSeen(localStorage)
+  elements.setup.hidden = true
+  elements.toolbar.inert = false
+  elements.workspace.inert = false
+  setupReturnFocus?.focus()
+  setupReturnFocus = null
+}
+
+function showSetup(): void {
+  const active = document.activeElement
+  setupReturnFocus = active instanceof HTMLElement && active !== document.body ? active : null
+  elements.setup.hidden = false
+  elements.toolbar.inert = true
+  elements.workspace.inert = true
+  elements.setupHeading.focus()
+}
+
+if (setupSeen(localStorage)) elements.setup.hidden = true
+else showSetup()
+elements.setupContinue.addEventListener('click', hideSetup)
+elements.setupOpen.addEventListener('click', showSetup)
+elements.setup.addEventListener('keydown', (event) => event.stopPropagation())
 function setFolderMenu(open: boolean): void {
   elements.folderMenu.hidden = !open
   elements.folderMenu.classList.toggle('show', open)

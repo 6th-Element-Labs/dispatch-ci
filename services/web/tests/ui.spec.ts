@@ -37,6 +37,7 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('dispatch.setup.seen', '1') })
   await page.route(/8411\/v1\/mailboxes\/counts/, (route) => route.fulfill({ json: { source: 'demo', counts: { inbox: 0, drafts: 0, spam: 0 } } }))
   await page.route('http://127.0.0.1:8412/v1/activity', route => route.fulfill({ contentType: 'text/event-stream', body: 'data: []\n\n' }))
   await page.route(/8411\/v1\/send-receipts/, route => route.fulfill({ json: { receipts: [] } }))

@@ -10,6 +10,16 @@ The account queue is unified by default. Gmail messages are grouped into convers
 
 Status: working Gmail-only foundation. The web client and local services run, the installed Codex harness connects, and Gmail messages synchronize through the existing connector into a mail-service-owned SQLite index. Gmail writes remain guarded by the Codex approval flow.
 
+## First run
+
+Dispatch does not own Gmail or ChatGPT login. On first launch it shows three steps. Continue always works. A user who already has Codex and a linked Gmail plugin can continue immediately.
+
+1. Install the Codex CLI from https://developers.openai.com/codex/cli
+2. Sign in to ChatGPT with `codex login`, or in ChatGPT desktop.
+3. Connect Gmail in Codex (`codex://plugins/gmail@openai-curated`, or run `codex` and `/plugins`).
+
+Open Setup in the Codex prompt footer to see the same steps again.
+
 ## Services
 
 | Service | Port | Owns |

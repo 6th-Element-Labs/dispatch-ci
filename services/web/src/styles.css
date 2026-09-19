@@ -315,3 +315,17 @@ button { cursor: pointer; }
 @media (max-width: 640px) { .dispatch-shortcut-groups { grid-template-columns: minmax(0, 1fr); } }
 .dispatch-agent-notice { border-color: var(--tblr-warning, #f59f00); }
 .dispatch-agent-notice .card-body { padding: .75rem 1rem; }
+.dispatch-setup {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  overflow-y: auto;
+  padding: 1.5rem;
+  background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 88%, transparent);
+}
+.dispatch-setup-card { width: min(36rem, 100%); margin-block: auto; flex: none; }
+.dispatch-setup-steps { display: grid; gap: 1rem; padding-left: 1.2rem; margin: 1rem 0 1.25rem; }
+.dispatch-setup-steps li { display: grid; gap: .35rem; }

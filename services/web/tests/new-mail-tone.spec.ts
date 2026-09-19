@@ -11,6 +11,7 @@ const older = { ...base, id: 'demo:t3', threadId: 't3', latestMessageId: 'm3', s
 type ToneWindow = { __toneStarts: number[]; AudioContext: typeof AudioContext }
 
 async function installFakeAudio(page: import('@playwright/test').Page): Promise<void> {
+  await page.addInitScript(() => { localStorage.setItem('dispatch.setup.seen', '1') })
   await page.addInitScript(() => {
     const w = window as unknown as ToneWindow
     w.__toneStarts = []

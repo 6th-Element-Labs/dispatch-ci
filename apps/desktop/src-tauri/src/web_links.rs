@@ -10,6 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 const WINDOW: &str = "web-link";
 const TOOLBAR: &str = "link-toolbar";
 const CONTENT: &str = "link-content";
+const GMAIL_PLUGIN_URL: &str = "codex://plugins/gmail@openai-curated";
 // Reserve the native title bar as well as the 80px local controls.
 const TOOLBAR_HEIGHT: f64 = 104.0;
 #[derive(Default)]
@@ -23,6 +24,11 @@ fn web_url(value: &str) -> Result<Url, String> {
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err("Only HTTP and HTTPS pages can open in the web window".into());
     }
+    Ok(url)
+}
+fn external_app_url(value: &str) -> Result<Url, String> {
+    let url = Url::parse(value).map_err(|_| "This link is not a valid URL".to_string())?;
+    if url.as_str() != GMAIL_PLUGIN_URL { return Err("This external app link is not allowed".into()); }
     Ok(url)
 }
 fn local_page(url: &Url, path: &str, dev: Option<&Url>) -> bool {
@@ -116,6 +122,7 @@ pub async fn open_web_link(app: AppHandle, webview: Webview, url: String) -> Res
     trusted(&app, &webview, "main", "/")?;
     let parsed = Url::parse(&url).map_err(|_| "This link is not a valid URL")?;
     if parsed.scheme() == "mailto" { return app.opener().open_url(parsed.to_string(), None::<&str>).map_err(|e| e.to_string()); }
+    if parsed.scheme() == "codex" { return app.opener().open_url(external_app_url(&url)?.to_string(), None::<&str>).map_err(|e| e.to_string()); }
     open_page(&app, web_url(&url)?)
 }
 // Query and navigate the actual WKWebView history, not a JavaScript history invented by the page.
@@ -169,6 +176,13 @@ mod tests {
     fn only_web_pages_enter_remote_view() {
         for url in ["https://example.com/a?b=c#d", "http://example.com"] { assert!(web_url(url).is_ok()); }
         for url in ["javascript:alert(1)", "file:///etc/passwd", "tauri://localhost", "data:text/html,test", "mailto:a@example.com"] { assert!(web_url(url).is_err()); }
+    }
+    #[test]
+    fn only_the_pinned_gmail_plugin_may_open_as_a_custom_url() {
+        assert!(external_app_url("codex://plugins/gmail@openai-curated").is_ok());
+        for url in ["codex://plugins/other@openai-curated", "codex://threads/new", "javascript:alert(1)"] {
+            assert!(external_app_url(url).is_err());
+        }
     }
     #[test]
     fn mail_origin_is_exact_and_cannot_navigate_to_another_local_document() {
