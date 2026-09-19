@@ -145,9 +145,16 @@ app.innerHTML = `
         <div class="dispatch-setup-card">
           <section class="dispatch-setup-brand">
             <span class="dispatch-setup-mark" aria-hidden="true"><svg viewBox="0 0 1024 1024"><g fill="none" stroke="#C8F51A" stroke-width="96" stroke-linecap="round" stroke-linejoin="round"><path d="M250 300l210 212-210 212" opacity=".35"/><path d="M430 300l210 212-210 212" opacity=".65"/><path d="M610 300l210 212-210 212"/></g><path transform="translate(795 255) scale(.75)" d="M0-100C6-40 40-6 100 0 40 6 6 40 0 100-6 40-40 6-100 0-40-6-6-40 0-100z" fill="#C8F51A"/></svg></span>
-            <h2 id="dispatch-setup-title" data-setup-heading tabindex="-1">Your inbox and your agent, in the same window.</h2>
-            <p>Dispatch is a Codex client. It reads and drafts Gmail through the Codex you already have. Nothing sends until you press Send.</p>
-            <div class="dispatch-setup-diagram" aria-hidden="true"><span>Mail</span><span>The message</span><span>Codex</span></div>
+            <h2 id="dispatch-setup-title" data-setup-heading tabindex="-1">Your whole Codex, pointed at your inbox.</h2>
+            <p>Dispatch runs the Codex on your Mac, with the thread you clicked already in context. Ask for the gist, draft the reply, pull the numbers from the attachment, check your calendar, open the repo, write the doc. Anything your Codex can reach, it can do from here. You still press Send.</p>
+            <ul class="dispatch-setup-asks" aria-label="Things you can ask">
+              <li>Catch me up on this thread</li>
+              <li>Draft a reply and attach the revised PDF</li>
+              <li>Find every message from this vendor since June</li>
+              <li>Is Thursday 10 AM free?</li>
+              <li>Turn this into a task list</li>
+              <li>Open the PR they’re asking about</li>
+            </ul>
           </section>
           <section class="dispatch-setup-steps-pane" aria-label="Setup steps">
             <p class="dispatch-setup-eyebrow">Before you start</p>
