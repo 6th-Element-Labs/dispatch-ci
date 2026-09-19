@@ -142,27 +142,37 @@ app.innerHTML = `
       </aside>
     </div>
       <div class="dispatch-setup" data-setup role="dialog" aria-modal="true" aria-labelledby="dispatch-setup-title" hidden>
-        <div class="card dispatch-setup-card">
-          <div class="card-body">
-            <h2 class="card-title" id="dispatch-setup-title" data-setup-heading tabindex="-1">Set up Dispatch</h2>
-            <p class="text-secondary">Dispatch uses your installed Codex CLI and the Gmail plugin inside Codex. A user who already has both can continue.</p>
+        <div class="dispatch-setup-card">
+          <section class="dispatch-setup-brand">
+            <span class="dispatch-setup-mark" aria-hidden="true"><svg viewBox="0 0 1024 1024"><g fill="none" stroke="#C8F51A" stroke-width="96" stroke-linecap="round" stroke-linejoin="round"><path d="M250 300l210 212-210 212" opacity=".35"/><path d="M430 300l210 212-210 212" opacity=".65"/><path d="M610 300l210 212-210 212"/></g><path transform="translate(795 255) scale(.75)" d="M0-100C6-40 40-6 100 0 40 6 6 40 0 100-6 40-40 6-100 0-40-6-6-40 0-100z" fill="#C8F51A"/></svg></span>
+            <h2 id="dispatch-setup-title" data-setup-heading tabindex="-1">Your inbox and your agent, in the same window.</h2>
+            <p>Dispatch is a Codex client. It reads and drafts Gmail through the Codex you already have. Nothing sends until you press Send.</p>
+            <div class="dispatch-setup-diagram" aria-hidden="true"><span>Mail</span><span>The message</span><span>Codex</span></div>
+          </section>
+          <section class="dispatch-setup-steps-pane" aria-label="Setup steps">
+            <p class="dispatch-setup-eyebrow">Before you start</p>
             <ol class="dispatch-setup-steps">
               <li>
-                <strong>Install Codex</strong>
-                <a class="btn btn-sm btn-outline-primary" data-setup-install href="${SETUP_INSTALL_URL}" target="_blank" rel="noreferrer">Open install guide</a>
+                <span class="dispatch-setup-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg></span>
+                <div><strong>Install Codex</strong><small>The CLI from OpenAI. Dispatch talks to its App Server.</small></div>
+                <a class="btn btn-sm" data-setup-install href="${SETUP_INSTALL_URL}" target="_blank" rel="noreferrer">Open install guide</a>
               </li>
               <li>
-                <strong>Sign in to ChatGPT</strong>
-                <p class="mb-0">Run <code>codex login</code>, or sign in in ChatGPT desktop.</p>
+                <span class="dispatch-setup-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg></span>
+                <div><strong>Sign in to ChatGPT</strong><small>Run <code>codex login</code> in a terminal, or sign in from ChatGPT desktop.</small></div>
               </li>
               <li>
-                <strong>Connect Gmail</strong>
-                <a class="btn btn-sm btn-outline-primary" data-setup-gmail href="${SETUP_GMAIL_URL}">Open Codex</a>
-                <p class="text-secondary small mb-0">If that link does not open, use ChatGPT desktop Plugins, or run <code>codex</code>, then <code>/plugins</code>, then connect Google.</p>
+                <span class="dispatch-setup-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg></span>
+                <div><strong>Connect Gmail</strong><small>Adds the Gmail plugin inside Codex. If the link does nothing, open ChatGPT desktop Plugins, or run <code>codex</code>, then <code>/plugins</code>, then connect Google.</small></div>
+                <a class="btn btn-sm" data-setup-gmail href="${SETUP_GMAIL_URL}">Open Codex</a>
               </li>
             </ol>
-            <button class="btn btn-primary" type="button" data-setup-continue>Continue</button>
-          </div>
+            <div class="dispatch-setup-foot">
+              <div class="dispatch-setup-status" aria-live="polite"><span data-setup-agent data-state="Connecting"><i aria-hidden="true"></i><span data-setup-agent-label>Connecting to Codex</span></span><span data-setup-connector data-ready="false"><i aria-hidden="true"></i><span data-setup-connector-label>Checking Gmail</span></span></div>
+              <button class="btn btn-ghost-secondary" type="button" data-setup-later>Set up later</button>
+              <button class="btn btn-primary" type="button" data-setup-continue>Continue</button>
+            </div>
+          </section>
         </div>
       </div>
   </div>`
@@ -252,6 +262,11 @@ const elements = {
   setupHeading: app.querySelector<HTMLElement>('[data-setup-heading]')!,
   setupContinue: app.querySelector<HTMLButtonElement>('[data-setup-continue]')!,
   setupOpen: app.querySelector<HTMLButtonElement>('[data-setup-open]')!,
+  setupLater: app.querySelector<HTMLButtonElement>('[data-setup-later]')!,
+  setupAgent: app.querySelector<HTMLElement>('[data-setup-agent]')!,
+  setupAgentLabel: app.querySelector<HTMLElement>('[data-setup-agent-label]')!,
+  setupConnector: app.querySelector<HTMLElement>('[data-setup-connector]')!,
+  setupConnectorLabel: app.querySelector<HTMLElement>('[data-setup-connector-label]')!,
 }
 
 installWebLinks(app, window as { isTauri?: unknown }, error => {
@@ -267,6 +282,8 @@ function setAgentStatus(status: string, label = status): void {
   stateText.dataset.state = status
   stateText.hidden = status === 'Connected'
   stateText.textContent = label
+  elements.setupAgent.dataset.state = status
+  elements.setupAgentLabel.textContent = status === 'Connected' ? 'Codex connected' : label
   renderServiceStatus()
 }
 
@@ -274,6 +291,8 @@ function setConnectorStatus(label: string, ready: boolean): void {
   elements.connector.dataset.ready = ready ? 'true' : 'false'
   elements.connector.title = label
   elements.connector.setAttribute('aria-label', label)
+  elements.setupConnector.dataset.ready = ready ? 'true' : 'false'
+  elements.setupConnectorLabel.textContent = label
 }
 
 function renderServiceStatus(): void {
@@ -3696,6 +3715,7 @@ function showSetup(): void {
 if (setupSeen(localStorage)) elements.setup.hidden = true
 else showSetup()
 elements.setupContinue.addEventListener('click', hideSetup)
+elements.setupLater.addEventListener('click', hideSetup)
 elements.setupOpen.addEventListener('click', showSetup)
 elements.setup.addEventListener('keydown', (event) => event.stopPropagation())
 function setFolderMenu(open: boolean): void {

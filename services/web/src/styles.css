@@ -329,8 +329,41 @@ button { cursor: pointer; }
   align-items: flex-start;
   overflow-y: auto;
   padding: 1.5rem;
-  background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 88%, transparent);
+  background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 78%, transparent);
+  backdrop-filter: blur(6px);
 }
-.dispatch-setup-card { width: min(36rem, 100%); margin-block: auto; flex: none; }
-.dispatch-setup-steps { display: grid; gap: 1rem; padding-left: 1.2rem; margin: 1rem 0 1.25rem; }
-.dispatch-setup-steps li { display: grid; gap: .35rem; }
+.dispatch-setup-card { width: min(60rem, 100%); margin-block: auto; flex: none; display: grid; grid-template-columns: 5fr 6fr; overflow: hidden; background: var(--tblr-bg-surface); border: 1px solid var(--tblr-border-color); border-radius: 16px; box-shadow: 0 30px 80px rgba(0, 0, 0, .28); }
+.dispatch-setup-brand { display: flex; flex-direction: column; gap: 1.1rem; padding: 2.25rem 2.25rem 1.75rem; background: linear-gradient(160deg, #1c1f26, #0b0d12); color: #f0f1f3; }
+.dispatch-setup-mark { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 22%; background: #0b0d12; box-shadow: 0 10px 24px rgba(0, 0, 0, .5), inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.dispatch-setup-mark svg { width: 34px; height: 34px; }
+.dispatch-setup-brand h2 { margin: 0; font-size: 1.6rem; font-weight: 700; line-height: 1.15; letter-spacing: -.02em; text-wrap: balance; color: inherit; }
+.dispatch-setup-brand h2:focus, .dispatch-setup-brand h2:focus-visible { outline: none; }
+.dispatch-setup-brand p { margin: 0; max-width: 34ch; color: #a4a8b3; font-size: .9rem; }
+.dispatch-setup-diagram { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 6px; height: 110px; margin-top: auto; }
+.dispatch-setup-diagram span { display: flex; align-items: flex-end; padding: 8px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 8px; background: rgba(255, 255, 255, .06); color: #a4a8b3; font-size: .7rem; }
+.dispatch-setup-diagram span:last-child { border-color: rgba(200, 245, 26, .5); color: #c8f51a; }
+.dispatch-setup-steps-pane { display: flex; flex-direction: column; min-width: 0; padding: 2rem 2.25rem 1.5rem; }
+.dispatch-setup-eyebrow { margin: 0 0 .9rem; color: var(--tblr-secondary-color); font-size: .7rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+.dispatch-setup-steps { display: grid; margin: 0 0 1.25rem; padding: 0; list-style: none; }
+.dispatch-setup-steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: .9rem; align-items: start; padding: .9rem 0; border-top: 1px solid var(--tblr-border-color); }
+.dispatch-setup-steps li:first-child { padding-top: 0; border-top: 0; }
+.dispatch-setup-chevron { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: #0b0d12; color: #c8f51a; }
+.dispatch-setup-chevron svg { width: 16px; height: 16px; }
+.dispatch-setup-steps strong { display: block; font-size: .95rem; font-weight: 600; }
+.dispatch-setup-steps small { display: block; margin-top: .15rem; color: var(--tblr-secondary-color); font-size: .8rem; }
+.dispatch-setup-steps .btn { white-space: nowrap; }
+.dispatch-setup-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--tblr-border-color); }
+.dispatch-setup-status { display: flex; flex-wrap: wrap; align-items: center; gap: .9rem; margin-right: auto; color: var(--tblr-secondary-color); font-size: .78rem; }
+.dispatch-setup-status > span { display: inline-flex; align-items: center; gap: .4rem; }
+.dispatch-setup-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--tblr-gray-400); flex: none; }
+.dispatch-setup-status [data-state="Connected"] i, .dispatch-setup-status [data-ready="true"] i { background: var(--tblr-green); }
+.dispatch-setup-status [data-ready="false"] i { background: var(--tblr-yellow); }
+@media (max-width: 760px) {
+  .dispatch-setup { padding: .75rem; }
+  .dispatch-setup-card { grid-template-columns: 1fr; }
+  .dispatch-setup-brand { padding: 1.5rem; }
+  .dispatch-setup-diagram { display: none; }
+  .dispatch-setup-steps-pane { padding: 1.25rem 1.5rem; }
+  .dispatch-setup-steps li { grid-template-columns: 30px minmax(0, 1fr); }
+  .dispatch-setup-steps .btn { grid-column: 2; justify-self: start; }
+}

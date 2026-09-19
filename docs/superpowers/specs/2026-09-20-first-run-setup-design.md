@@ -39,6 +39,16 @@ A **Setup** control in the Codex prompt footer (same row as the status dots) ope
 
 Already-seen visits skip the overlay and show the workbench.
 
+## Presentation amendment (2026-09-20, welcome panel)
+
+Steve picked the welcome-panel direction from the setup wireframes. The overlay keeps every rule above and changes only presentation:
+
+- Two-column card. The left half is an ink brand block with the Dispatch mark, the dialog heading "Your inbox and your agent, in the same window.", one line on what Dispatch is, and a three-pane diagram. It is ink in both appearances.
+- The right half is the same three static steps with volt chevron badges, one line of why per step, the fallback in small type, and the same two links.
+- The footer mirrors the two existing Codex and Gmail status dots as text. They are written by the same `setAgentStatus` and `setConnectorStatus` calls; no new routes or probes.
+- "Set up later" sits beside Continue and does the same thing (writes the seen flag, hides the overlay). It is the optional close control from the Screens section.
+- Below 760px the card is one column, the diagram is hidden, and step links move under their text.
+
 ## Architecture
 
 ```text
