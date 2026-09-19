@@ -2811,22 +2811,41 @@ test('appearance follows the OS by default and takes the native View menu choice
   await expect(page.locator('html')).toHaveAttribute('data-bs-theme', 'light')
 })
 
-test('plain provider HTML follows the dark theme and coloured HTML keeps a light surface', async ({ page }) => {
+test('provider HTML follows the dark theme with rewritten colours, layouts keep paper, and each message can flip', async ({ page }) => {
   await stubAgent(page)
   await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/)
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/, (route) => {
     const threadId = new URL(route.request().url()).pathname.split('/').pop()
     const index = threadId === 't2' ? 1 : 0
-    const content = index === 1 ? '<div style="color:#1F497D"><p>Comments added.</p></div>' : '<p>Confirmed for Thursday.</p>'
+    const content = index === 1
+      ? '<table bgcolor="#e4002b"><tr><td><p>Big sale.</p></td></tr></table>'
+      : '<div style="color:#1F497D"><p>Comments added.</p><span style="color:#333">Grey sign-off</span><b style="color:#e4002b">NOV</b></div>'
     const message = { ...messages[index]!, source: 'demo', body: { kind: 'sanitized-html', content }, attachments: [] }
     return route.fulfill({ json: { conversation: { ...conversations[index]!, source: 'demo', messages: [message] } } })
   })
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByText('Opua berth confirmation').first().click()
-  await expect(page.locator('.dispatch-thread-body').first()).toContainText('Confirmed for Thursday.')
-  await expect(page.locator('.dispatch-thread-body').first()).toHaveAttribute('data-paper', 'false')
+  const body = page.locator('.dispatch-thread-body').first()
+  await expect(body).toContainText('Comments added.')
+  await expect(body).toHaveAttribute('data-surface', 'theme')
+  await expect(body).toHaveAttribute('data-paper', 'false')
+  await expect(body.locator('span')).toHaveAttribute('style', '')
+  await expect(body.locator('b')).toHaveAttribute('style', 'color:#e4002b')
+  const navy = await body.locator('div').first().getAttribute('style')
+  expect(navy).toMatch(/^color: #[0-9a-f]{6}$/)
+  expect(navy).not.toContain('#1F497D')
+  const toggle = page.locator('[data-surface-toggle]').first()
+  await expect(toggle).toHaveText('Show in light')
+  await toggle.click()
+  await expect(body).toHaveAttribute('data-paper', 'true')
+  await expect(body.locator('div').first()).toHaveAttribute('style', 'color:#1F497D')
+  await expect(toggle).toHaveText('Show in dark')
   await page.getByText('Services agreement').first().click()
-  await expect(page.locator('.dispatch-thread-body').first()).toContainText('Comments added.')
-  await expect(page.locator('.dispatch-thread-body').first()).toHaveAttribute('data-paper', 'true')
+  const layout = page.locator('.dispatch-thread-body').first()
+  await expect(layout).toContainText('Big sale.')
+  await expect(layout).toHaveAttribute('data-surface', 'paper')
+  await expect(layout).toHaveAttribute('data-paper', 'true')
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(layout).toHaveAttribute('data-paper', 'false')
 })

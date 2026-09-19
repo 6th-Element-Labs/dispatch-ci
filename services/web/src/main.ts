@@ -10,13 +10,20 @@ import './dark.css'
 import { THEME_PREFERENCES, createThemeController, type ThemePreference } from './theme.js'
 import { api } from './api.js'
 import { renderChatMarkdown } from './chat-renderer.js'
-import { renderEmailContent, emailPlainText } from './email-renderer.js'
+import { renderEmailContent, emailPlainText, applyMailAppearance } from './email-renderer.js'
 import { commitRecipientToken, parseRecipientList, serializeRecipientList } from './recipient-field.js'
 
+const mailSurfaceOverrides = new Map<string, 'light' | 'dark'>()
 const theme = createThemeController({
   root: document.documentElement,
   storage: localStorage,
   media: typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null,
+  onChange: ({ resolved }) => {
+    for (const article of document.querySelectorAll<HTMLElement>('.dispatch-thread-message')) {
+      const body = article.querySelector<HTMLElement>('.dispatch-thread-body')
+      if (body) applyMailAppearance(body, resolved === 'dark', mailSurfaceOverrides.get(article.dataset.messageId ?? ''))
+    }
+  },
 })
 import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
@@ -951,6 +958,23 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
   }
   const content = renderEmailContent(message.body.kind, message.body.content, offlineMode || selected?.availability?.mode === 'downloaded')
   content.classList.add('dispatch-thread-content')
+  const applySurface = () => {
+    applyMailAppearance(content, theme.resolved === 'dark', mailSurfaceOverrides.get(message.id))
+    surfaceToggle.textContent = content.dataset.paper === 'true' ? 'Show in dark' : 'Show in light'
+    surfaceToggle.setAttribute('aria-pressed', String(content.dataset.paper === 'true'))
+  }
+  const surfaceToggle = document.createElement('button')
+  surfaceToggle.type = 'button'
+  surfaceToggle.className = 'btn btn-sm btn-ghost-secondary dispatch-thread-surface'
+  surfaceToggle.dataset.surfaceToggle = ''
+  surfaceToggle.title = 'Message appearance'
+  surfaceToggle.addEventListener('click', (event) => {
+    event.stopPropagation()
+    mailSurfaceOverrides.set(message.id, content.dataset.paper === 'true' ? 'dark' : 'light')
+    applySurface()
+  })
+  header.append(surfaceToggle)
+  applySurface()
   article.append(content)
   if (message.attachments.length > 0) {
     const attachmentList = document.createElement('div')

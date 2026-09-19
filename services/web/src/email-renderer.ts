@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { isLightBackground, rewriteStyleForDark } from './mail-colors.js'
 
 const quoteSelector = [
   'blockquote',
@@ -40,14 +41,57 @@ function renderRoot(kind: 'sanitized-html' | 'plain-text', value: string, downlo
   } finally {
     DOMPurify.removeHook('afterSanitizeAttributes')
   }
-  root.dataset.paper = String(bringsOwnColours(root))
+  if (kind === 'sanitized-html') prepareMailSurface(root)
+  else root.dataset.surface = 'theme'
   return root
 }
 
-/** Provider HTML that sets any colour keeps a light surface in dark mode; plain markup follows the theme. */
-export function bringsOwnColours(root: Element): boolean {
-  return Boolean(root.querySelector('[bgcolor], [background], [color], [style*="background" i], [style*="color" i]'))
+export type MailSurface = 'theme' | 'paper'
+
+/**
+ * Decide how provider HTML sits on the dark theme, the way Apple Mail does:
+ * plain and signature-style mail follows the theme with its inline colours
+ * rewritten; real layouts (coloured backgrounds, background images, image-heavy
+ * mail) keep a light surface. Both style variants are stored on each element so
+ * the choice can flip live without re-rendering.
+ */
+export function prepareMailSurface(root: HTMLElement): MailSurface {
+  let layout = false
+  for (const element of root.querySelectorAll<HTMLElement>('[color], [bgcolor]')) {
+    const color = element.getAttribute('color')
+    if (color) { element.style.color = element.style.color || color; element.removeAttribute('color') }
+    const bg = element.getAttribute('bgcolor')
+    if (bg) { element.style.backgroundColor = element.style.backgroundColor || bg; element.removeAttribute('bgcolor') }
+  }
+  if (root.querySelector('[background]')) layout = true
+  if (root.querySelectorAll('img[src]').length >= 3) layout = true
+  for (const element of root.querySelectorAll<HTMLElement>('[style]')) {
+    const light = element.getAttribute('style') ?? ''
+    if (!/color|background/i.test(light)) continue
+    const dark = rewriteStyleForDark(light)
+    if (dark.layoutBackground) layout = true
+    if (dark.style !== light) {
+      element.dataset.lightStyle = light
+      element.dataset.darkStyle = dark.style
+    }
+  }
+  const surface: MailSurface = layout ? 'paper' : 'theme'
+  root.dataset.surface = surface
+  return surface
 }
+
+/** Apply the current appearance to a rendered body. `override` is the per-message "Show in light / dark" choice. */
+export function applyMailAppearance(root: HTMLElement, dark: boolean, override?: 'light' | 'dark'): void {
+  const surface = (root.dataset.surface ?? 'theme') as MailSurface
+  const paper = dark && (override === 'light' || (override !== 'dark' && surface === 'paper'))
+  const useDark = dark && !paper
+  root.dataset.paper = String(paper)
+  for (const element of root.querySelectorAll<HTMLElement>('[data-dark-style]')) {
+    element.setAttribute('style', (useDark ? element.dataset.darkStyle : element.dataset.lightStyle) ?? '')
+  }
+}
+
+export { isLightBackground }
 
 /** Extract source text without disclosure labels or remote-image requests. */
 export function emailPlainText(kind: 'sanitized-html' | 'plain-text', value: string): string {

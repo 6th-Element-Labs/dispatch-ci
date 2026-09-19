@@ -164,9 +164,20 @@
   /* Purpose */
   .purpose { display: grid; grid-template-columns: 1fr 1fr; margin-top: 40px; }
   .purpose .art { background: var(--window); position: relative; overflow: hidden; min-height: 560px; display: grid; grid-template-rows: 1fr 1fr; }
-  .art .tile { display: grid; place-items: center; background: linear-gradient(135deg, #1C1F26, #0B0D12); }
-  .art .tile svg { width: 46%; max-width: 300px; filter: drop-shadow(0 22px 30px rgba(0,0,0,.5)); }
-  .art .chat { padding: 34px 38px; display: flex; flex-direction: column; gap: 14px; justify-content: center; background: var(--window-2); border-top: 1px solid var(--window-line); }
+  .art .asks { position: relative; overflow: hidden; padding: 34px 38px; background: linear-gradient(160deg, #1C1F26, #0B0D12); display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .art .asks::before { content: ""; position: absolute; width: 360px; height: 360px; right: -140px; top: -160px; border-radius: 50%; background: radial-gradient(circle, rgba(200,245,26,.22), transparent 62%); pointer-events: none; }
+  .art .asks .eyebrow { color: #8b8f98; margin: 0; }
+  .art .asks ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; position: relative; }
+  .art .asks li { display: inline-flex; align-items: center; gap: 10px; width: fit-content; max-width: 100%; padding: 9px 14px; border-radius: 10px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); color: #e6e6e9; font-size: 14px; line-height: 1.3; }
+  .art .asks li:nth-child(2) { margin-left: 32px; }
+  .art .asks li:nth-child(3) { margin-left: 8px; }
+  .art .asks li:nth-child(4) { margin-left: 44px; }
+  .art .asks li:nth-child(6) { margin-left: 20px; }
+  .art .asks li:nth-child(7) { margin-left: 36px; }
+  .art .asks li svg { width: 16px; height: 16px; color: var(--volt); flex: none; }
+  .art .asks li.hot { border-color: rgba(200,245,26,.55); background: rgba(200,245,26,.08); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .art .asks .tag { margin-left: 6px; padding: 2px 8px; border-radius: 999px; background: var(--volt); color: #0B0D12; font-size: 11px; font-weight: 600; }
+  .art .chat { padding: 30px 38px; display: flex; flex-direction: column; gap: 14px; justify-content: center; background: var(--window-2); border-top: 1px solid var(--window-line); }
   .art .chat .bub { font-size: 14px; max-width: 88%; }
   .art .chat .bub.me { background: var(--window-3); }
   .art .chat .bub.ai { color: #d4d7dd; }
@@ -323,20 +334,17 @@
 
   <section class="purpose">
     <div class="art" aria-hidden="true">
-      <div class="tile">
-        <svg viewBox="0 0 1024 1024" role="img" aria-label="Dispatch icon">
-          <defs>
-            <linearGradient id="volt-g" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#F2FF7A"/><stop offset="1" stop-color="#B9F000"/></linearGradient>
-            <filter id="glow-g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>
-          </defs>
-          <path d="M610 300l210 212-210 212" fill="none" stroke="#C8F51A" stroke-width="120" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow-g)" opacity=".55"/>
-          <g fill="none" stroke="url(#volt-g)" stroke-width="96" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M250 300l210 212-210 212" opacity=".35"/>
-            <path d="M430 300l210 212-210 212" opacity=".65"/>
-            <path d="M610 300l210 212-210 212"/>
-          </g>
-          <path transform="translate(795 255) scale(.75)" d="M0-100C6-40 40-6 100 0 40 6 6 40 0 100-6 40-40 6-100 0-40-6-6-40 0-100z" fill="url(#volt-g)"/>
-        </svg>
+      <div class="asks">
+        <p class="eyebrow">Things you can ask</p>
+        <ul>
+          <li><svg><use href="#i-spark"/></svg>Catch me up on this thread</li>
+          <li class="hot"><svg><use href="#i-pencil"/></svg>Draft a reply and attach the revised PDF<span class="tag">Codex</span></li>
+          <li><svg><use href="#i-users"/></svg>Find every message from this vendor since June</li>
+          <li><svg><use href="#i-key"/></svg>Is Thursday 10 AM free?</li>
+          <li><svg><use href="#i-select"/></svg>Turn this into a task list</li>
+          <li><svg><use href="#i-globe"/></svg>Open the PR they’re asking about</li>
+          <li><svg><use href="#i-file"/></svg>Pull the numbers from the attachment into a sheet</li>
+        </ul>
       </div>
       <div class="chat">
         <div class="bub me">Which of these three threads still needs a reply from me?</div>

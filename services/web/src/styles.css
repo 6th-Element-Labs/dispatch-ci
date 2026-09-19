@@ -118,6 +118,8 @@ button { cursor: pointer; }
 .dispatch-thread-message { max-width: 760px; margin: 0 auto .625rem; overflow: hidden; }
 .dispatch-thread-message > header { display: flex; align-items: flex-start; gap: .75rem; padding: .875rem 1.25rem 0; }
 .dispatch-thread-message > header > div { min-width: 0; flex: 1; }
+.dispatch-thread-surface { flex: none; padding: .1rem .45rem; font-size: .7rem; color: var(--tblr-secondary-color); }
+:root[data-bs-theme="light"] .dispatch-thread-surface { display: none; }
 .dispatch-thread-message > header strong, .dispatch-thread-message > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dispatch-thread-message > header strong { font-size: .8125rem; font-weight: 600; }
 .dispatch-thread-message > header small, .dispatch-thread-message > header time { color: var(--tblr-secondary-color); font-size: .75rem; }
@@ -133,7 +135,7 @@ button { cursor: pointer; }
 .dispatch-thread-body table { max-width: 100%; }
 .dispatch-thread-body [width] { max-width: 100%; }
 .dispatch-thread-body { font-size: .875rem; line-height: 1.65; overflow-wrap: anywhere; }
-/* Mail follows the theme. Provider HTML that sets its own colours (bgcolor, background, color) keeps a light surface in dark mode so its dark text stays readable. */
+/* Mail follows the theme with its inline colours rewritten for the dark surface (mail-colors.ts). Real layouts, or a message the user switched to light, keep a light surface. */
 [data-bs-theme="dark"] .dispatch-thread-body[data-paper="true"] { color-scheme: light; background: #fff; color: #1d1d1f; padding: .75rem 1rem; border-radius: var(--tblr-border-radius); }
 [data-bs-theme="dark"] .dispatch-thread-body[data-paper="true"] .dispatch-quoted-history { border-top-color: #dfe1e5; color: #60656d; }
 .dispatch-thread-body p { max-width: 720px; margin: 0 0 1rem; }
