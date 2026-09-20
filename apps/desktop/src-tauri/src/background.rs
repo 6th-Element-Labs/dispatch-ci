@@ -54,6 +54,28 @@ fn request(service: Service, endpoint: &str, method: &str) -> Result<Value, Stri
     Ok(value)
 }
 
+fn all_services_idle(idle: &[bool]) -> bool {
+    idle.iter().copied().all(|value| value)
+}
+
+/// Drain loaded services so an app replacement can proceed.
+pub fn prepare_for_app_update() -> Result<(), String> {
+    if drain()? {
+        Ok(())
+    } else {
+        Err("Codex or a mail operation is still working. Let it finish before installing the update.".into())
+    }
+}
+
+/// Resume drained services after a failed install so mail and Codex stay usable.
+pub fn resume_after_failed_app_update() {
+    for service in Service::ALL {
+        if loaded(service) {
+            let _ = request(service, "/v1/runtime/resume", "POST");
+        }
+    }
+}
+
 fn drain() -> Result<bool, String> {
     let mut drained = Vec::new();
     for service in [Service::Agent, Service::Mail] {
@@ -203,5 +225,11 @@ mod tests {
         let value = plist(Service::Mail, Path::new("/runtime"), Path::new("/logs"), None, "id");
         assert!(value.contains("/runtime/services/mail/server.js"));
         assert!(!value.contains("DISPATCH_CODEX_COMMAND"));
+    }
+
+    #[test]
+    fn update_requires_every_loaded_service_to_be_idle() {
+        assert!(all_services_idle(&[true, true]));
+        assert!(!all_services_idle(&[true, false]));
     }
 }

@@ -1,6 +1,6 @@
 // Builds the Dispatch services and copies their compiled output into the Tauri
 // resources directory. Fails loudly if any build or expected file is missing.
-import { copyFileSync, cpSync, existsSync, readFileSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { execSync } from 'node:child_process'
@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url'
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = resolve(desktop, '..', '..')
 const servicesOnly = process.argv.includes('--services-only')
-const resources = join(desktop, 'src-tauri', 'resources', 'services')
+const resourceRoot = join(desktop, 'src-tauri', 'resources')
+const resources = join(resourceRoot, 'services')
+const legal = join(resourceRoot, 'legal')
 
 const builds = servicesOnly ? ['mail', 'agent'] : ['web', 'mail', 'agent']
 for (const service of builds) {
@@ -18,6 +20,16 @@ for (const service of builds) {
 }
 
 rmSync(resources, { recursive: true, force: true })
+rmSync(legal, { recursive: true, force: true })
+mkdirSync(legal, { recursive: true })
+for (const file of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) {
+  const source = join(repo, file)
+  if (!existsSync(source)) {
+    console.error(`stage: ${source} is missing`)
+    process.exit(1)
+  }
+  copyFileSync(source, join(legal, file))
+}
 for (const service of ['mail', 'agent']) {
   const source = join(repo, 'services', service, 'dist', 'src')
   const destination = join(resources, service)

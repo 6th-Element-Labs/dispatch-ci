@@ -13,15 +13,22 @@ pub const WEB_BACK: &str = "web-back";
 pub const WEB_FORWARD: &str = "web-forward";
 pub const WEB_RELOAD: &str = "web-reload";
 pub const OPEN_LOGS: &str = "open-logs";
+pub const CHECK_FOR_UPDATES: &str = "check-for-updates";
+
+pub fn application_item_ids() -> Vec<&'static str> {
+    vec![RESTART_SERVICES, OPEN_LOGS, CHECK_FOR_UPDATES]
+}
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let restart = MenuItemBuilder::with_id(RESTART_SERVICES, "Restart Services").build(app)?;
     let logs = MenuItemBuilder::with_id(OPEN_LOGS, "Open Service Logs").build(app)?;
+    let updates = MenuItemBuilder::with_id(CHECK_FOR_UPDATES, "Check for Updates…").build(app)?;
     let application = SubmenuBuilder::new(app, "Dispatch")
         .about(None)
         .separator()
         .item(&restart)
         .item(&logs)
+        .item(&updates)
         .separator()
         .services()
         .separator()
@@ -54,4 +61,14 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .close_window()
         .build()?;
     MenuBuilder::new(app).items(&[&application, &edit, &view, &navigation, &window]).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn application_menu_includes_update_check() {
+        assert!(application_item_ids().contains(&CHECK_FOR_UPDATES));
+    }
 }

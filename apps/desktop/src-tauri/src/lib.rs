@@ -11,6 +11,7 @@ mod menu;
 mod preflight;
 mod sidecars;
 mod background;
+mod updater;
 mod web_links;
 
 use std::path::PathBuf;
@@ -32,8 +33,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(context_menu::ContextMenuPending::default())
         .manage(appearance::AppearanceMenu::<tauri::Wry>::default())
+        .manage(updater::UpdateCoordinator::default())
         .manage(web_links::WebLinks::default())
         .invoke_handler(tauri::generate_handler![context_menu::popup_context_menu, web_links::open_web_link, web_links::web_link_state, web_links::web_link_action, appearance::set_appearance])
         .setup(|app| {
@@ -72,6 +75,7 @@ pub fn run() {
                 fatal(&handle, &message);
             }
             app.manage(supervisor);
+            updater::spawn_post_launch_check(handle.clone());
 
             web_links::create_mail_window(&handle)?;
             handle.set_menu(menu::build(&handle)?)?;
@@ -81,6 +85,7 @@ pub fn run() {
                         show_error(app, "Dispatch could not restart its services", &message);
                     }
                 }
+                menu::CHECK_FOR_UPDATES => updater::check_from_menu(app.clone()),
                 menu::OPEN_LOGS => {
                     let logs = app.state::<Supervisor>().logs_dir().to_path_buf();
                     let _ = std::fs::create_dir_all(&logs);

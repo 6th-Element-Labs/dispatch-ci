@@ -1,14 +1,19 @@
 # CI sandbox (`dispatch-ci`)
 
 Dispatch keeps its canonical source on the **private** repo
-[`6th-Element-Labs/dispatch`](https://github.com/6th-Element-Labs/dispatch). GitHub
-Actions minutes are billed on private repos and free on public ones, so — exactly
-as Helm and Switchboard already do — CI runs on a separate **public sandbox** that
-holds the **full actual tree** and the **same workflows**.
+[`6th-Element-Labs/dispatch`](https://github.com/6th-Element-Labs/dispatch).
+The public product mirror is
+[`6th-Element-Labs/dispatch-public`](https://github.com/6th-Element-Labs/dispatch-public).
+GitHub Actions minutes are billed on private repos and free on public ones, so —
+exactly as Helm and Switchboard already do — CI runs on a separate **public
+sandbox** that holds the **full actual tree** and the **same workflows**.
+
+Scripts resolve the canonical repo from `CANONICAL_REPO` or from `origin`.
 
 | Repo | Role | Authority |
 |---|---|---|
 | `6th-Element-Labs/dispatch` | Canonical source, PRs, Switchboard merge webhook | `done` · `merge_provenance` · `code_truth` |
+| `6th-Element-Labs/dispatch-public` | Public release mirror | signed source snapshots |
 | `6th-Element-Labs/dispatch-ci` | Public CI sandbox — push branches here first | `verification_only` |
 
 The sandbox is **not** a product mirror. It is not scrubbed, its feature branches

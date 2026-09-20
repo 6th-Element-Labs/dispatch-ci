@@ -56,7 +56,13 @@ jobs:
         run: npm --prefix apps/desktop run test:native
 
       - name: Build Dispatch.app
-        run: npm --prefix apps/desktop run build:native -- --bundles app
+        run: npm --prefix apps/desktop run build:native -- --config '{"bundle":{"createUpdaterArtifacts":false}}' --bundles app
+
+      - name: Verify macOS deployment target
+        run: |
+          value="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' \
+            apps/desktop/src-tauri/target/release/bundle/macos/Dispatch.app/Contents/Info.plist)"
+          test "$value" = "14.0"
 
       - name: Start the bundled services with the bundled Node
         run: npm --prefix apps/desktop run smoke

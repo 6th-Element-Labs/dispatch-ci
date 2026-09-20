@@ -13,6 +13,9 @@
     "dev:native": "tauri dev",
     "build:native": "tauri build",
     "test:native": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "release:checksums": "node scripts/write-sha256sums.mjs",
+    "release:verify": "node scripts/verify-release.mjs",
+    "release:verify-updater": "node scripts/validate-updater-manifest.mjs",
     "smoke": "node scripts/smoke-bundle.mjs",
     "install:app": "node scripts/install-app.mjs"
   },

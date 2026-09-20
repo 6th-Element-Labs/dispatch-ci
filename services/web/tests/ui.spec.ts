@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
+import { mkdir } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 const messages = [
   {
@@ -65,6 +67,42 @@ test.beforeEach(async ({ page }) => {
   })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ status: 503, json: { status: 'not_ready' } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/recipients/, (route) => route.fulfill({ json: { recipients: [] } }))
+})
+
+test('captures the public synthetic-mail screenshot', async ({ page }) => {
+  test.skip(process.env.CAPTURE_PUBLIC_SCREENSHOT !== '1', 'Run only when refreshing the public README screenshot')
+  await stubAgent(page)
+  await page.route('http://127.0.0.1:8412/v1/models', route => route.fulfill({ json: {
+    defaults: { model: 'gpt-5.6-sol', effort: 'medium' },
+    rateLimitsError: null,
+    models: [
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['low', 'medium', 'high'], exhausted: false, resetsAt: null },
+    ],
+  } }))
+  await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/threads\/[^/]+$/, route => (
+    route.request().method() === 'GET'
+      ? route.fulfill({ json: {
+        thread: { turns: [{ items: [{ type: 'agentMessage', text: 'The marina confirmed the berth for September 4. No reply is required.' }] }] },
+      } })
+      : route.fallback()
+  ))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await page.evaluate(() => {
+    const state = document.querySelector<HTMLElement>('[data-agent-state-text]')
+    if (state) state.style.display = 'none'
+    const status = document.querySelector<HTMLElement>('[data-agent-status]')
+    if (status) {
+      status.dataset.status = 'Connected'
+      status.title = 'Connected'
+      status.setAttribute('aria-label', 'Connected')
+      status.style.background = 'var(--tblr-green)'
+    }
+  })
+  const assets = resolve(import.meta.dirname, '../../../docs/assets')
+  await mkdir(assets, { recursive: true })
+  await page.screenshot({ path: resolve(assets, 'dispatch-screenshot.png') })
 })
 
 test('new compose has its own task and never opens the general history', async ({ page }) => {
