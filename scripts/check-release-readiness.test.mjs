@@ -23,7 +23,7 @@ describe('release readiness', async () => {
   it('fails a dirty tree, wrong version, failed export, or missing updater key', () => {
     assert.equal(localReadiness({
       status: ' M apps/desktop/src-tauri/tauri.conf.json',
-      versions: '0.1.5',
+      versions: '0.1.6',
       exportOk: true,
       updaterConfigured: true,
     }).ok, false)
@@ -35,19 +35,19 @@ describe('release readiness', async () => {
     }).ok, false)
     assert.equal(localReadiness({
       status: '',
-      versions: '0.1.5',
+      versions: '0.1.6',
       exportOk: false,
       updaterConfigured: true,
     }).ok, false)
     assert.equal(localReadiness({
       status: '',
-      versions: '0.1.5',
+      versions: '0.1.6',
       exportOk: true,
       updaterConfigured: false,
     }).ok, false)
     assert.equal(localReadiness({
       status: '',
-      versions: '0.1.5',
+      versions: '0.1.6',
       exportOk: true,
       updaterConfigured: true,
     }).ok, true)
