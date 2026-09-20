@@ -23,7 +23,7 @@ export const REQUIRED_RELEASE_SECRETS = [
 export function localReadiness({ status, versions, exportOk, updaterConfigured }) {
   const errors = []
   if (String(status ?? '').trim()) errors.push('working tree is dirty')
-  if (versions !== '0.1.4') errors.push(`version is not 0.1.4 (${versions})`)
+  if (versions !== '0.1.5') errors.push(`version is not 0.1.5 (${versions})`)
   if (!exportOk) errors.push('public export failed')
   if (!updaterConfigured) errors.push('updater public key is missing')
   return { ok: errors.length === 0, errors }
@@ -42,7 +42,7 @@ export function githubReadiness({
   if (publicRepo !== '6th-Element-Labs/dispatch-public') {
     errors.push('public dispatch-public repo is missing')
   }
-  if (tagExists) errors.push('public v0.1.4 already exists')
+  if (tagExists) errors.push('public v0.1.5 already exists')
   for (const name of REQUIRED_RELEASE_SECRETS) {
     if (!secrets?.includes(name)) errors.push(`missing secret ${name}`)
   }
@@ -90,7 +90,7 @@ async function tagExists(repo, tag) {
 }
 
 async function main() {
-  const version = option('--version') ?? '0.1.4'
+  const version = option('--version') ?? '0.1.5'
   const publicRepo = option('--public-repo') ?? '6th-Element-Labs/dispatch-public'
   const { stdout: status } = await execute('git', ['-C', root, 'status', '--porcelain'])
   let versions = version
