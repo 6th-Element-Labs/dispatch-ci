@@ -34,7 +34,7 @@ describe('public policy sources', () => {
     const security = await readFile(resolve(root, 'deploy/public/SECURITY.md'), 'utf8')
     assert.match(license, /Apache License\s+Version 2\.0/)
     assert.match(notice, /Copyright 2026 Steven Ridder/)
-    assert.match(readme, /Download for Mac/)
+    assert.match(readme, /Quick start/)
     assert.match(readme, /macOS 14/)
     assert.match(readme, /Dispatch has no telemetry/)
     assert.match(readme, /require explicit\s+approval/)
