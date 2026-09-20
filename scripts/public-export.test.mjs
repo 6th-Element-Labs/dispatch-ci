@@ -9,6 +9,7 @@ import {
   exportPublicTree,
   pathFindings,
   secretFindings,
+  verifyPublicTreeInCopy,
   versionsFromTree,
 } from './public-export-lib.mjs'
 
@@ -106,6 +107,23 @@ describe('public export', () => {
       await assert.rejects(lstat(resolve(destination, 'AGENTS.md')), { code: 'ENOENT' })
       await assert.rejects(lstat(resolve(destination, 'docs/superpowers')), { code: 'ENOENT' })
       await assert.rejects(lstat(resolve(destination, 'scripts/ci-sandbox.sh')), { code: 'ENOENT' })
+    } finally {
+      await rm(temporary, { recursive: true, force: true })
+    }
+  })
+
+  it('runs verification on a disposable copy of the public tree', async () => {
+    const temporary = await mkdtemp(resolve(tmpdir(), 'dispatch-export-verifier-'))
+    const staged = resolve(temporary, 'staged')
+    try {
+      await mkdir(staged)
+      await writeFile(resolve(staged, 'README.md'), 'clean source\n')
+      await verifyPublicTreeInCopy(staged, async directory => {
+        await mkdir(resolve(directory, 'node_modules'))
+        await writeFile(resolve(directory, 'node_modules', 'generated'), 'test output\n')
+      })
+      assert.equal(await readFile(resolve(staged, 'README.md'), 'utf8'), 'clean source\n')
+      await assert.rejects(lstat(resolve(staged, 'node_modules')), { code: 'ENOENT' })
     } finally {
       await rm(temporary, { recursive: true, force: true })
     }

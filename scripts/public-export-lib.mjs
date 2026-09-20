@@ -165,6 +165,17 @@ async function replaceDestination(destination, staged) {
   await rename(staged, destination)
 }
 
+export async function verifyPublicTreeInCopy(staged, run) {
+  const work = await mkdtemp(resolve(tmpdir(), 'dispatch-public-verify-'))
+  const copy = resolve(work, 'source')
+  try {
+    await cp(staged, copy, { recursive: true })
+    await run(copy)
+  } finally {
+    await rm(work, { recursive: true, force: true })
+  }
+}
+
 export async function validatePublicTree(directory, manifest, version) {
   const records = await walk(directory)
   const names = new Set(records.map(record => record.name))
@@ -205,7 +216,11 @@ export async function exportPublicTree({ root, ref = 'HEAD', destination, versio
     await execute('tar', ['-xf', archive, '-C', source])
     for (const entry of manifest.copies) await copyEntry(source, staged, entry)
     await validatePublicTree(staged, manifest, version)
-    if (verify) await execute('bash', ['scripts/public_ci.sh'], { cwd: staged, maxBuffer: 16 * 1024 * 1024 })
+    if (verify) {
+      await verifyPublicTreeInCopy(staged, directory =>
+        execute('bash', ['scripts/public_ci.sh'], { cwd: directory, maxBuffer: 16 * 1024 * 1024 }))
+      await validatePublicTree(staged, manifest, version)
+    }
     await replaceDestination(destination, staged)
     moved = true
   } finally {
