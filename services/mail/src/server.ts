@@ -7,6 +7,7 @@ import { renderDraftMarkdown } from './draft-markdown.js'
 import { projectDraft } from './draft.js'
 import { GmailConnectorProvider } from './gmail-provider.js'
 import type { DraftAttachment, GmailConversationAction, GmailMailbox, MailStateFilter } from './model.js'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { defaultAttachmentCacheDir, defaultOpenPath, ensureAttachmentFile, openAttachmentFile } from './open-attachment.js'
 
@@ -453,6 +454,27 @@ export function createMailServer(
         return response.end(bytes)
       } catch (error) {
         return writeAttachmentError(response, 'gmail_attachment_read_failed', error)
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/attachments/inline/open') {
+      try {
+        const body = draftObject(await readJson(request))
+        if (!body) return writeJson(response, 400, { error: 'invalid_json' })
+        const filename = typeof body.filename === 'string' ? body.filename : ''
+        const mediaType = typeof body.mediaType === 'string' ? body.mediaType : 'application/octet-stream'
+        const contentBase64 = typeof body.contentBase64 === 'string' ? body.contentBase64 : ''
+        if (!filename || !contentBase64) return writeJson(response, 400, { error: 'filename_and_bytes_required' })
+        const opened = await openAttachmentFile({
+          messageId: 'inline',
+          attachmentId: createHash('sha256').update(contentBase64).digest('hex'),
+          filename,
+          loadPayload: async () => ({ data: contentBase64, mime_type: mediaType }),
+          cacheDir: attachmentCacheDir,
+          openPath,
+        })
+        return writeJson(response, 200, { opened: true, filename: opened.filename, path: opened.path })
+      } catch (error) {
+        return writeAttachmentError(response, 'inline_attachment_open_failed', error)
       }
     }
     if (request.method === 'POST' && url.pathname === '/v1/drafts/preview') {

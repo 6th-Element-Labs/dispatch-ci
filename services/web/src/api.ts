@@ -113,6 +113,13 @@ export const api = {
     if (offline) params.set('offline', 'true')
     await request(`${MAIL}/v1/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/open?${params}`, { method: 'POST' })
   },
+  async openInlineAttachment(filename: string, mediaType: string, contentBase64: string): Promise<void> {
+    await request(`${MAIL}/v1/attachments/inline/open`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename, mediaType, contentBase64 }),
+    })
+  },
   async createDraft(messageId: string, fields: Record<string, unknown> = {}): Promise<DraftProjection> {
     const result = await request<{ draft: DraftProjection }>(`${MAIL}/v1/drafts`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId, ...draftFields(fields) }),

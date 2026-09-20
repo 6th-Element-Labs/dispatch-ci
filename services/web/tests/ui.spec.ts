@@ -1770,6 +1770,70 @@ test('forwards source message attachments and lists them on the draft', async ({
   await expect(page.getByLabel('Draft attachments')).toContainText('arrival.pdf')
 })
 
+test('opens and previews attachments on a saved draft', async ({ page }) => {
+  let opened: { method: string; url: string } | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  const draftSummary = {
+    ...conversations[0]!,
+    id: 'gmail:draft-thread-att',
+    threadId: 'draft-thread-att',
+    latestMessageId: 'draft-message-att',
+    accountId: 'link-one',
+    accountLabel: 'work@example.com',
+    subject: 'Draft with file',
+  }
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?.*/, (route) => {
+    const mailbox = new URL(route.request().url()).searchParams.get('mailbox')
+    const items = mailbox === 'drafts' ? [draftSummary] : []
+    return route.fulfill({ json: { source: 'gmail', conversations: items, nextCursor: null, total: items.length } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/drafts/open', async (route) => {
+    await route.fulfill({ json: { draft: {
+      id: 'draft-att',
+      inReplyToMessageId: 'draft-message-att',
+      to: [messages[0]!.sender],
+      cc: '',
+      bcc: '',
+      subject: 'Draft with file',
+      bodyMarkdown: 'See attached',
+      bodyHtml: '<p>See attached</p>',
+      bodyText: 'See attached',
+      attachments: [{
+        id: 'att-draft',
+        name: 'arrival.pdf',
+        mediaType: 'application/pdf',
+        sizeLabel: '12 KB',
+        sourceMessageId: 'draft-message-att',
+      }],
+      state: 'draft',
+      accountId: 'link-one',
+      gmailMessageId: 'draft-message-att',
+    } } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/draft-message-att\/attachments\/att-draft\/open/, async (route) => {
+    opened = { method: route.request().method(), url: route.request().url() }
+    await route.fulfill({ json: { opened: true, filename: 'arrival.pdf', path: '/tmp/arrival.pdf' } })
+  })
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/messages\/draft-message-att\/attachments\/att-draft\/cache/, (route) => route.fulfill({ json: { cached: true } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-conversation-id="gmail:draft-thread-att"]').click()
+  await expect(page.getByLabel('Draft attachments')).toContainText('arrival.pdf')
+  await page.getByRole('button', { name: 'arrival.pdf 12 KB' }).click()
+  await expect.poll(() => opened).toEqual({
+    method: 'POST',
+    url: 'http://127.0.0.1:8411/v1/messages/draft-message-att/attachments/att-draft/open?filename=arrival.pdf&account=link-one',
+  })
+  await expect(page.getByText('Opened arrival.pdf')).toBeVisible()
+  const preview = page.getByRole('button', { name: 'Preview arrival.pdf' })
+  await preview.click()
+  await expect(page.locator('iframe.dispatch-attachment-frame')).toHaveAttribute('src', 'http://127.0.0.1:8411/v1/messages/draft-message-att/attachments/att-draft?filename=arrival.pdf&account=link-one')
+  await preview.click()
+  await expect(page.locator('iframe.dispatch-attachment-frame')).toHaveCount(0)
+})
+
 test('attaches a local file to the open draft', async ({ page }) => {
   let saved: Record<string, unknown> | undefined
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
@@ -1784,6 +1848,37 @@ test('attaches a local file to the open draft', async ({ page }) => {
   await page.locator('[data-draft-files]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
   await expect.poll(() => saved?.attachments).toEqual([expect.objectContaining({ name: 'notes.txt', mediaType: 'text/plain', contentBase64: 'aGVsbG8=' })])
   await expect(page.getByLabel('Draft attachments')).toContainText('notes.txt')
+})
+
+test('opens and previews a local file attached to a draft', async ({ page }) => {
+  let opened: { method: string; url: string; body?: unknown } | undefined
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.unroute('http://127.0.0.1:8411/v1/drafts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [{ id: 'link-one', connectorId: 'gmail-app', name: 'Work', email: 'work@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', async (route) => {
+    const saved = await route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ status: 201, json: { draft: { id: 'local-att', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '<p></p>', bodyText: '', attachments: saved.attachments, state: 'draft', accountId: 'link-one' } } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/attachments/inline/open', async (route) => {
+    opened = { method: route.request().method(), url: route.request().url(), body: route.request().postDataJSON() }
+    await route.fulfill({ json: { opened: true, filename: 'arrival.pdf', path: '/tmp/arrival.pdf' } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose' }).click()
+  await page.locator('[data-draft-files]').setInputFiles({ name: 'arrival.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.1 local') })
+  await expect(page.getByLabel('Draft attachments')).toContainText('arrival.pdf')
+  await page.getByRole('button', { name: 'PDF arrival.pdf' }).click()
+  await expect.poll(() => opened).toEqual({
+    method: 'POST',
+    url: 'http://127.0.0.1:8411/v1/attachments/inline/open',
+    body: { filename: 'arrival.pdf', mediaType: 'application/pdf', contentBase64: Buffer.from('%PDF-1.1 local').toString('base64') },
+  })
+  await expect(page.getByText('Opened arrival.pdf')).toBeVisible()
+  const preview = page.getByRole('button', { name: 'Preview arrival.pdf' })
+  await preview.click()
+  await expect(page.locator('iframe.dispatch-attachment-frame')).toHaveAttribute('src', /^blob:/)
+  await preview.click()
+  await expect(page.locator('iframe.dispatch-attachment-frame')).toHaveCount(0)
 })
 
 test('adds a recipient chip from mail autocomplete', async ({ page }) => {
@@ -1939,6 +2034,28 @@ test('marks unread from the thread context menu through the same read-state hand
   await page.goto('/')
   await chooseThreadMenu(page, 'Mark as Unread')
   await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: true })
+})
+
+test('keeps a context-menu mark-unread row unread after a later click on that thread', async ({ page }) => {
+  await page.clock.install()
+  const commands: unknown[] = []
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: false }
+  await stubGmailInbox(page, summary)
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    const body = await route.request().postDataJSON()
+    commands.push(body)
+    await route.fulfill({ json: { accepted: true, result: { unread: body.unread } } })
+  })
+  await page.goto('/')
+  await chooseThreadMenu(page, 'Mark as Unread')
+  await expect.poll(() => commands.at(-1)).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: true })
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(5000)
+  expect(commands).toEqual([{ accountId: 'link-one', messageIds: ['m1'], unread: true }])
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible()
 })
 
 test('moves a conversation to Trash from the thread context menu', async ({ page }) => {

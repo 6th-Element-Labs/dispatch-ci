@@ -434,6 +434,7 @@ const conversationCache = new Map<string, Promise<ConversationProjection>>()
 const BINDING_CACHE = 'dispatch.codex.bindings.v1'
 type CodexPaneKey = { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
 const acceptedReadState = new Map<string, boolean>()
+const suppressReadDwell = new Set<string>()
 let threadId: string | undefined
 let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
 let bindingSequence = 0
@@ -1068,10 +1069,12 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
 }
 
 async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean; refresh?: boolean } = {}): Promise<void> {
+  const previousId = selectedConversationId
   markReadDwell.cancel()
   const matchResult = searchView?.results.find(result => result.conversation.id === id)
   const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
   if (!summary) return
+  if (options.startReadDwell && previousId !== id) suppressReadDwell.delete(id)
   readerNeedsRetry = false
   // Navigation depends only on a durable local checkpoint. The existing save
   // flight and outbox finish independently of the selected email.
@@ -1122,7 +1125,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   elements.body.replaceChildren(loading)
   elements.attachments.replaceChildren()
   elements.threadFilesToggle.hidden = true
-  if (!offlineMode && options.startReadDwell && summary.unread && summary.accountId) {
+  if (!offlineMode && options.startReadDwell && summary.unread && summary.accountId && !suppressReadDwell.has(id)) {
     const conversationId = summary.id
     markReadDwell.schedule(conversationId, () => { void completeReadDwell(conversationId) })
   }
@@ -1258,13 +1261,13 @@ if (!offlineMode && !String(error).includes('not_downloaded')) window.setTimeout
 }
 
 async function completeReadDwell(conversationId: string): Promise<void> {
-  if (selectedConversationId !== conversationId) return
+  if (selectedConversationId !== conversationId || suppressReadDwell.has(conversationId)) return
   const summary = conversations.find((conversation) => conversation.id === conversationId)
   if (!summary?.accountId || !summary.unread) return
   const messageIds = selectedConversationId === conversationId && selected ? selected.messages.map((message) => message.id) : []
   try {
     await api.setConversationUnread(summary.threadId, summary.accountId, false, messageIds)
-    if (selectedConversationId !== conversationId) return
+    if (selectedConversationId !== conversationId || suppressReadDwell.has(conversationId)) return
     applyLocalReadState(conversationId, false)
   } catch (error) {
     if (selectedConversationId !== conversationId) return
@@ -1275,6 +1278,8 @@ async function completeReadDwell(conversationId: string): Promise<void> {
 
 function applyLocalReadState(conversationId: string, unread: boolean): void {
   acceptedReadState.set(conversationId, unread)
+  if (unread) suppressReadDwell.add(conversationId)
+  else suppressReadDwell.delete(conversationId)
   dropConversationCache(conversationId)
   if (selectedConversationId === conversationId && selected) selected = { ...selected, unread }
   conversations = conversations
@@ -1547,13 +1552,72 @@ function onRecipientInput(input: HTMLInputElement): void {
   scheduleRecipientSuggestions(input)
 }
 
+function draftAttachmentMessageId(attachment: DraftProjection['attachments'][number]): string | undefined {
+  return attachment.sourceMessageId || activeDraft?.gmailMessageId
+}
+
+const draftAttachmentBlobUrls: string[] = []
+
+function draftAttachmentFileUrl(attachment: DraftProjection['attachments'][number]): string | undefined {
+  const messageId = draftAttachmentMessageId(attachment)
+  if (attachment.id && messageId) {
+    return api.attachmentFileUrl(messageId, attachment.id, activeDraft?.accountId, attachment.name, offlineMode)
+  }
+  if (!attachment.contentBase64) return undefined
+  const binary = atob(attachment.contentBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  const url = URL.createObjectURL(new Blob([bytes], { type: attachment.mediaType }))
+  draftAttachmentBlobUrls.push(url)
+  return url
+}
+
+async function openDraftAttachment(attachment: DraftProjection['attachments'][number]): Promise<void> {
+  const messageId = draftAttachmentMessageId(attachment)
+  selectedAttachmentContext = {
+    accountId: activeDraft?.accountId,
+    threadId: activeDraft?.gmailThreadId ?? '',
+    messageId: messageId ?? activeDraft?.id ?? '',
+    attachmentId: attachment.id ?? attachment.name,
+    filename: attachment.name,
+  }
+  try {
+    if (attachment.id && messageId) {
+      await api.openAttachment(messageId, attachment.id, activeDraft?.accountId, attachment.name, offlineMode)
+    } else if (attachment.contentBase64) {
+      await api.openInlineAttachment(attachment.name, attachment.mediaType, attachment.contentBase64)
+    } else {
+      throw new Error(`This draft attachment cannot be opened yet: ${attachment.name}`)
+    }
+    addAgentMessage('tool', `Opened ${attachment.name}`)
+  } catch (error) {
+    addAgentMessage('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
 function renderDraftAttachments(): void {
+  while (draftAttachmentBlobUrls.length > 0) URL.revokeObjectURL(draftAttachmentBlobUrls.pop()!)
   const items = activeDraft?.attachments ?? []
   elements.draftAttachments.replaceChildren(...items.map((attachment, index) => {
     const row = document.createElement('li')
     row.className = 'dispatch-draft-attachment'
+    const controls = document.createElement('div')
+    controls.className = 'dispatch-draft-attachment-controls'
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'btn btn-sm dispatch-draft-attachment-open'
+    const badge = document.createElement('span')
+    badge.className = 'badge bg-blue-lt text-blue'
+    badge.textContent = attachment.name.split('.').pop()?.toUpperCase().slice(0, 4) || 'FILE'
     const name = document.createElement('strong')
     name.textContent = attachment.name
+    open.append(badge, name)
+    if (attachment.sizeLabel) {
+      const size = document.createElement('small')
+      size.textContent = attachment.sizeLabel
+      open.append(size)
+    }
+    open.addEventListener('click', () => { void openDraftAttachment(attachment) })
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.className = 'btn btn-sm btn-ghost-secondary'
@@ -1565,7 +1629,48 @@ function renderDraftAttachments(): void {
       markDraftDirty()
       if (activeDraft.id) void saveDraft(false).catch(draftError)
     })
-    row.append(name, remove)
+    controls.append(open, remove)
+    row.append(controls)
+    const fileUrl = draftAttachmentFileUrl(attachment)
+    const previews = document.createElement('div')
+    previews.className = 'dispatch-draft-attachment-previews'
+    if (fileUrl && attachment.mediaType.startsWith('image/')) {
+      const figure = document.createElement('figure')
+      figure.className = 'dispatch-attachment-preview'
+      const image = document.createElement('img')
+      image.src = fileUrl
+      image.alt = attachment.name
+      image.loading = 'lazy'
+      image.addEventListener('click', () => { void openDraftAttachment(attachment) })
+      figure.append(image)
+      previews.append(figure)
+    } else if (fileUrl && attachment.mediaType === 'application/pdf') {
+      const toggle = document.createElement('button')
+      toggle.type = 'button'
+      toggle.className = 'btn btn-sm btn-ghost-secondary dispatch-attachment-preview-toggle'
+      toggle.textContent = 'Preview'
+      toggle.setAttribute('aria-expanded', 'false')
+      toggle.setAttribute('aria-label', `Preview ${attachment.name}`)
+      let frame: HTMLIFrameElement | undefined
+      toggle.addEventListener('click', () => {
+        if (frame) {
+          frame.remove()
+          frame = undefined
+          toggle.textContent = 'Preview'
+          toggle.setAttribute('aria-expanded', 'false')
+          return
+        }
+        frame = document.createElement('iframe')
+        frame.className = 'dispatch-attachment-frame'
+        frame.src = fileUrl
+        frame.title = attachment.name
+        previews.append(frame)
+        toggle.textContent = 'Hide preview'
+        toggle.setAttribute('aria-expanded', 'true')
+      })
+      controls.insertBefore(toggle, remove)
+    }
+    if (previews.childElementCount > 0 || controls.querySelector('.dispatch-attachment-preview-toggle')) row.append(previews)
     return row
   }))
   elements.draftAttachments.hidden = items.length === 0
@@ -1736,6 +1841,13 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   elements.draftError.textContent = ''
   elements.sendConfirm.hidden = true
   renderDraftAttachments()
+  for (const attachment of draft.attachments) {
+    const messageId = attachment.sourceMessageId || draft.gmailMessageId
+    if (!attachment.id || !messageId) continue
+    void api.cacheAttachment(messageId, attachment.id, draft.accountId, attachment.name).catch(() => {
+      // The explicit open reports connector failures; warming stays silent.
+    })
+  }
   draftSeed = { fields: editorFields(), attachments: draft.attachments }
   draftDiscarding = false
   elements.recoveryStatus.textContent = draft.cachedAt ? 'Checking Gmail…' : ''

@@ -59,6 +59,20 @@ describe('draft API', () => {
     )
   })
 
+  it('asks mail to open inline draft attachment bytes', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ opened: true, filename: 'arrival.pdf' }))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(api.openInlineAttachment('arrival.pdf', 'application/pdf', 'cGRm')).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8411/v1/attachments/inline/open',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ filename: 'arrival.pdf', mediaType: 'application/pdf', contentBase64: 'cGRm' }),
+      }),
+    )
+  })
+
   it('opens a demo attachment without a Gmail account', async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ opened: true, filename: 'note.pdf' }))
     vi.stubGlobal('fetch', fetch)

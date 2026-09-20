@@ -515,6 +515,36 @@ describe('dispatch-mail', () => {
     const bytes = await readFile(body.path)
     expect(bytes.subarray(0, 5).toString()).toBe('%PDF-')
   })
+
+  it('opens inline draft attachment bytes with the default native app', async () => {
+    const opened: string[] = []
+    const cache = await mkdtemp(join(tmpdir(), 'dispatch-inline-open-'))
+    const server = createMailServer({
+      accounts: async () => [],
+      listMessages: async () => [],
+      listUnifiedMessages: async () => [],
+      readMessage: async () => { throw new Error('not configured') },
+      listConversations: async () => [],
+      listUnifiedConversations: async () => [],
+      readConversation: async () => { throw new Error('not configured') },
+    }, {
+      demoEnabled: false,
+      attachmentCacheDir: cache,
+      openPath: async (path) => { opened.push(path) },
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/attachments/inline/open`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'arrival.pdf', mediaType: 'application/pdf', contentBase64: Buffer.from('%PDF-1.1 local').toString('base64') }),
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json() as { opened: boolean; filename: string; path: string }
+    expect(body).toMatchObject({ opened: true, filename: 'arrival.pdf' })
+    expect(opened).toEqual([body.path])
+    await expect(readFile(body.path, 'utf8')).resolves.toBe('%PDF-1.1 local')
+  })
 })
 
 it('serves offline account/list reads without Gmail and refuses attachment cache misses without downloading', async () => {
