@@ -338,6 +338,14 @@ export class GmailIndex {
     }))
   }
 
+  /** The folders (not Unread) that hold any of these messages. */
+  foldersOf(accountId: string, messageIds: readonly string[]): IndexStreamFlag[] {
+    if (messageIds.length === 0) return []
+    const placeholders = messageIds.map(() => '?').join(', ')
+    const row = this.#db.prepare(`SELECT MAX(in_inbox) AS inbox, MAX(in_sent) AS sent, MAX(in_drafts) AS drafts, MAX(in_spam) AS spam, MAX(in_trash) AS trash, MAX(in_archive) AS archive FROM gmail_messages WHERE account_id = ? AND id IN (${placeholders})`).get(accountId, ...messageIds) as Record<string, number | null> | undefined
+    return (['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive'] as const).filter(flag => row?.[flag] === 1)
+  }
+
   threadMessageIds(accountId: string, threadId: string): readonly string[] {
     const rows = this.#db.prepare('SELECT id FROM gmail_messages WHERE account_id = ? AND thread_id = ?').all(accountId, threadId) as unknown as Array<{ id: string }>
     return rows.map((row) => row.id)

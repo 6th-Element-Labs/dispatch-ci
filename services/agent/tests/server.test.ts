@@ -297,6 +297,27 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it('passes exact Gmail system label IDs to the message ID search', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.search_email_ids': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      if (method === 'mcpServer/tool/call') return { structuredContent: { message_ids: ['m1'], next_page_token: '' } }
+      return { ok: true }
+    })
+    const search = (payload: Record<string, unknown>) => fetch(`${base}/v1/connectors/gmail/search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    })
+    expect((await search({ linkId: 'link-one', query: '-in:inbox -in:sent', labelIds: [], maxResults: 50, nextPageToken: 'next-1' })).status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.search_email_ids',
+      arguments: { link_id: 'link-one', query: '-in:inbox -in:sent', label_ids: [], max_results: 50, next_page_token: 'next-1' },
+    }))
+    expect((await search({ linkId: 'link-one', query: 'in:inbox', labelIds: 'INBOX' })).status).toBe(400)
+  })
+
   it('applies accepted Gmail read-state label changes', async () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {

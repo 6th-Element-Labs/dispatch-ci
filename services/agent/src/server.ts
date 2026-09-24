@@ -350,6 +350,12 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
         const payload = await body(request)
         const linkId = typeof payload.linkId === 'string' ? payload.linkId : ''
         const query = typeof payload.query === 'string' ? payload.query : 'in:inbox -in:spam -in:trash'
+        // Message IDs only: one Gmail list call, no message reads. The mail service compares folder pages with it.
+        if (payload.labelIds !== undefined && (!Array.isArray(payload.labelIds) || payload.labelIds.some((value) => typeof value !== 'string' || !value))) {
+          return json(response, 400, { error: 'invalid_label_ids' })
+        }
+        const labelIds = (payload.labelIds as string[] | undefined) ?? ['INBOX']
+        const nextPageToken = typeof payload.nextPageToken === 'string' ? payload.nextPageToken : ''
         const maxResults = typeof payload.maxResults === 'number' ? Math.max(1, Math.min(50, Math.trunc(payload.maxResults))) : 20
         const gmail = await inventory()
         if (!gmail.server || !gmail.tools.search) return json(response, 503, { error: 'gmail_search_unavailable' })
@@ -358,7 +364,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
           server: gmail.server,
           threadId: await connectorThread(linkId),
           tool: gmail.tools.search,
-          arguments: { link_id: linkId, query, label_ids: ['INBOX'], max_results: maxResults, next_page_token: '' },
+          arguments: { link_id: linkId, query, label_ids: labelIds, max_results: maxResults, next_page_token: nextPageToken },
         })
         return json(response, 200, result)
       } catch (error) {

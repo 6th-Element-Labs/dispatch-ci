@@ -1708,6 +1708,16 @@ test('recovers the mail list automatically after a transient service failure', a
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
 
+test('names the account Gmail is rate limiting instead of calling all mail stale', async ({ page }) => {
+  await page.unroute('http://127.0.0.1:8411/v1/accounts')
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.unroute('http://127.0.0.1:8411/v1/sync/status')
+  await page.route('http://127.0.0.1:8411/v1/sync/status', route => route.fulfill({ json: { sync: { state: 'failed', startedAt: '2026-09-24T10:42:00.425Z', completedAt: '2026-09-24T05:48:12.687Z', error: 'Error: steve@6elementlabs.com: Error: Gmail is rate limiting this account. Retry after 2026-09-24T11:05:01.424Z', messageCount: 2 } } }))
+  await page.goto('/')
+  await expect(page.locator('[data-mail-source]')).toHaveText('Waiting for Gmail · steve@6elementlabs.com')
+  await expect(page.locator('[data-mail-error]')).toBeHidden()
+})
+
 test('a Codex draft that Gmail no longer has is reported as sent or replaced, not as raw JSON', async ({ page }) => {
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.unroute(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\?state=(all|read|unread)/)
@@ -2644,6 +2654,68 @@ test('recovers unsaved recipients, text and file bytes after a reload without se
   await page.locator('[data-discard-draft]').click()
   await expect(page.locator('[data-recovery-open]')).toBeHidden()
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!))).toEqual([])
+})
+
+test('discards an unsent local draft while its Gmail save is still failing', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return
+    sessionStorage.setItem('seeded', '1')
+    localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{ key: 'stuck-draft', updatedAt: '2026-09-23T19:47:07Z', revision: 66, accountId: 'one', accountLabel: 'work@example.com', gmailDraftId: 'gone-draft', gmailThreadId: 'gone-thread', inReplyToMessageId: 'gone-thread', to: 'andy@example.com', cc: '', bcc: '', subject: 'Fwd: Meeting Summary', bodyMarkdown: 'Forwarded notes', attachments: [] }]))
+  })
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  const limited = { status: 502, json: { error: 'gmail_backoff', detail: 'Gmail is rate limiting this account. Retry after 2026-09-24T10:54:58.101Z' } }
+  let pendingSave: import('@playwright/test').Route | undefined
+  const discards: string[] = []
+  await page.route(/8411\/v1\/drafts\/gone-draft(\?.*)?$/, route => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('action') === 'discard') { discards.push(url.search); return route.fulfill({ json: { discarded: true } }) }
+    if (route.request().method() === 'PUT' && !pendingSave) { pendingSave = route; return }
+    return route.fulfill(limited)
+  })
+  await page.goto('/')
+  await expect.poll(() => Boolean(pendingSave), { timeout: 20_000 }).toBe(true)
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-local-draft-key="stuck-draft"]').click()
+  await expect(page.locator('[data-draft-body]')).toHaveValue('Forwarded notes')
+  await page.locator('[data-discard-draft]').click()
+  await pendingSave!.fulfill(limited)
+  await expect.poll(() => discards).toEqual(['?action=discard&account=one'])
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveCount(0)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!))).toEqual([])
+})
+
+test('says why Discard could not reach Gmail and keeps the draft', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return
+    sessionStorage.setItem('seeded', '1')
+    localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{ key: 'limited-draft', updatedAt: '2026-09-23T19:47:07Z', revision: 3, accountId: 'one', accountLabel: 'work@example.com', gmailDraftId: 'limited', gmailThreadId: 'limited-thread', inReplyToMessageId: 'limited-thread', to: 'andy@example.com', cc: '', bcc: '', subject: 'Rate limited draft', bodyMarkdown: 'Keep me', attachments: [] }]))
+  })
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  const limited = { status: 502, json: { error: 'gmail_backoff', detail: `Gmail is rate limiting this account. Retry after ${new Date(Date.now() + 10 * 60_000).toISOString()}` } }
+  await page.route(/8411\/v1\/drafts\/limited(\?.*)?$/, route => route.fulfill(limited))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-local-draft-key="limited-draft"]').click()
+  await expect(page.locator('[data-draft-body]')).toHaveValue('Keep me')
+  await page.locator('[data-discard-draft]').click()
+  await expect(page.locator('[data-draft-error]')).toHaveText(/^Gmail is limiting requests from this account until .+\. Try again then\.$/)
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveValue('Keep me')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!).map((item: { key: string }) => item.key))).toEqual(['limited-draft'])
+})
+
+test('keeps a new draft and says so when Discard follows a save Gmail may have completed', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  let pendingCreate: import('@playwright/test').Route | undefined
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => { pendingCreate = route })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.locator('[data-draft-body]').fill('Maybe saved')
+  await page.locator('[data-save-draft]').click()
+  await expect.poll(() => Boolean(pendingCreate)).toBe(true)
+  await page.locator('[data-discard-draft]').click()
+  await pendingCreate!.fulfill({ status: 504, json: { error: 'gmail_draft_create_failed', detail: 'Timed out waiting for Gmail.' } })
+  await expect(page.locator('[data-draft-error]')).toHaveText('Timed out waiting for Gmail.')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('dispatch.editor-recovery.v1')!).length)).toBe(1)
 })
 
 test('autosaves a new draft and keeps recovery out of the Inbox', async ({ page }) => {

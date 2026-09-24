@@ -35,6 +35,7 @@ import { arrivedUnreadIds, liveListBaseline, playNewMailTone, type LiveListBasel
 import { CONVERSATION_DRAG_TYPE, EMPTY_SELECTION, decodeDragPayload, dropActionForMailbox, encodeDragPayload, moveLabel, pruneSelection, selectionAfterArrow, selectionAfterClick, undoActionsFor, type SelectionState } from './selection.js'
 import { SHORTCUT_GROUPS, TOOLBAR_KEYS, resolveShortcut } from './shortcuts.js'
 import { describeRequestError, requestErrorCode } from './request-errors.js'
+import { waitingForGmailLabel } from './sync-label.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
@@ -1758,6 +1759,24 @@ function draftError(error: unknown): void {
   elements.draftError.textContent = describeRequestError(detail)
 }
 
+/**
+ * Discard waits for a save in flight. Only a failure that says where the draft stands lets it go
+ * on: Gmail's rate limit (nothing reached Gmail) or a draft Gmail no longer has. Any other failure
+ * may have saved the draft in Gmail, so Discard stops and says so rather than drop the local copy.
+ */
+function settledSave(save: Promise<DraftProjection | undefined>): Promise<DraftProjection | undefined> {
+  return save.catch((error: unknown) => {
+    if (['gmail_backoff', 'gmail_draft_not_found'].includes(requestErrorCode(String(error)) ?? '')) return undefined
+    throw error
+  })
+}
+
+/** A failed Discard is not a pending save: say why the draft is still here. */
+function discardError(error: unknown): void {
+  elements.draftError.hidden = false
+  elements.draftError.textContent = describeRequestError(error instanceof Error ? error.message : String(error))
+}
+
 function replyQuoteMarkdown(message: MessageProjection): string {
   const content = emailPlainText(message.body.kind, message.body.content)
   return `\n\n> ${content.split(/\r?\n/).join('\n> ')}`
@@ -2147,8 +2166,8 @@ async function discardDraft(): Promise<void> {
   draftEditSession += 1
   let savedDraft: DraftProjection | undefined = draft
   try {
-    if (recoveryKey && backgroundDraftSaves.has(recoveryKey)) savedDraft = (await backgroundDraftSaves.get(recoveryKey)) ?? draft
-    if (draftSaveFlight) savedDraft = (await draftSaveFlight) ?? draft
+    if (recoveryKey && backgroundDraftSaves.has(recoveryKey)) savedDraft = (await settledSave(backgroundDraftSaves.get(recoveryKey)!)) ?? draft
+    if (draftSaveFlight) savedDraft = (await settledSave(draftSaveFlight)) ?? draft
     const discardId = savedDraft.id
     if (discardId) {
       if (!savedDraft.accountId) throw new Error('The Gmail account is missing from this draft.')
@@ -3224,7 +3243,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
       : result.coverage === 'recent'
         ? `Recent ${mailboxLabels[mailbox]} · ${refreshedLabel}`
         : `${!selectedAccountId && accounts.length > 1 ? 'Unified Gmail' : 'Gmail connected'} · ${refreshedLabel}`
-    if (result.sync && result.coverage !== 'downloaded') elements.mailSource.textContent = result.sync.state === 'ready' ? `Gmail synced · ${syncTime(result.sync.completedAt)}` : result.sync.state === 'failed' ? 'Waiting for Gmail' : 'Syncing Gmail'
+    if (result.sync && result.coverage !== 'downloaded') elements.mailSource.textContent = result.sync.state === 'ready' ? `Gmail synced · ${syncTime(result.sync.completedAt)}` : result.sync.state === 'failed' ? waitingForGmailLabel(result.sync.error) : 'Syncing Gmail'
     renderList()
     const currentSummary = conversations.find(conversation => conversation.id === selectedConversationId)
     if (!activeDraft && !offlineMode && currentSummary && selectedSummary && (readerNeedsRetry || currentSummary.latestMessageId !== selectedSummary.latestMessageId)) {
@@ -3349,7 +3368,7 @@ async function refreshSyncStatus(): Promise<void> {
     }
     if (sync.state === 'failed') {
       if (/RATE_LIMITED|rateLimitExceeded|Retry after/i.test(sync.error ?? '')) {
-        elements.mailSource.textContent = 'Waiting for Gmail'
+        elements.mailSource.textContent = waitingForGmailLabel(sync.error)
         elements.mailSource.title = sync.error ?? ''
         if (syncErrorVisible) elements.mailError.hidden = true
         syncErrorVisible = true
@@ -3632,7 +3651,7 @@ app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void s
 app.querySelector('[data-send-draft]')?.addEventListener('click', sendDraft)
 app.querySelector('[data-send-cancel]')?.addEventListener('click', () => { elements.sendConfirm.hidden = true })
 app.querySelector('[data-send-confirm-go]')?.addEventListener('click', () => { void confirmSendDraft().catch(draftError) })
-app.querySelector('[data-discard-draft]')?.addEventListener('click', () => { void discardDraft().catch(draftError) })
+app.querySelector('[data-discard-draft]')?.addEventListener('click', () => { void discardDraft().catch(discardError) })
 app.querySelector('[data-attach-draft]')?.addEventListener('click', () => { elements.draftFiles.click() })
 elements.draftFiles.addEventListener('change', () => { void attachDraftFiles() })
 elements.draftBody.addEventListener('input', () => {
