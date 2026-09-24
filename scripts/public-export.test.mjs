@@ -130,13 +130,18 @@ describe('public export', () => {
   })
 
   it('detects private paths and credential shapes', () => {
+    // Built at runtime so the source never holds a token literal: GitHub push
+    // protection on the public CI sandbox rejects any pushed file version with one.
+    const githubToken = 'ghp' + '_abcdefghijklmnopqrstuvwxyz123456'
+    const openaiToken = 'sk' + '-proj-abcdefghijklmnopqrstuvwxyz123456'
+    const slackToken = 'xoxb' + '-1234567890-abcdefghijklmnopqrstuvwxyz'
     assert.deepEqual(secretFindings('/Users/steveridder/private', 'x.md'), ['machine path'])
     assert.deepEqual(
-      secretFindings('ghp_abcdefghijklmnopqrstuvwxyz123456', 'x.md'),
+      secretFindings(githubToken, 'x.md'),
       ['GitHub token'],
     )
-    assert.deepEqual(secretFindings('sk-proj-abcdefghijklmnopqrstuvwxyz123456', 'x.md'), ['OpenAI token'])
-    assert.deepEqual(secretFindings('xoxb-1234567890-abcdefghijklmnopqrstuvwxyz', 'x.md'), ['Slack token'])
+    assert.deepEqual(secretFindings(openaiToken, 'x.md'), ['OpenAI token'])
+    assert.deepEqual(secretFindings(slackToken, 'x.md'), ['Slack token'])
   })
 
   it('rejects generated, credential, database, and log paths', () => {

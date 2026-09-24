@@ -130,6 +130,24 @@ Actions logs and artifacts in the sandbox are public. The sandbox may run source
 unit, contract, and browser verification. It must not publish signed installers,
 credentials, private mail, account identifiers, or provider payloads.
 
+## Push protection
+
+The sandbox is public, so GitHub push protection scans every push to it: each
+commit the sandbox does not already have, not only the tip. One match declines
+the whole push, and a fake token in a test fixture is still a match.
+
+- Test fixtures build fake credentials at runtime, as
+  `scripts/public-export.test.mjs` does, instead of committing token literals.
+- A clean tip does not unblock a push whose earlier commits hold a token.
+  `sync-main` and `refresh-main` push that same history and are blocked too.
+- `main` is never rewritten, and its history before the runtime-built fixtures
+  holds a fake Slack token (first in `c915945`). The sandbox accepts it through
+  one allowance: open the unblock URL the declined push prints, choose **It's
+  used in tests**, and push again within three hours. That leaves a closed
+  alert, and GitHub does not block a secret that already has an alert in the
+  repository, so later pushes pass.
+- Never allow a real credential. Revoke it and remove it from the branch.
+
 ## Current state
 
 The initial service foundation is being established. This section must be updated
