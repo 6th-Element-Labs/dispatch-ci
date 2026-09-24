@@ -121,22 +121,24 @@ app.innerHTML = `
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="card-body dispatch-draft" data-draft hidden>
-            <div class="card"><div class="card-header"><div><strong>Unsent draft</strong><span class="text-secondary small ms-2">Not sent</span></div><button type="button" class="btn btn-sm btn-ghost-secondary" data-collapse-draft aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-chevron-down me-1" aria-hidden="true"></i>Collapse draft</button></div><div id="dispatch-draft-content" data-draft-content><div class="card-body">
-            <label class="form-label">From<select class="form-select mt-1" data-draft-account aria-label="Draft account"></select></label>
-            <label class="form-label">To<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-to aria-label="Draft recipient" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Recipient suggestions"></ul></div></label>
-            <div class="row g-3 mt-0"><label class="col form-label">Cc<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-cc aria-label="Draft Cc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Cc suggestions"></ul></div></label><label class="col form-label">Bcc<div class="dispatch-recipient-field mt-1" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" data-draft-bcc aria-label="Draft Bcc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Bcc suggestions"></ul></div></label></div>
-            <label class="form-label">Subject<input class="form-control mt-1" data-draft-subject aria-label="Draft subject"></label>
-            <label class="form-label">Message<textarea class="form-control mt-1" data-draft-body aria-label="Draft body"></textarea></label>
-            <p class="text-secondary small" data-recovery-status role="status"></p>
+            <div class="card"><div class="card-header"><div class="dispatch-draft-title"><strong>Unsent draft</strong><span class="text-secondary small" data-recovery-status role="status"></span></div><div class="dispatch-draft-header-actions"><button type="button" class="btn btn-sm btn-ghost-secondary" data-toggle-preview aria-pressed="false" aria-controls="dispatch-draft-preview"><i class="ti ti-eye me-1" aria-hidden="true"></i>Preview</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-collapse-draft aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-chevron-down me-1" aria-hidden="true"></i>Collapse draft</button></div></div><div id="dispatch-draft-content" data-draft-content><div class="card-body">
+            <div class="dispatch-draft-fields">
+              <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-to">To</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-to" data-draft-to aria-label="Draft recipient" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Recipient suggestions"></ul></div><span class="dispatch-draft-copy-toggles"><button type="button" class="btn btn-sm btn-ghost-secondary" data-show-copy="cc" aria-label="Add Cc" aria-controls="dispatch-draft-cc-row">Cc</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-show-copy="bcc" aria-label="Add Bcc" aria-controls="dispatch-draft-bcc-row">Bcc</button></span></div>
+              <div class="dispatch-draft-field" id="dispatch-draft-cc-row" data-copy-row="cc" hidden><label class="dispatch-draft-label" for="dispatch-draft-cc">Cc</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-cc" data-draft-cc aria-label="Draft Cc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Cc suggestions"></ul></div></div>
+              <div class="dispatch-draft-field" id="dispatch-draft-bcc-row" data-copy-row="bcc" hidden><label class="dispatch-draft-label" for="dispatch-draft-bcc">Bcc</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-bcc" data-draft-bcc aria-label="Draft Bcc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Bcc suggestions"></ul></div></div>
+              <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-subject">Subject</label><input class="form-control" id="dispatch-draft-subject" data-draft-subject aria-label="Draft subject"></div>
+              <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-account">From</label><select class="form-select" id="dispatch-draft-account" data-draft-account aria-label="Draft account"></select></div>
+            </div>
+            <textarea class="form-control dispatch-draft-text" data-draft-body aria-label="Draft body" placeholder="Write your message"></textarea>
             <ul class="dispatch-draft-attachments" data-draft-attachments aria-label="Draft attachments" hidden></ul>
-            <div class="dispatch-draft-preview markdown" data-draft-preview aria-label="Draft preview"></div>
+            <div class="dispatch-draft-preview markdown" id="dispatch-draft-preview" data-draft-preview aria-label="Draft preview" hidden></div>
             <p class="text-secondary small" data-draft-error hidden></p>
             <div class="alert alert-warning" data-send-confirm hidden>
               <p data-send-confirm-text></p>
               <button class="btn btn-outline-secondary" type="button" data-send-cancel>Cancel</button>
               <button class="btn btn-primary" type="button" data-send-confirm-go>Send now</button>
             </div>
-            </div><footer class="card-footer d-flex flex-wrap gap-2"><button class="btn btn-outline-danger" type="button" data-discard-draft>Discard</button><button class="btn btn-outline-secondary" type="button" data-attach-draft>Attach</button><input type="file" data-draft-files multiple hidden><button class="btn btn-outline-secondary" type="button" data-save-draft>Save draft</button><button class="btn btn-outline-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-primary ms-auto" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send draft</button></footer></div>
+            </div><footer class="card-footer d-flex flex-wrap align-items-center gap-1"><button class="btn btn-ghost-danger" type="button" data-discard-draft><i class="ti ti-trash me-1" aria-hidden="true"></i>Discard</button><button class="btn btn-ghost-secondary" type="button" data-attach-draft><i class="ti ti-paperclip me-1" aria-hidden="true"></i>Attach</button><input type="file" data-draft-files multiple hidden><button class="btn btn-ghost-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-ghost-secondary ms-auto" type="button" data-save-draft>Save draft</button><button class="btn btn-primary" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send draft</button></footer></div>
             </div>
           </section>
         </div>
@@ -284,6 +286,12 @@ const elements = {
   setupConnector: app.querySelector<HTMLElement>('[data-setup-connector]')!,
   setupConnectorLabel: app.querySelector<HTMLElement>('[data-setup-connector-label]')!,
 }
+// Cc and Bcc stay folded behind their toggles until they hold an address or the user opens them.
+const copyRows = (['cc', 'bcc'] as const).map(kind => ({
+  row: app.querySelector<HTMLElement>(`[data-copy-row="${kind}"]`)!,
+  toggle: app.querySelector<HTMLButtonElement>(`[data-show-copy="${kind}"]`)!,
+  input: kind === 'cc' ? elements.draftCc : elements.draftBcc,
+}))
 
 installWebLinks(app, window as { isTauri?: unknown }, error => {
   elements.mailError.hidden = false
@@ -769,13 +777,26 @@ function renderListRows(emptyMessage: string): void {
       for (const record of localDrafts) {
         if (selectedAccountId && record.accountId !== selectedAccountId) continue
         const row = document.createElement('button')
-        row.className = 'list-group-item list-group-item-action dispatch-message'
+        row.className = 'list-group-item list-group-item-action dispatch-message dispatch-local-draft'
         row.dataset.localDraftKey = record.key
         row.type = 'button'
-        const title = document.createElement('strong'); title.textContent = record.subject || 'New message'
-        const detail = document.createElement('small'); detail.textContent = record.to || 'No recipient'
-        if (draftSyncErrors.has(record.key)) { detail.textContent += ' · Could not save'; detail.title = draftSyncErrors.get(record.key)! }
-        row.append(title, document.createElement('br'), detail)
+        const avatar = document.createElement('span')
+        avatar.className = 'avatar avatar-sm bg-secondary-lt text-secondary dispatch-avatar'
+        const icon = document.createElement('i'); icon.className = 'ti ti-pencil'; icon.setAttribute('aria-hidden', 'true')
+        avatar.append(icon)
+        const content = document.createElement('span')
+        const top = document.createElement('span'); top.className = 'dispatch-message-top'
+        const to = document.createElement('strong'); to.textContent = `To: ${record.to || 'No recipient'}`; to.title = to.textContent
+        const time = document.createElement('time'); time.dateTime = record.updatedAt
+        time.textContent = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(record.updatedAt))
+        top.append(to, time)
+        const title = document.createElement('b'); title.textContent = record.subject || 'New message'; title.title = title.textContent
+        const detail = document.createElement('small')
+        detail.textContent = draftSyncErrors.has(record.key) ? 'Could not sync to Gmail' : 'Not synced to Gmail'
+        if (draftSyncErrors.has(record.key)) { detail.classList.add('text-danger'); detail.title = draftSyncErrors.get(record.key)! }
+        content.append(top, title, detail)
+        row.setAttribute('aria-label', `Draft to ${record.to || 'no recipient'}, ${record.subject || 'New message'}, ${detail.textContent.toLowerCase()}`)
+        row.append(avatar, content)
         row.onclick = () => { void restoreLocalDraft(record.key).catch(draftError) }
         elements.list.append(row)
       }
@@ -1724,9 +1745,13 @@ async function restoreLocalDraft(key: string): Promise<void> {
   selectedSummary = undefined
   codexContextReady = false
   elements.subject.textContent = record.subject || 'New message'
-  elements.messageCount.textContent = 'Local draft'
+  elements.threadMailbox.textContent = mailboxLabels.drafts
+  elements.messageCount.hidden = true
+  elements.countSep.hidden = true
   elements.copyStatus.hidden = true
   elements.address.hidden = true
+  elements.accountDot.hidden = true
+  elements.accountSep.hidden = true
   showDraft({ id: record.gmailDraftId, accountId: record.accountId, inReplyToMessageId: record.inReplyToMessageId,
     gmailThreadId: record.gmailThreadId,
     to: parseRecipientList(record.to).map(address => ({ name: address, address, initials: '@' })), cc: record.cc, bcc: record.bcc, subject: record.subject, bodyMarkdown: record.bodyMarkdown, bodyText: record.bodyMarkdown, bodyHtml: '', attachments: restored.attachments, state: 'draft' }, !record.gmailDraftId)
@@ -1788,7 +1813,14 @@ function setDraftCollapsed(collapsed: boolean): void {
   const button = app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!
   button.setAttribute('aria-expanded', String(!collapsed))
   button.innerHTML = `<i class="ti ti-chevron-${collapsed ? 'up' : 'down'} me-1" aria-hidden="true"></i>${collapsed ? 'Expand' : 'Collapse'} draft`
+  app.querySelector<HTMLButtonElement>('[data-toggle-preview]')!.hidden = collapsed
 }
+for (const { row, toggle, input } of copyRows) toggle.addEventListener('click', () => { row.hidden = false; toggle.hidden = true; input.focus() })
+app.querySelector<HTMLButtonElement>('[data-toggle-preview]')!.addEventListener('click', event => {
+  const button = event.currentTarget as HTMLButtonElement
+  elements.draftPreview.hidden = !elements.draftPreview.hidden
+  button.setAttribute('aria-pressed', String(!elements.draftPreview.hidden))
+})
 app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!.addEventListener('click', () => {
   setDraftCollapsed(!app.querySelector<HTMLElement>('[data-draft-content]')!.hidden)
 })
@@ -1828,6 +1860,10 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   setRecipientField(elements.draftTo, draft.to.map((address) => address.address).join(', '))
   setRecipientField(elements.draftCc, draft.cc ?? '')
   setRecipientField(elements.draftBcc, draft.bcc ?? '')
+  for (const { row, toggle, input } of copyRows) {
+    row.hidden = !(sameDraft && !row.hidden) && !recipientValue(input).trim()
+    toggle.hidden = !row.hidden
+  }
   elements.draftSubject.value = draft.subject
   elements.draftBody.value = draft.bodyMarkdown || draft.bodyText
   elements.draftPreview.innerHTML = draft.bodyHtml

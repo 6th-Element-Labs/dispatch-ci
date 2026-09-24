@@ -39,6 +39,8 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
 }
 
 test.beforeEach(async ({ page }) => {
+  // Unrouted calls fail as they do in CI, so a run never reaches the mail or agent service installed on this Mac.
+  await page.route(/^http:\/\/127\.0\.0\.1:(8411|8412)\//, route => route.abort('connectionrefused'))
   await page.addInitScript(() => { localStorage.setItem('dispatch.setup.seen', '1') })
   await page.route(/8411\/v1\/mailboxes\/counts/, (route) => route.fulfill({ json: { source: 'demo', counts: { inbox: 0, drafts: 0, spam: 0 } } }))
   await page.route('http://127.0.0.1:8412/v1/activity', route => route.fulfill({ contentType: 'text/event-stream', body: 'data: []\n\n' }))
@@ -586,7 +588,9 @@ test('previews a new compose draft with account, Cc, and Bcc before saving', asy
   await expect(page.getByRole('heading', { name: 'New message' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: 'Draft account' })).toHaveValue('link-one')
   await page.getByRole('textbox', { name: 'Draft recipient' }).fill('client@example.com')
+  await page.getByRole('button', { name: 'Add Cc', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft Cc' }).fill('cc@example.com')
+  await page.getByRole('button', { name: 'Add Bcc', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft Bcc' }).fill('audit@example.com')
   await page.getByRole('textbox', { name: 'Draft subject' }).fill('Project update')
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Draft preview')
@@ -623,6 +627,7 @@ test('autosaves each saved-draft header and keeps the account locked', async ({ 
   ]
   for (const [name, value, field] of changes) {
     const count = updates.length
+    if (name === 'Draft Cc' || name === 'Draft Bcc') await page.getByRole('button', { name: name.replace('Draft', 'Add'), exact: true }).click()
     await page.getByRole('textbox', { name }).fill(value)
     await expect.poll(() => updates.length).toBe(count + 1)
     expect(updates.at(-1)?.[field]).toBe(value)
@@ -1155,7 +1160,9 @@ test('edits, saves, and sends a Gmail draft from the middle panel', async ({ pag
     throw new Error('Send must not call the agent service')
   })
   await page.getByRole('textbox', { name: 'Draft body' }).fill('**Approved reply**')
+  await page.getByRole('button', { name: 'Add Cc', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft Cc' }).fill('manager@example.com')
+  await page.getByRole('button', { name: 'Add Bcc', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft Bcc' }).fill('audit@example.com')
   await page.getByRole('button', { name: 'Send draft' }).click()
   await expect(page.getByRole('button', { name: 'Send now' })).toBeVisible()
@@ -1610,6 +1617,33 @@ for (const editing of [false, true]) test(`new reply refreshes the open thread a
   }
 })
 
+test('keeps Cc and Bcc folded until a draft uses them', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return
+    sessionStorage.setItem('seeded', '1')
+    localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{ key: 'with-cc', updatedAt: '2026-09-23T19:47:07Z', revision: 1, accountId: 'one', accountLabel: 'work@example.com', to: 'andy@example.com', cc: 'copy@example.com', bcc: '', subject: 'Copied', bodyMarkdown: 'Hi', attachments: [] }]))
+  })
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  await page.route(/8411\/v1\/drafts/, route => route.fulfill({ status: 502, json: { error: 'gmail_backoff', detail: 'Gmail is rate limiting this account. Retry after 2099-01-01T00:00:00.000Z' } }))
+  await page.goto('/')
+  // A draft that already copies someone opens with that row showing.
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-local-draft-key="with-cc"]').click()
+  await expect(page.locator('[data-copy-row="cc"] [data-recipient-address="copy@example.com"]')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add Cc', exact: true })).toBeHidden()
+  await expect(page.getByRole('textbox', { name: 'Draft Bcc' })).toBeHidden()
+  await page.getByRole('button', { name: 'Add Bcc', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: 'Draft Bcc' })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Add Bcc', exact: true })).toBeHidden()
+  // A new message starts folded again.
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: 'Draft recipient' })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Draft Cc' })).toBeHidden()
+  await expect(page.getByRole('textbox', { name: 'Draft Bcc' })).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Add Cc', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add Bcc', exact: true })).toBeVisible()
+})
+
 test('collapses an unsent draft without losing edits and gives space back to the email', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Reply', exact: true }).click()
@@ -1618,13 +1652,16 @@ test('collapses an unsent draft without losing edits and gives space back to the
   const before = await page.locator('[data-body]').boundingBox()
   await page.getByRole('button', { name: 'Collapse draft', exact: true }).click()
   await expect(page.getByText('Unsent draft', { exact: true })).toBeVisible()
-  await expect(page.getByText('Not sent', { exact: true })).toBeVisible()
+  // Save state lives in the header, so it stays in view while the draft is collapsed.
+  await expect(page.locator('[data-draft] .card-header [data-recovery-status]')).toBeAttached()
   await expect(body).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeHidden()
   await expect(page.getByRole('button', { name: 'Send draft', exact: true })).toBeHidden()
   expect((await page.locator('[data-body]').boundingBox())!.height).toBeGreaterThan(before!.height)
   const expand = page.getByRole('button', { name: 'Expand draft', exact: true })
   await expand.focus(); await page.keyboard.press('Enter')
   await expect(body).toHaveValue('Keep these unsent words')
+  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeVisible()
 })
 
 for (const action of ['automatic', 'refresh', 'compose']) test(`failed message download recovers safely: ${action}`, async ({ page }) => {
@@ -2622,6 +2659,43 @@ test('a search requested in ordinary Codex chat can also publish the mail list',
   await expect(page.getByRole('textbox', { name: 'Search mail' })).toHaveValue('Related correspondence')
 })
 
+test('shows a local-only draft as a draft, not as an unread thread with another thread\'s actions', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return
+    sessionStorage.setItem('seeded', '1')
+    localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{ key: 'local-only', updatedAt: '2026-09-23T19:47:07Z', revision: 3, accountId: 'one', accountLabel: 'work@example.com', gmailDraftId: 'gone-draft', gmailThreadId: 'gone-thread', inReplyToMessageId: 'gone-thread', to: 'andy@example.com', cc: '', bcc: '', subject: 'Forwarded notes', bodyMarkdown: 'Notes', attachments: [] }]))
+  })
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  // Keep background saves of the local draft off any real mail service.
+  await page.route(/8411\/v1\/drafts/, route => route.fulfill({ status: 502, json: { error: 'gmail_backoff', detail: 'Gmail is rate limiting this account. Retry after 2099-01-01T00:00:00.000Z' } }))
+  await page.goto('/')
+  await page.locator('[data-conversation-id]').first().click()
+  await expect(page.locator('[data-reply]')).toBeVisible()
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  // Drawn like any draft row, never as unread mail.
+  const row = page.locator('[data-local-draft-key="local-only"]')
+  await expect(row).toContainText('To: andy@example.com')
+  await expect(row).toContainText('Forwarded notes')
+  await expect(row).toContainText('Not synced to Gmail')
+  await expect(row).not.toHaveClass(/dispatch-message-unread/)
+  await row.click()
+  await expect(page.locator('[data-draft-body]')).toHaveValue('Notes')
+  await expect(page.locator('[data-thread-mailbox]')).toHaveText('Drafts')
+  await expect(page.locator('[data-message-count]')).toBeHidden()
+  await expect(page.locator('[data-account-dot]')).toBeHidden()
+  // A draft with no thread above it has no thread to reply to, forward, or mark read.
+  for (const control of ['[data-read-state]', '[data-reply]', '[data-reply-all]', '[data-forward]']) await expect(page.locator(control)).toBeHidden()
+  await expect(page.locator('[data-draft] .card-header [data-recovery-status]')).toBeVisible()
+  // The rendered preview is on request, not a second copy of the message.
+  await expect(page.locator('[data-draft-preview]')).toBeHidden()
+  await page.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(page.locator('[data-draft-preview]')).toBeVisible()
+  await page.getByRole('button', { name: 'Inbox', exact: true }).click()
+  await page.locator('[data-conversation-id]').first().click()
+  await expect(page.locator('[data-reply]')).toBeVisible()
+  await expect(page.locator('[data-forward]')).toBeVisible()
+})
+
 test('recovers unsaved recipients, text and file bytes after a reload without sending', async ({ page }) => {
   const writes: string[] = []
   await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
@@ -2629,7 +2703,9 @@ test('recovers unsaved recipients, text and file bytes after a reload without se
   await page.goto('/')
   await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.locator('[data-draft-to]').fill('ana@example.com')
+  await page.getByRole('button', { name: 'Add Cc', exact: true }).click()
   await page.locator('[data-draft-cc]').fill('cc@example.com')
+  await page.getByRole('button', { name: 'Add Bcc', exact: true }).click()
   await page.locator('[data-draft-bcc]').fill('bcc@example.com')
   await page.locator('[data-draft-subject]').fill('Unsaved recovery proof')
   await page.locator('[data-draft-body]').fill('Text entered before Gmail can save it.')
