@@ -37,11 +37,20 @@ import { SHORTCUT_GROUPS, TOOLBAR_KEYS, resolveShortcut } from './shortcuts.js'
 import { describeRequestError, requestErrorCode } from './request-errors.js'
 import { waitingForGmailLabel } from './sync-label.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
+import { canOpenMessageWindow, MESSAGE_WINDOW_CHANNEL, messageWindowQuery, parseMessageWindow, readMovedInMessageWindow, type MessageWindowTarget, type MovedInMessageWindow } from './message-window.js'
+import { DraftEditLocks, type LockManagerLike } from './draft-edit-locks.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
 if (!appElement) throw new Error('Dispatch app root is missing')
 const app: HTMLDivElement = appElement
 if (isNativeShell(window as { isTauri?: unknown })) document.documentElement.classList.add('dispatch-native')
+// A message window shows one conversation that the main window opened on double-click or Open in New Window.
+let messageWindow: MessageWindowTarget | undefined
+let messageWindowAddressError: string | undefined
+try { messageWindow = parseMessageWindow(location.search) } catch (error) { messageWindowAddressError = error instanceof Error ? error.message : String(error) }
+const inMessageWindow = Boolean(messageWindow || messageWindowAddressError)
+if (inMessageWindow) document.documentElement.classList.add('dispatch-message-window')
+const messageWindowChannel = 'BroadcastChannel' in window ? new BroadcastChannel(MESSAGE_WINDOW_CHANNEL) : undefined
 const popupContextMenu = createContextMenuPopup(window as Window & { isTauri?: unknown; __TAURI__?: { core?: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } } })
 
 app.innerHTML = `
@@ -345,6 +354,11 @@ let draftSendFlight: Promise<void> | undefined
 let sendConfirmationRevision: number | undefined
 let draftDiscarding = false
 const recovery = new DraftRecovery()
+const draftEditLocks = new DraftEditLocks((navigator as Navigator & { locks?: unknown }).locks as LockManagerLike | undefined)
+/** Hold the cross-window claim on whatever this window is editing (see draft-edit-locks.ts). */
+function syncDraftEditLock(): void {
+  draftEditLocks.hold(activeDraft ? { localKey: recoveryKey, gmailDraftId: activeDraft.id || undefined } : undefined)
+}
 let draftSyncTimer: number | undefined
 const backgroundDraftSaves = new Map<string, Promise<DraftProjection | undefined>>()
 async function linkDraftTask(key: string, draft: DraftProjection): Promise<void> {
@@ -374,12 +388,17 @@ async function syncPendingDrafts(): Promise<void> {
   if (offlineMode || !navigator.onLine) return
   if (draftSaveFlight) { scheduleDraftSync(); return }
   let pending = false
+  const editedElsewhere = await draftEditLocks.localKeysHeldElsewhere()
   for (const record of recovery.list()) {
     if (!record.accountId || backgroundDraftSaves.has(record.key)) continue
     if (record.key === recoveryKey && activeDraft) {
       if (draftDirty && !draftSaveFlight && !draftSendFlight) autosaveDraft()
       continue
     }
+    // Another window is editing this draft and saves it itself. Try again after that window lets go.
+    if (editedElsewhere.has(record.key)) { pending = true; continue }
+    // Only the main window saves drafts that no window is editing.
+    if (inMessageWindow) continue
     if ([record.to, record.cc, record.bcc].flatMap(parseRecipientList).some(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) continue
     const save = (async () => {
       const restored = await recovery.restore(record.key)
@@ -604,6 +623,7 @@ const savedSidebar = localStorage.getItem('dispatch.ui.sidebar')
 let mailboxesVisible = savedSidebar !== 'hidden'
 let sidebarStyle: SidebarStyle = (savedSidebar === 'expanded' || (savedSidebar === 'hidden' && localStorage.getItem('dispatch.ui.sidebar.last-visible') === 'expanded')) ? 'expanded' : 'compact'
 let compactMessages = localStorage.getItem('dispatch.ui.density') !== 'comfortable'
+if (inMessageWindow) { panels.messages = false; panels.agent = false; mailboxesVisible = false; mobilePanel = 'reader'; mobileReturnPanel = 'reader' }
 document.documentElement.classList.toggle('dispatch-compact', compactMessages)
 
 function usesMobilePanels(): boolean {
@@ -677,7 +697,7 @@ function renderPanels(): void {
     button.setAttribute('aria-pressed', String(panels[name]))
     button.classList.toggle('active', panels[name])
   })
-  localStorage.setItem('dispatch.panels.v1', JSON.stringify(panels))
+  if (!inMessageWindow) localStorage.setItem('dispatch.panels.v1', JSON.stringify(panels))
 }
 
 /** Dragging a divider this far past its panel's minimum width closes the panel instead of pinning it. */
@@ -870,6 +890,7 @@ function renderListRows(emptyMessage: string): void {
     if (conversation.accountLabel && accounts.length > 1) content.append(account)
     button.append(avatar, content)
     button.addEventListener('click', (event) => { void handleRowClick(conversation.id, event) })
+    button.addEventListener('dblclick', (event) => { if (!event.shiftKey && !event.metaKey && !event.ctrlKey) void openInMessageWindow(conversation.id) })
     button.addEventListener('dragstart', (event) => startConversationDrag(conversation.id, event))
     button.addEventListener('contextmenu', (event) => {
       event.preventDefault()
@@ -1120,6 +1141,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   selected = undefined
   activeDraft = undefined
   recoveryKey = undefined
+  syncDraftEditLock()
   draftEditSession += 1
   draftDirty = false
   if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
@@ -1153,6 +1175,12 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     try {
       const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId, summary.threadId)
       if (sequence !== selectionSequence || selectedConversationId !== id) return
+      if (await draftEditLocks.heldElsewhere({ gmailDraftId: draft.id })) {
+        if (sequence !== selectionSequence || selectedConversationId !== id) return
+        loading.className = 'alert alert-info m-4 dispatch-reader-load-error'
+        loading.textContent = 'This draft is open in another window.'
+        return
+      }
       showDraft(draft, false)
       if (draft.cachedAt) void refreshOpenedDraft(draft, sequence, draftEditRevision)
       try {
@@ -1179,7 +1207,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     return
   }
 
-  const key = `${offlineMode ? 'offline:' : ''}${mailbox}:${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
+  const key = conversationCacheKey(summary)
   let request = conversationCache.get(key)
   if (!request) {
     request = api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId, offlineMode, mailbox)
@@ -1309,6 +1337,9 @@ function applyLocalReadState(conversationId: string, unread: boolean): void {
   void refreshMailboxCounts()
 }
 
+function conversationCacheKey(summary: ConversationSummary): string {
+  return `${offlineMode ? 'offline:' : ''}${mailbox}:${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
+}
 function dropConversationCache(conversationId: string): void {
   const threadId = (selectedConversationId === conversationId ? selected?.threadId : undefined)
     ?? conversations.find((conversation) => conversation.id === conversationId)?.threadId
@@ -1371,7 +1402,36 @@ async function toggleReadState(): Promise<void> {
 
 function askCodex(): void {
   if (usesMobilePanels()) { mobilePanel = 'agent'; mobileReturnPanel = 'agent'; renderPanels() }
+  else if (!panels.agent) { panels.agent = true; renderPanels() }
   elements.prompt.focus()
+}
+
+/** Double-click or Open in New Window: the conversation opens in its own window, as in Mail. */
+async function openInMessageWindow(id: string): Promise<void> {
+  const from = mailbox
+  if (inMessageWindow || !canOpenMessageWindow(from)) return
+  // The open conversation may have left the list (moved elsewhere, or a refresh dropped it) and still opens.
+  const summary = listedConversations().find((item) => item.id === id) ?? (selectedSummary?.id === id ? selectedSummary : undefined)
+  if (!summary) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = 'This conversation is no longer listed. Refresh and try again.'
+    return
+  }
+  const target: MessageWindowTarget = { conversationId: summary.id, threadId: summary.threadId, mailbox: from, ...(summary.accountId ? { accountId: summary.accountId } : {}) }
+  try {
+    // Windows keep each other's open drafts safe with Web Locks (draft-edit-locks.ts).
+    if (!draftEditLocks.available) throw new Error('This browser cannot keep drafts safe across windows, so messages open here.')
+    if (isNativeShell(window as { isTauri?: unknown })) {
+      const invoke = nativeTauri?.core?.invoke
+      if (!invoke) throw new Error('Message windows are unavailable.')
+      await invoke('open_message_window', { ...target, title: summary.subject })
+    } else if (!window.open(`${location.pathname}?${messageWindowQuery(target)}`, `dispatch-message-${summary.id}`, 'popup,width=960,height=780')) {
+      throw new Error('The browser blocked the message window. Allow pop-ups for Dispatch.')
+    }
+  } catch (error) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = error instanceof Error ? error.message : String(error)
+  }
 }
 
 async function openThreadContextMenu(event: MouseEvent, conversationId: string): Promise<void> {
@@ -1391,10 +1451,11 @@ async function openThreadContextMenu(event: MouseEvent, conversationId: string):
   const summary = conversations.find((conversation) => conversation.id === conversationId)
   if (!summary) return
   const unread = acceptedReadState.get(conversationId) ?? summary.unread
-  const items = threadContextMenuItems({ mailbox, unread, hasAccountId: Boolean(summary.accountId) })
+  const items = threadContextMenuItems({ mailbox, unread, hasAccountId: Boolean(summary.accountId), openWindow: !inMessageWindow && canOpenMessageWindow(mailbox) })
   try {
     const chosen = await popupContextMenu(items, { clientX: event.clientX, clientY: event.clientY })
     if (!chosen) return
+    if (chosen === 'openWindow') { await openInMessageWindow(conversationId); return }
     if (chosen === 'markRead' || chosen === 'markUnread') {
       await applyReadState(chosen === 'markUnread', summary)
       return
@@ -1446,7 +1507,7 @@ async function runThreadContextCommand(id: string): Promise<void> {
 
 function prefetchConversations(exceptId: string): void {
   for (const summary of (searchView?.results.map(result => result.conversation) ?? conversations).filter((item) => item.id !== exceptId).slice(0, 3)) {
-    const key = `${offlineMode ? 'offline:' : ''}${mailbox}:${summary.accountId ?? selectedAccountId ?? ''}:${summary.threadId}`
+    const key = conversationCacheKey(summary)
     if (!conversationCache.has(key)) {
       const request = api.readConversation(summary.threadId, summary.accountId ?? selectedAccountId, offlineMode, mailbox)
       conversationCache.set(key, request)
@@ -1696,11 +1757,13 @@ function checkpointDraft(): boolean {
     // Reserve the identity for edits made while the initial Gmail create is
     // pending, without listing an untouched reply as an unsaved draft.
     recoveryKey ??= crypto.randomUUID()
+    syncDraftEditLock()
     try { recovery.remove(recoveryKey); renderRecoveryList() } catch (error) { draftError(error); return false }
     return true
   }
   try {
     recoveryKey ??= crypto.randomUUID()
+    syncDraftEditLock()
     const accountId = activeDraft.id ? activeDraft.accountId : elements.draftAccount.value || activeDraft.accountId
     recovery.save({ key: recoveryKey, updatedAt: new Date().toISOString(), revision: draftEditRevision,
       gmailThreadId: activeDraft.gmailThreadId ?? selected?.threadId,
@@ -1724,12 +1787,18 @@ function clearRecovery(key = recoveryKey): void {
   if (!key) return
   try { recovery.remove(key) } catch (error) { draftError(new Error(`Gmail action completed, but the local recovery copy could not be cleared: ${String(error)}`)); return }
   if (key === recoveryKey) recoveryKey = undefined
+  syncDraftEditLock()
   renderRecoveryList()
 }
 function renderRecoveryList(): void {
   if (mailbox === 'drafts') renderList()
 }
 async function restoreLocalDraft(key: string): Promise<void> {
+  if (await draftEditLocks.heldElsewhere({ localKey: key })) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = 'This draft is open in another window.'
+    return
+  }
   if (activeDraft && draftDirty) checkpointDraft()
   const sequence = ++selectionSequence
   let codexKey: CodexPaneKey = { kind: 'draft', draftKey: key }
@@ -1757,6 +1826,7 @@ async function restoreLocalDraft(key: string): Promise<void> {
     to: parseRecipientList(record.to).map(address => ({ name: address, address, initials: '@' })), cc: record.cc, bcc: record.bcc, subject: record.subject, bodyMarkdown: record.bodyMarkdown, bodyText: record.bodyMarkdown, bodyHtml: '', attachments: restored.attachments, state: 'draft' }, !record.gmailDraftId)
   draftSeed = undefined
   recoveryKey = key; draftDirty = true; draftEditRevision = Math.max(draftEditRevision, record.revision) + 1
+  syncDraftEditLock()
   elements.recoveryStatus.textContent = 'Saved · waiting to sync'
   if (restored.missing.length) draftError(new Error(`Reattach these files before saving: ${restored.missing.join(', ')}`))
   refreshPreview()
@@ -1876,6 +1946,7 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   elements.recoveryStatus.textContent = draft.cachedAt ? 'Checking Gmail…' : ''
   elements.recoveryStatus.title = draft.cachedAt ? `Last confirmed ${new Date(draft.cachedAt).toLocaleString()}` : ''
   freezeDraft(Boolean(draftSendFlight))
+  syncDraftEditLock()
   void recovery.cacheFiles(draft.attachments).then(() => { if (activeDraft?.id === draft.id && draftDirty) checkpointDraft() }).catch(draftError)
 }
 
@@ -1891,6 +1962,7 @@ function hideDraftEditor(): void {
   draftDiscarding = false
   activeDraft = undefined
   recoveryKey = undefined
+  syncDraftEditLock()
   elements.draft.hidden = true
   elements.sendConfirm.hidden = true
   elements.draftError.hidden = true
@@ -2036,6 +2108,7 @@ function openCompose(existingKey?: string): void {
   const draft: DraftProjection = { id: '', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: '', bodyMarkdown: '', bodyHtml: '', bodyText: '', attachments: [], state: 'draft', accountId }
   showDraft(draft, true)
   recoveryKey = codexKey.draftKey
+  syncDraftEditLock()
 }
 
 async function saveDraft(notify = true): Promise<void> {
@@ -2044,7 +2117,7 @@ async function saveDraft(notify = true): Promise<void> {
   const session = draftEditSession
   if (recoveryKey && backgroundDraftSaves.has(recoveryKey)) {
     const synced = await backgroundDraftSaves.get(recoveryKey)!.catch(() => undefined)
-    if (synced && session === draftEditSession && activeDraft && !activeDraft.id) activeDraft = { ...activeDraft, id: synced.id, gmailThreadId: synced.gmailThreadId, gmailMessageId: synced.gmailMessageId }
+    if (synced && session === draftEditSession && activeDraft && !activeDraft.id) { activeDraft = { ...activeDraft, id: synced.id, gmailThreadId: synced.gmailThreadId, gmailMessageId: synced.gmailMessageId }; syncDraftEditLock() }
   }
   while (draftSaveFlight) await draftSaveFlight
   if (draftDiscarding || !activeDraft || session !== draftEditSession) return
@@ -2077,6 +2150,7 @@ async function saveDraft(notify = true): Promise<void> {
     }
     if (session !== draftEditSession || !activeDraft || activeDraft.id !== draft.id || draftDiscarding) return savedDraft
     activeDraft = draftEditRevision === savingRevision ? savedDraft : { ...savedDraft, attachments: activeDraft.attachments }
+    syncDraftEditLock()
     elements.sendDraft.disabled = false
     elements.draftAccount.disabled = true
     elements.draftPreview.innerHTML = savedDraft.bodyHtml
@@ -2289,6 +2363,7 @@ async function applySelection(next: SelectionState): Promise<void> {
   selectedConversationId = undefined
   activeDraft = undefined
   recoveryKey = undefined
+  syncDraftEditLock()
   draftEditSession += 1
   draftDirty = false
   renderMultiSelection()
@@ -2452,7 +2527,76 @@ async function undoLastMove(): Promise<void> {
   }
 }
 
+function actionKeepsConversation(action: GmailConversationAction, from: GmailMailbox): boolean {
+  if (action === 'archive') return from === 'sent'
+  if (action === 'spam') return from === 'spam'
+  if (action === 'trash') return from === 'trash'
+  return from === 'inbox'
+}
+
+function conversationSummary(value: ConversationSummary): ConversationSummary {
+  const { id, threadId, accountId, accountLabel, latestMessageId, sender, subject, receivedAt, receivedLabel, receivedFullLabel, preview, unread, hasAttachment, messageCount, downloaded } = value
+  return { id, threadId, accountId, accountLabel, latestMessageId, sender, subject, receivedAt, receivedLabel, receivedFullLabel, preview, unread, hasAttachment, messageCount, downloaded }
+}
+
+async function closeThisWindow(): Promise<void> {
+  const current = (window as { __TAURI__?: { window?: { getCurrentWindow(): { close(): Promise<void> } } } }).__TAURI__?.window?.getCurrentWindow()
+  if (current) await current.close()
+  else window.close()
+}
+
+/** Like Mail: a message window closes once its conversation leaves the mailbox, and the main window offers Undo. */
+async function moveFromMessageWindow(action: GmailConversationAction): Promise<void> {
+  const summary = conversations[0]
+  if (!summary?.accountId) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = 'This message is still loading. Refresh it before moving it.'
+    return
+  }
+  const controls = [elements.archive, elements.spam, elements.trash, elements.moveInbox]
+  const wasDisabled = controls.map((control) => control.disabled)
+  controls.forEach((control) => { control.disabled = true })
+  try {
+    await api.mutateConversation(summary.threadId, summary.accountId, selected?.messages.map((message) => message.id) ?? [], action)
+  } catch {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = 'The change could not be saved. Try again.'
+    return
+  } finally {
+    controls.forEach((control, index) => { control.disabled = wasDisabled[index]! })
+  }
+  if (actionKeepsConversation(action, mailbox)) { await loadConversations(true); return }
+  const moved: MovedInMessageWindow = { type: 'moved', action, mailbox, summary: conversationSummary(summary) }
+  messageWindowChannel?.postMessage(moved)
+  try { await closeThisWindow() } catch (error) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = `Moved. This window could not close: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+/** A message window moved a conversation out of this window's mailbox: drop its row and offer Undo here. */
+function acceptMoveFromMessageWindow(moved: MovedInMessageWindow): void {
+  const listed = listedConversations()
+  const index = listed.findIndex((item) => item.id === moved.summary.id)
+  if (mailbox === moved.mailbox && index >= 0) {
+    conversations = conversations.filter((item) => item.id !== moved.summary.id)
+    if (searchView) searchView = { ...searchView, results: searchView.results.filter((item) => item.conversation.id !== moved.summary.id) }
+    if (selectedConversationId === moved.summary.id && !activeDraft) {
+      const next = listed[index + 1] ?? listed[index - 1]
+      selected = undefined; selectedSummary = undefined; selectedConversationId = undefined; selection = EMPTY_SELECTION
+      elements.reader.hidden = true
+      elements.readerEmpty.hidden = false
+      elements.readerEmpty.textContent = defaultEmptyListMessage()
+      if (next) void selectConversation(next.id)
+    } else selection = pruneSelection(selection, listedConversations().map((item) => item.id))
+    renderList()
+  }
+  showUndoToast({ action: moved.action, mailbox: moved.mailbox, rows: [{ summary: moved.summary, index: Math.max(0, index) }] })
+  void loadConversations(true)
+}
+
 async function mutateConversations(ids: readonly string[], action: GmailConversationAction): Promise<void> {
+  if (messageWindow) { await moveFromMessageWindow(action); return }
   const listedBefore = listedConversations()
   const targets = listedBefore.filter((conversation) => ids.includes(conversation.id))
   const writable = targets.filter((conversation) => conversation.accountId && conversation.threadId)
@@ -2465,12 +2609,7 @@ async function mutateConversations(ids: readonly string[], action: GmailConversa
   const loadedMessageIds = selected?.messages.map((message) => message.id) ?? []
   const originalMailbox = mailbox
   const originalIndexes = new Map(writable.map((conversation) => [conversation.id, listedBefore.findIndex((item) => item.id === conversation.id)]))
-  const remainsInMailbox = (value: GmailConversationAction): boolean => {
-    if (value === 'archive') return mailbox === 'sent'
-    if (value === 'spam') return mailbox === 'spam'
-    if (value === 'trash') return mailbox === 'trash'
-    return mailbox === 'inbox'
-  }
+  const remainsInMailbox = (value: GmailConversationAction): boolean => actionKeepsConversation(value, mailbox)
   const removing = !remainsInMailbox(action)
   if (removing) {
     conversationLoadSequence += 1
@@ -3164,6 +3303,7 @@ async function searchWithCodex(): Promise<void> {
   searchQuery = query
   selected = undefined; selectedConversationId = undefined; selectedAttachmentContext = undefined
   activeDraft = undefined; draftEditSession += 1; codexContextReady = false
+  syncDraftEditLock()
   elements.reader.hidden = true; elements.readerEmpty.hidden = false
   elements.readerEmpty.textContent = 'Search results will appear in the message list.'
   elements.mailError.hidden = true
@@ -3192,7 +3332,47 @@ async function searchWithCodex(): Promise<void> {
   }
 }
 
+/** Opens the one conversation a message window shows. */
+async function openMessageWindowConversation(target: MessageWindowTarget): Promise<void> {
+  mailbox = target.mailbox
+  renderMailbox()
+  const conversation = await api.readConversation(target.threadId, target.accountId, offlineMode, target.mailbox)
+  showMessageWindowConversation(conversation)
+  await selectConversation(conversation.id, { startReadDwell: true })
+}
+
+function showMessageWindowConversation(conversation: ConversationProjection): void {
+  conversations = [conversation]
+  conversationCache.set(conversationCacheKey(conversation), Promise.resolve(conversation))
+  document.title = conversation.subject || 'Message'
+}
+
+/** Checks the local mailbox index, and rereads the conversation only when a message arrived or left. */
+async function refreshMessageWindowConversation(target: MessageWindowTarget): Promise<void> {
+  const current = conversations[0]
+  if (!current) return
+  try {
+    const listed = await api.listConversations('all', target.accountId, undefined, '', target.mailbox, offlineMode)
+    elements.mailError.hidden = true
+    const summary = listed.conversations.find((item) => item.id === current.id)
+    if (!summary) return
+    if (summary.latestMessageId === current.latestMessageId && !readerNeedsRetry) {
+      conversations = [{ ...current, unread: summary.unread }]
+      syncSelectedReadState()
+      return
+    }
+    dropConversationCache(current.id)
+    const conversation = await api.readConversation(target.threadId, target.accountId, offlineMode, target.mailbox)
+    showMessageWindowConversation(conversation)
+    if (!activeDraft) await selectConversation(conversation.id, { refresh: true })
+  } catch (error) {
+    elements.mailError.hidden = false
+    elements.mailError.textContent = `This conversation could not refresh: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
 async function loadConversations(preserveSelection = false): Promise<void> {
+  if (messageWindow) { await refreshMessageWindowConversation(messageWindow); return }
   if (searchView) { renderList(); return }
   const loadSequence = ++conversationLoadSequence
   const cacheKey = `${offlineMode ? 'offline:' : ''}dispatch.conversations.v1:${selectedAccountId ?? 'all'}:${mailbox}:${mailState}:${searchQuery}`
@@ -3390,7 +3570,7 @@ async function refreshMailboxCounts(): Promise<void> {
 
 async function refreshSyncStatus(): Promise<void> {
   if (offlineMode) { elements.mailSource.textContent = 'Downloaded mail'; return }
-  void refreshMailboxCounts()
+  if (!inMessageWindow) void refreshMailboxCounts()
   try {
     const sync = await api.syncStatus()
     if (sync.mailRevision !== undefined && observedMailRevision !== sync.mailRevision) {
@@ -3471,7 +3651,8 @@ async function connectMail(): Promise<void> {
         return option
       }))
     }
-    await loadConversations()
+    if (messageWindow) await openMessageWindowConversation(messageWindow)
+    else await loadConversations()
     if (accounts.length > 0) startSyncStatusWatch()
   } catch (error) {
     if (isServiceUnreachable(error) && performance.now() < mailStartupGraceUntil) {
@@ -3518,6 +3699,7 @@ function setDownloadedMode(value: boolean): void {
   void connectMail()
 }
 function persistSidebar(): void {
+  if (inMessageWindow) return
   localStorage.setItem('dispatch.ui.sidebar', mailboxesVisible ? sidebarStyle : 'hidden')
   localStorage.setItem('dispatch.ui.sidebar.last-visible', sidebarStyle)
 }
@@ -3540,6 +3722,10 @@ app.querySelectorAll<HTMLButtonElement>('[data-sidebar-style]').forEach(button =
 // Appearance lives in the native View menu. The shell mirrors the preference
 // (menu check marks and window theme) and forwards menu clicks as an event.
 const nativeTauri = (window as { __TAURI__?: { core?: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> }; event?: { listen: (name: string, handler: (event: { payload: unknown }) => void) => Promise<() => void> } } }).__TAURI__
+// File → Open in New Window (⌘O) in the native menu opens the selected conversation.
+if (isNativeShell(window as { isTauri?: unknown }) && !inMessageWindow) {
+  void nativeTauri?.event?.listen('dispatch://open-message-window', () => { if (selectedConversationId) void openInMessageWindow(selectedConversationId) })
+}
 if (isNativeShell(window as { isTauri?: unknown })) {
   const reportAppearance = () => { nativeTauri?.core?.invoke('set_appearance', { preference: theme.preference }).catch(() => {}) }
   reportAppearance()
@@ -3593,14 +3779,28 @@ void refreshUtilities()
 window.setInterval(() => { if (offlineStatus?.download?.state === 'running' || app.querySelector<HTMLDialogElement>('[data-offline-dialog]')!.open) void refreshUtilities() }, 5000)
 
 async function start(): Promise<void> {
+  if (messageWindowAddressError) return
   await Promise.all([connectMail(), connectAgent()])
 }
+if (inMessageWindow) {
+  // Errors show above the message; the list pane that normally holds them is hidden.
+  elements.readerPanel.prepend(elements.mailError)
+  elements.readerEmpty.textContent = messageWindowAddressError ?? 'Loading message…'
+  document.title = 'Message'
+  window.addEventListener('pagehide', () => { messageWindowChannel?.postMessage({ type: 'closed' }) })
+} else messageWindowChannel?.addEventListener('message', (event) => {
+  // A closed message window may leave a local draft for this window to save.
+  if ((event.data as { type?: unknown } | null)?.type === 'closed') { scheduleDraftSync(0); return }
+  const moved = readMovedInMessageWindow(event.data)
+  if (moved) acceptMoveFromMessageWindow(moved)
+})
 
 window.addEventListener('pointerdown', unlockTone, { once: true })
 window.addEventListener('keydown', unlockTone, { once: true })
 let refreshRequest: Promise<void> | undefined
 let lastAutomaticRefresh = 0
 function requestMailRefresh(reason: 'manual' | 'wake' | 'foreground' = 'manual'): Promise<void> {
+  if (inMessageWindow && reason !== 'manual') return Promise.resolve()
   if (offlineMode || refreshRequest) return refreshRequest ?? Promise.resolve()
   if (reason === 'foreground' && Date.now() - lastAutomaticRefresh < 10_000) return Promise.resolve()
   const button = app.querySelector<HTMLButtonElement>('[data-refresh]')!
@@ -3898,7 +4098,7 @@ function showSetup(): void {
   elements.setupHeading.focus()
 }
 
-if (setupSeen(localStorage)) elements.setup.hidden = true
+if (setupSeen(localStorage) || inMessageWindow) elements.setup.hidden = true
 else showSetup()
 elements.setupContinue.addEventListener('click', hideSetup)
 elements.setupLater.addEventListener('click', hideSetup)
@@ -4042,7 +4242,7 @@ window.addEventListener('keydown', (event) => {
   }
   const command = resolved.command
   const hasThread = Boolean(selectedConversationId) || selection.ids.length > 1
-  if (typeof command === 'object') { switchMailbox(command.goto); return }
+  if (typeof command === 'object') { if (!inMessageWindow) switchMailbox(command.goto); return }
   switch (command) {
     case 'reply': if (selected) void openDraft(false).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))); return
     case 'replyAll': if (selected) void openDraft(true).catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))); return
@@ -4053,8 +4253,9 @@ window.addEventListener('keydown', (event) => {
     case 'toggleRead': if (selected && !elements.readState.hidden) void toggleReadState(); return
     case 'next': moveSelection(1, false); return
     case 'previous': moveSelection(-1, false); return
-    case 'compose': openCompose(); return
+    case 'compose': if (!inMessageWindow) openCompose(); return
     case 'ask': if (selected) askCodex(); return
+    case 'openWindow': if (selectedConversationId) void openInMessageWindow(selectedConversationId); return
     case 'help': shortcutsDialog.showModal(); return
   }
 })

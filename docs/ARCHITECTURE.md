@@ -99,7 +99,15 @@ Web owns the unsaved editor outbox as presentation state: a synchronous localSto
 
 The shell creates the mail window with navigation and new-window guards. It keeps the configured local mail entry point loaded and routes HTTP(S) pages to a separate native window. That window contains a local `browser.html` toolbar, owned by web, and a separate remote child webview. Tauri's multiwebview API is enabled for this composition. Window resize events keep the remote view below the toolbar.
 
-Only `main` may request a new web link. Only the local `link-toolbar` webview may invoke browser state/action commands; `link-content` has no capabilities. Command handlers additionally validate caller label and local URL. The remote view rejects navigation into local application documents. macOS Back and Forward use WKWebView history through native calls. The shell's Navigate menu provides controls independently of either page. Closing the viewer focuses the existing mail window and does not recreate it or restart services.
+Only mail views (`main` and message windows) may request a new web link. Only the local `link-toolbar` webview may invoke browser state/action commands; `link-content` has no capabilities. Command handlers additionally validate caller label and local URL. The remote view rejects navigation into local application documents. macOS Back and Forward use WKWebView history through native calls. The shell's Navigate menu provides controls independently of either page. Closing the viewer focuses the existing mail window and does not recreate it or restart services.
+
+### Message windows
+
+Double-clicking a conversation, or choosing Open in New Window, opens it in its own native window, as in Mail. Only `main` may call `open_message_window`. The shell validates and URL-encodes the conversation, thread, account and mailbox into the local page's query. It gives the window the mail window's chrome and navigation guards, and focuses an existing window for the same conversation instead of opening another. Message windows (`message-*`) have their own capability: drag, zoom and close themselves, open web links, context menus and appearance; no Dock badge and no further message windows. Closing the mail window closes its message windows.
+
+The web client reads the query and runs in message-window mode. It shows the reader only (Codex opens on demand), never saves the main window's layout, and does not start Gmail refreshes, folder counts, the Dock badge or first-run setup. It follows its conversation through the mail service's local index and rereads it only when a message arrives or leaves. Drafts are not opened in message windows. Moving the conversation out of its mailbox closes the window; the main window drops the row and offers Undo, told over a `BroadcastChannel`.
+
+Every window shares local draft recovery. The window editing a draft holds a Web Lock for the draft's local recovery key and Gmail draft id. Other windows do not open that draft, and background sync skips its local copy until the lock is released, so an older checkpoint cannot overwrite newer edits in Gmail. Only the main window saves drafts that no window is editing.
 
 ### Native service lifetime
 

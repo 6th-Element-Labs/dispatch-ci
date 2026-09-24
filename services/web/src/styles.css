@@ -16,6 +16,14 @@ button { cursor: pointer; }
 .dispatch-toolbar-reader { flex: 1; }
 .dispatch-toolbar-agent { border-right: 0; }
 .dispatch-toolbar-spacer { flex: 1; }
+/* A message window shows one conversation: no folders, list or search. Codex opens on demand. */
+.dispatch-message-window .dispatch-toolbar-messages > :not(.dispatch-toolbar-spacer),
+.dispatch-message-window .dispatch-toolbar-reader > :not(.dispatch-toolbar-spacer),
+.dispatch-message-window [data-panel="messages"] { display: none !important; }
+.dispatch-message-window .dispatch-toolbar-messages { border-right: 0; }
+.dispatch-message-window .dispatch-reader { display: flex; flex-direction: column; }
+.dispatch-message-window .dispatch-reader > [data-reader] { flex: 1; min-height: 0; height: auto; }
+.dispatch-message-window .dispatch-reader > [data-reader-empty] { flex: 1; }
 .btn-icon { min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
 .btn-icon > .ti { font-size: 1.25rem; line-height: 1; }
 .dispatch-folder { position: relative; }

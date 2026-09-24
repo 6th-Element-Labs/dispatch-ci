@@ -38,7 +38,9 @@ async function stubAgent(page: import('@playwright/test').Page, bindings: Record
   await page.route(/http:\/\/127\.0\.0\.1:8412\/v1\/events\?threadId=.*/, (route) => route.fulfill({ contentType: 'text/event-stream', body: '' }))
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }) => { await routeMailFixtures(page) })
+
+async function routeMailFixtures(page: Page) {
   // Unrouted calls fail as they do in CI, so a run never reaches the mail or agent service installed on this Mac.
   await page.route(/^http:\/\/127\.0\.0\.1:(8411|8412)\//, route => route.abort('connectionrefused'))
   await page.addInitScript(() => { localStorage.setItem('dispatch.setup.seen', '1') })
@@ -69,7 +71,7 @@ test.beforeEach(async ({ page }) => {
   })
   await page.route('http://127.0.0.1:8412/ready', (route) => route.fulfill({ status: 503, json: { status: 'not_ready' } }))
   await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/recipients/, (route) => route.fulfill({ json: { recipients: [] } }))
-})
+}
 
 test('captures the public synthetic-mail screenshot', async ({ page }) => {
   test.skip(process.env.CAPTURE_PUBLIC_SCREENSHOT !== '1', 'Run only when refreshing the public README screenshot')
@@ -3220,4 +3222,128 @@ test('provider HTML follows the dark theme with rewritten colours, layouts keep 
   await expect(layout).toHaveAttribute('data-paper', 'true')
   await page.emulateMedia({ colorScheme: 'light' })
   await expect(layout).toHaveAttribute('data-paper', 'false')
+})
+
+/** A second window in the same browser context, with the same fixtures. `window.close()` is recorded, not performed. */
+async function openMessageWindowPage(page: Page, query: string, routes?: (target: Page) => Promise<void>): Promise<Page> {
+  const popup = await page.context().newPage()
+  await routeMailFixtures(popup)
+  if (routes) await routes(popup)
+  await popup.addInitScript(() => { const win = window as unknown as { __closed: boolean }; win.__closed = false; window.close = () => { win.__closed = true } })
+  await popup.goto(`/?${query}`)
+  return popup
+}
+
+/** Gmail-shaped rows for the demo messages, so moves and drafts have an account. */
+function gmailMail(state: { archived?: boolean; draftStatus?: number } = {}) {
+  const gmail = conversations.map((conversation) => ({ ...conversation, id: `gmail:one:${conversation.threadId}`, accountId: 'one', unread: false }))
+  return async (target: Page) => {
+    await target.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+    await target.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'gmail', conversations: state.archived ? gmail.slice(1) : gmail, nextCursor: null, total: gmail.length } }))
+    await target.route(/8411\/v1\/conversations\/[^/?]+\/actions/, async route => { state.archived = true; await route.fulfill({ status: 202, json: {} }) })
+    await target.route(/8411\/v1\/conversations\/[^/?]+(\?|$)/, route => route.fulfill({ json: { conversation: { ...gmail[0]!, source: 'gmail', messages: [{ ...messages[0]!, source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Berth confirmed.</p>' }, attachments: [] }] } } }))
+    await target.route('http://127.0.0.1:8411/v1/drafts', route => route.request().method() === 'POST' && state.draftStatus
+      ? route.fulfill({ status: state.draftStatus, json: { error: 'gmail_backoff', detail: 'Gmail is rate limiting this account. Retry after 2099-01-01T00:00:00.000Z' } })
+      : route.fulfill({ status: 201, json: { draft: { id: 'd-main', accountId: 'one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyMarkdown: 'Saved', bodyText: 'Saved', bodyHtml: '<p>Saved</p>', attachments: [], state: 'draft' } } }))
+  }
+}
+
+test('double-click or Open in New Window opens a conversation in its own window', async ({ page }) => {
+  await page.addInitScript(() => {
+    const opened: unknown[] = []
+    ;(window as unknown as { __opened: unknown[] }).__opened = opened
+    window.open = ((url?: string | URL, target?: string, features?: string) => { opened.push({ url: String(url), target, features }); return {} as Window }) as typeof window.open
+  })
+  await page.goto('/')
+  await page.locator('[data-conversation-id="demo:t1"]').dblclick()
+  const opened = () => page.evaluate(() => (window as unknown as { __opened: unknown[] }).__opened)
+  await expect.poll(opened).toEqual([{ url: '/?window=message&conversation=demo%3At1&thread=t1&mailbox=inbox', target: 'dispatch-message-demo:t1', features: 'popup,width=960,height=780' }])
+  await chooseThreadMenu(page, 'Open in New Window')
+  await expect.poll(async () => (await opened()).length).toBe(2)
+  // ⌘O opens the selected conversation, like File → Open in New Window in the app.
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await page.locator('[data-conversation-id="demo:t2"]').press('Meta+o')
+  await expect.poll(async () => (await opened()).at(-1)).toMatchObject({ url: '/?window=message&conversation=demo%3At2&thread=t2&mailbox=inbox' })
+  // Drafts are edited where they are listed.
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-conversation-id="demo:t2"]').dblclick()
+  await page.waitForTimeout(300)
+  expect((await opened()).length).toBe(3)
+})
+
+test('a message window shows only its conversation, with the reader tools and Codex on demand', async ({ page }) => {
+  const popup = await openMessageWindowPage(page, 'window=message&conversation=demo%3At1&thread=t1&mailbox=inbox')
+  await expect(popup.getByRole('heading', { name: 'Opua berth confirmation' })).toBeVisible()
+  await expect(popup).toHaveTitle('Opua berth confirmation')
+  for (const hidden of ['.dispatch-messages', '.dispatch-rail', '.dispatch-agent', '[data-search]', '[data-compose]']) await expect(popup.locator(hidden)).toBeHidden()
+  for (const name of ['Reply', 'Reply all', 'Forward', 'Archive']) await expect(popup.getByRole('button', { name, exact: true })).toBeVisible()
+  await popup.getByRole('button', { name: 'Reply', exact: true }).click()
+  await expect(popup.getByRole('textbox', { name: 'Draft body' })).toBeVisible()
+  await popup.locator('[data-ask]').click()
+  await expect(popup.locator('.dispatch-agent')).toBeVisible()
+  // The main window's layout is its own.
+  expect(await popup.evaluate(() => localStorage.getItem('dispatch.panels.v1'))).toBeNull()
+})
+
+test('a message window with an incomplete address says so instead of opening mail', async ({ page }) => {
+  const popup = await openMessageWindowPage(page, 'window=message&conversation=demo%3At1&mailbox=inbox')
+  await expect(popup.locator('[data-reader-empty]')).toHaveText('This message window does not name a conversation.')
+  await expect(popup.getByRole('heading', { name: 'Opua berth confirmation' })).toHaveCount(0)
+})
+
+test('archiving in a message window closes it, and the main window drops the row and offers Undo', async ({ page }) => {
+  const state = { archived: false }
+  await gmailMail(state)(page)
+  await page.goto('/')
+  await expect(page.locator('[data-conversation-id="gmail:one:t1"]')).toBeVisible()
+  const popup = await openMessageWindowPage(page, 'window=message&conversation=gmail%3Aone%3At1&thread=t1&mailbox=inbox&account=one', gmailMail(state))
+  await expect(popup.getByText('Berth confirmed.')).toBeVisible()
+  await popup.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect.poll(() => popup.evaluate(() => (window as unknown as { __closed: boolean }).__closed)).toBe(true)
+  expect(state.archived).toBe(true)
+  await expect(page.locator('[data-conversation-id="gmail:one:t1"]')).toHaveCount(0)
+  await expect(page.locator('[data-undo-toast]')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeVisible()
+})
+
+test('a draft open in a message window is neither opened nor saved by the main window until that window closes', async ({ page }) => {
+  // The message window's own saves wait on Gmail, so its local copy stays pending.
+  const popup = await openMessageWindowPage(page, 'window=message&conversation=gmail%3Aone%3At1&thread=t1&mailbox=inbox&account=one', gmailMail({ draftStatus: 502 }))
+  await popup.getByRole('button', { name: 'Reply', exact: true }).click()
+  await popup.getByRole('textbox', { name: 'Draft body' }).fill('Typed in the message window')
+  await expect(popup.locator('[data-recovery-status]')).toHaveText('Saved · waiting to sync')
+
+  const mainSaves: string[] = []
+  page.on('request', request => { if (/\/v1\/drafts$/.test(new URL(request.url()).pathname) && ['POST', 'PUT'].includes(request.method())) mainSaves.push(request.method()) })
+  await gmailMail()(page)
+  await page.goto('/')
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  const row = page.locator('[data-local-draft-key]')
+  await expect(row).toHaveCount(1)
+  await row.click()
+  await expect(page.locator('[data-mail-error]')).toHaveText('This draft is open in another window.')
+  await expect(page.getByRole('textbox', { name: 'Draft body' })).toBeHidden()
+  expect(mainSaves).toEqual([])
+
+  // Once the message window lets go, the main window saves the local copy.
+  await popup.close()
+  await expect.poll(() => mainSaves.length, { timeout: 15_000 }).toBeGreaterThan(0)
+})
+
+test('a message window shows a new reply once the mailbox index lists it', async ({ page }) => {
+  const state = { revision: 1, latest: 'm1' }
+  const row = { ...conversations[0]!, id: 'gmail:one:t1', accountId: 'one', unread: false }
+  const first = { ...messages[0]!, source: 'gmail', body: { kind: 'sanitized-html', content: '<p>Berth confirmed.</p>' }, attachments: [] }
+  const reply = { ...first, id: 'm9', receivedAt: '2026-09-04T10:15:00+12:00', receivedLabel: 'Sep 4, 10:15 AM', receivedFullLabel: 'September 4, 2026 at 10:15 AM', body: { kind: 'sanitized-html', content: '<p>See you on the 4th.</p>' } }
+  const popup = await openMessageWindowPage(page, 'window=message&conversation=gmail%3Aone%3At1&thread=t1&mailbox=inbox&account=one', async (target) => {
+    await gmailMail()(target)
+    await target.route('http://127.0.0.1:8411/v1/sync/status', route => route.fulfill({ json: { sync: { state: 'ready', startedAt: '2026-09-04T09:00:00+12:00', completedAt: '2026-09-04T09:01:00+12:00', error: null, messageCount: 2, mailRevision: state.revision } } }))
+    await target.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'gmail', conversations: [{ ...row, latestMessageId: state.latest }], nextCursor: null, total: 1 } }))
+    await target.route(/8411\/v1\/conversations\/[^/?]+(\?|$)/, route => route.fulfill({ json: { conversation: { ...row, latestMessageId: state.latest, messageCount: state.latest === 'm1' ? 1 : 2, source: 'gmail', messages: state.latest === 'm1' ? [first] : [first, reply] } } }))
+  })
+  await expect(popup.getByText('Berth confirmed.')).toBeVisible()
+  state.revision = 2
+  state.latest = 'm9'
+  await expect(popup.getByText('See you on the 4th.')).toBeVisible({ timeout: 10_000 })
 })
