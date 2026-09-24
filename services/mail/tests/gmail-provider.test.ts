@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,17 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
   directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }))
 })
+
+/** Serves the ID-only search from a fake's detailed search: the same page, as message IDs. */
+function answerIdsFromDetails(request: IncomingMessage, response: ServerResponse): void {
+  if (request.url !== '/v1/connectors/gmail/search') return
+  request.url = '/v1/connectors/gmail/search-messages'
+  const end = response.end.bind(response) as (body?: string) => ServerResponse
+  response.end = ((body?: string) => {
+    const content = JSON.parse(body || '{}').structuredContent
+    return end(Array.isArray(content?.emails) ? JSON.stringify({ structuredContent: { message_ids: content.emails.map((email: { id: string }) => email.id), next_page_token: content.next_page_token ?? '' } }) : body)
+  }) as typeof response.end
+}
 
 const gmailMessage = {
   structuredContent: {
@@ -243,6 +254,7 @@ describe('GmailConnectorProvider', () => {
     let failSearch = false
     let failInventory = false
     const server = createServer(async (request, response) => {
+      answerIdsFromDetails(request, response)
       response.setHeader('content-type', 'application/json')
       if (request.url === '/v1/connectors/gmail') {
         if (failInventory) {
@@ -260,7 +272,8 @@ describe('GmailConnectorProvider', () => {
         for await (const chunk of request) chunks.push(Buffer.from(chunk))
         const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { labelIds?: string[]; nextPageToken?: string }
         requests.push(payload)
-        const unread = payload.labelIds?.includes('UNREAD') === true && payload.labelIds.includes('INBOX') !== true
+        // m3 is archived and unread: Gmail lists it under Unread and under the label-less Archive query.
+        const unread = (payload.labelIds?.includes('UNREAD') === true && payload.labelIds.includes('INBOX') !== true) || payload.labelIds?.length === 0
         const inbox = payload.labelIds?.includes('INBOX') === true
         const second = payload.nextPageToken === 'page-2'
         const emails = unread
@@ -289,7 +302,8 @@ describe('GmailConnectorProvider', () => {
     expect(requests.filter((request) => request.labelIds?.includes('UNREAD') === true && request.labelIds.includes('INBOX') !== true)).toHaveLength(1)
     expect(requests.some((request) => request.nextPageToken === 'page-2')).toBe(true)
     await provider.refreshNow()
-    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 7 })
+    // A refresh after a full sync lists IDs and reads only what the index does not match: one page here.
+    expect(provider.syncStatus()).toMatchObject({ state: 'ready', messageCount: 3, pagesFetched: 1 })
     expect(await provider.listUnifiedConversations('all')).toHaveLength(2)
     expect(await provider.listUnifiedConversations('unread')).toHaveLength(0)
     failSearch = true
@@ -587,6 +601,7 @@ describe('GmailConnectorProvider', () => {
   it('keeps folder rows when archiving and refreshes the index after draft writes', async () => {
     const searches: Array<{ query?: string; labelIds?: string[] }> = []
     const server = createServer(async (request, response) => {
+      answerIdsFromDetails(request, response)
       response.setHeader('content-type', 'application/json')
       if (request.url === '/v1/connectors/gmail') {
         return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', connectorId: 'gmail', name: 'Work', email: 'work@example.com' }] }))
@@ -710,6 +725,7 @@ describe('stale rows', () => {
   it('drops a draft from the Drafts list once Gmail stops returning it, even when the mailbox is too big to sync completely', async () => {
     let draftsPresent = true
     const server = createServer(async (request, response) => {
+      answerIdsFromDetails(request, response)
       response.setHeader('content-type', 'application/json')
       const chunks: Buffer[] = []
       for await (const chunk of request) chunks.push(Buffer.from(chunk))

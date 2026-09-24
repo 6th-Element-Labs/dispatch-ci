@@ -81,8 +81,25 @@ export const INDEX_STREAMS = [
   { flag: 'archive', query: '-in:inbox -in:sent -in:drafts -in:spam -in:trash', labelIds: [] },
 ] as const satisfies readonly { flag: IndexStreamFlag; query: string; labelIds: readonly string[] }[]
 
-/** Mail read on another device changes labels, not IDs, so copies age out: Inbox and Unread soon, other folders after six times as long. */
-const QUICK_AGING_STREAMS: ReadonlySet<IndexStreamFlag> = new Set(['inbox', 'unread'])
+/**
+ * What each refresh checks by ID: every folder, plus Inbox's unread mail, which keeps Inbox read
+ * state right past the first page of Unread. `scope` limits that check to Inbox rows.
+ */
+type HeadStream = { key: string; flag: IndexStreamFlag; query: string; labelIds: readonly string[]; scope?: IndexStreamFlag }
+const HEAD_STREAMS: readonly HeadStream[] = [
+  ...INDEX_STREAMS.slice(0, 2).map(stream => ({ ...stream, key: stream.flag })),
+  { key: 'inboxUnread', flag: 'unread', scope: 'inbox', query: '-in:spam -in:trash', labelIds: ['INBOX', 'UNREAD'] },
+  ...INDEX_STREAMS.slice(2).map(stream => ({ ...stream, key: stream.flag })),
+]
+
+/** Whether a message read in detail belongs in this stream, by its labels. */
+function inHeadStream(message: IndexedGmailMessage, stream: HeadStream): boolean {
+  const flags: Record<IndexStreamFlag, boolean> = { inbox: message.inInbox, unread: message.unread, sent: message.inSent, drafts: message.inDrafts, spam: message.inSpam, trash: message.inTrash, archive: message.inArchive }
+  return flags[stream.flag] && (!stream.scope || flags[stream.scope])
+}
+
+/** A rate-limited account waits a minute, then twice as long after each further limit, up to this. */
+const MAX_RATE_LIMIT_PAUSE_MS = 30 * 60_000
 
 /** How Gmail and the connector spell a rate limit (Gmail also says userRateLimitExceeded). */
 const RATE_LIMIT = /RATE_LIMITED|ratelimitexceeded|RESOURCE_EXHAUSTED|HTTP status: 429/i
@@ -366,6 +383,8 @@ export class GmailConnectorProvider {
   #syncTimer: ReturnType<typeof setInterval> | undefined
   #refreshTimer: ReturnType<typeof setInterval> | undefined
   #retryTimer: ReturnType<typeof setTimeout> | undefined
+  #launchTimer: ReturnType<typeof setTimeout> | undefined
+  readonly #launchSyncDelayMs: number
   #stopped = false
   readonly #drafts = new Map<string, DraftProjection>()
   readonly #draftCreates = new Map<string, Promise<DraftProjection>>()
@@ -384,18 +403,21 @@ export class GmailConnectorProvider {
   #actionTimer: ReturnType<typeof setInterval> | undefined
   #syncProgress: GmailSyncProgress = { accountCount: 0, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
   /**
-   * The message IDs at the top of each folder when its details were last read, by account and stream.
-   * Gmail rate limits an account that re-reads every folder's messages each minute, so a refresh
-   * lists IDs first (one cheap call) and reads details only for a folder that changed or aged out.
+   * Each folder's first-page message IDs as last applied to the index, by account and stream.
+   * Gmail rate limits an account that re-reads messages, so a refresh lists IDs (one cheap call)
+   * and reads only messages the index lacks, does not show in that folder, or has a local change for.
    */
-  readonly #heads = new Map<string, Map<IndexStreamFlag, { ids: string; readAt: number }>>()
+  readonly #heads = new Map<string, Map<string, { ids: string[]; more: boolean; recheck?: boolean }>>()
   /** Bumped when an account's copies are invalidated, so a read already in flight does not store an old copy. */
   readonly #headsEpoch = new Map<string, number>()
-  readonly #headsMaxAgeMs: number
+  /** Rate limits in a row per account; the pause doubles with each one. */
+  readonly #rateLimitStreak = new Map<string, number>()
+  /** Each account's drafts list as last seen, so the web reloads Drafts only when it changed. */
+  readonly #draftLists = new Map<string, string>()
 
   constructor(
     agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412',
-    options: { localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number; draftListLagMs?: number; headsMaxAgeMs?: number } = {},
+    options: { localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number; draftListLagMs?: number; launchSyncDelayMs?: number } = {},
   ) {
     this.#agentBase = agentBase
     const indexPath = options.indexPath === false
@@ -407,8 +429,7 @@ export class GmailConnectorProvider {
     this.#download = this.#local.download()
     this.#syncIntervalMs = options.syncIntervalMs ?? 6 * 60 * 60 * 1000
     this.#refreshIntervalMs = options.refreshIntervalMs ?? 60_000
-    // Label-only changes (mail read on another device) leave a folder's IDs unchanged; Inbox and Unread show them within this long.
-    this.#headsMaxAgeMs = options.headsMaxAgeMs ?? 10 * 60_000
+    this.#launchSyncDelayMs = options.launchSyncDelayMs ?? 60_000
   }
 
   startBackgroundSync(): void {
@@ -420,9 +441,14 @@ export class GmailConnectorProvider {
     void this.flushActions()
     this.#actionTimer = setInterval(() => { void this.flushActions() }, 5_000)
     this.#actionTimer.unref()
-    if (this.#index.count() > 0) this.requestRefresh('startup')
-    else this.#scheduleSync(0, true)
-    this.#syncTimer = setInterval(() => { this.#scheduleSync(0, true) }, this.#syncIntervalMs)
+    if (this.#index.count() > 0) {
+      this.requestRefresh('startup')
+      // Folder departures are judged against the last list seen, which a new process lacks: one cheap
+      // ID-only full sync after launch settles what changed while Dispatch was not running.
+      this.#launchTimer = setTimeout(() => { void this.#fullSyncWhenIdle() }, this.#launchSyncDelayMs)
+      this.#launchTimer.unref()
+    } else this.#scheduleSync(0, true)
+    this.#syncTimer = setInterval(() => { void this.#fullSyncWhenIdle() }, this.#syncIntervalMs)
     this.#syncTimer.unref()
     this.#refreshTimer = setInterval(() => { this.requestRefresh('periodic') }, this.#refreshIntervalMs)
     this.#refreshTimer.unref()
@@ -435,6 +461,7 @@ export class GmailConnectorProvider {
     if (this.#wakeTimer) clearInterval(this.#wakeTimer)
     if (this.#actionTimer) clearInterval(this.#actionTimer)
     if (this.#syncTimer) clearInterval(this.#syncTimer)
+    if (this.#launchTimer) clearTimeout(this.#launchTimer)
     if (this.#refreshTimer) clearInterval(this.#refreshTimer)
     if (this.#retryTimer) clearTimeout(this.#retryTimer)
     this.#syncTimer = undefined
@@ -457,6 +484,13 @@ export class GmailConnectorProvider {
     return this.#synchronize(100, true)
   }
 
+  /** A full sync after whatever sync is running: joining a quick check would skip it until the next interval. */
+  async #fullSyncWhenIdle(): Promise<void> {
+    while (this.#syncPromise) await this.#syncPromise.catch(() => undefined)
+    if (this.#stopped) return
+    await this.syncNow().catch(() => undefined)
+  }
+
   requestRefresh(reason = 'manual'): void {
     if (this.#stopped) return
     const syncAge = Date.now() - this.#syncStarted
@@ -466,7 +500,8 @@ export class GmailConnectorProvider {
       if (this.#syncPromise && this.#wakeController === this.#syncController && now >= this.#lastWakeRefresh && now - this.#lastWakeRefresh < 15_000) return
       this.#lastWakeRefresh = now
     }
-    if (this.#syncPromise && (reason === 'wake' || reason === 'manual' || (reason !== 'periodic' && this.#syncKind === 'full') || syncAge > 180_000)) {
+    // A full sync takes minutes and must be allowed to finish; a stuck quick check is replaced.
+    if (this.#syncPromise && (reason === 'wake' || reason === 'manual' || (this.#syncKind === 'heads' && syncAge > 180_000))) {
       this.#syncController?.abort()
       this.#syncPromise = undefined
     }
@@ -494,7 +529,10 @@ export class GmailConnectorProvider {
     return flight
   }
 
-  /** `details` reads every folder's messages even when its IDs are unchanged (the user asked for a refresh). */
+  /**
+   * Checks every folder's first page by ID and reads only messages the index needs. An account the
+   * index has never seen, or `details` (the user pressed Refresh), reads every folder's first page.
+   */
   async refreshNow(options: { details?: boolean } = {}): Promise<void> {
     if (!this.#index) return
     if (this.#syncPromise) return this.#syncPromise
@@ -502,53 +540,78 @@ export class GmailConnectorProvider {
       const startedAt = new Date().toISOString()
       const runId = `${startedAt}:${randomUUID()}`
       this.#index!.beginSync(startedAt)
-      try {
-        const accounts = await this.accounts()
-        signal.throwIfAborted()
-        if (accounts.length === 0) throw new Error('Cannot refresh Gmail: no connector accounts are available')
-        this.#index!.replaceAccounts(accounts, startedAt)
-        this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
-        const pages = await Promise.allSettled(accounts.map(async (account) => {
-          const streams = []
-          for (const stream of INDEX_STREAMS) {
-            const unchanged = !options.details && await this.#headUnchanged(account, stream)
-            signal.throwIfAborted()
-            if (unchanged) continue
-            const epoch = this.#headsEpoch.get(account.id) ?? 0
-            const readAt = Date.now()
+      const accounts = await this.accounts()
+      signal.throwIfAborted()
+      if (accounts.length === 0) throw new Error('Cannot refresh Gmail: no connector accounts are available')
+      this.#index!.replaceAccounts(accounts, startedAt)
+      this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
+      const results = await Promise.allSettled(accounts.map(async (account) => {
+        const fresh = options.details === true || this.#index!.count(account.id) === 0
+        // Every message read in this pass, merged: each folder's page adds to it and none undoes another.
+        const readThisPass: IndexedGmailMessage[] = []
+        for (const stream of HEAD_STREAMS) {
+          // Reading Inbox and Unread in detail already carries Inbox read state.
+          if (fresh && stream.scope) continue
+          const epoch = this.#headsEpoch.get(account.id) ?? 0
+          let ids: string[]
+          let nextPageToken: string
+          let read: readonly IndexedGmailMessage[] | undefined
+          // Messages read earlier in this pass: their labels may have changed since.
+          const readBefore = readThisPass.slice()
+          if (fresh) {
             const page = await this.#searchPage(account, 50, stream.query, stream.labelIds, '')
             signal.throwIfAborted()
-            streams.push({ stream, page })
-            this.#index!.replaceAccount(account.id, mergeIndexedMessages(streams.flatMap(item => item.page.messages)), runId, false)
-            if (!page.nextPageToken) this.#index!.reconcileStream(account.id, stream.flag, page.messages.map(message => message.id), runId)
-            this.#rememberHead(account.id, stream.flag, page.messages.map(message => message.id), page.nextPageToken, epoch, readAt)
-            this.#syncProgress.pagesFetched++; this.#syncProgress.fetchedMessages += page.messages.length
-            this.#mailRevision++
+            read = page.messages
+            ids = page.messages.map(message => message.id)
+            nextPageToken = page.nextPageToken
+          } else {
+            ({ ids, nextPageToken } = await this.#listIds(account, stream, ''))
+            signal.throwIfAborted()
+            const known = this.#heads.get(account.id)?.get(stream.key)
+            // Unchanged IDs need nothing, unless a message read earlier in this pass disagrees with the list:
+            // it changed between that read and this list, so the folder is judged again.
+            const listedNow = new Set(ids)
+            const disagrees = readBefore.some(message => inHeadStream(message, stream) !== listedNow.has(message.id) && (listedNow.has(message.id) || !nextPageToken))
+            if (known && !known.recheck && !disagrees && headKey(known.ids, known.more ? 'more' : '') === headKey(ids, nextPageToken)) continue
+            const needed = this.#needsDetails(account.id, stream.flag, ids).filter(position => !readThisPass.some(message => message.id === ids[position]))
+            if (needed.length) {
+              read = (await this.#searchPage(account, Math.max(...needed) + 1, stream.query, stream.labelIds, '')).messages
+              signal.throwIfAborted()
+            }
           }
-          this.#syncProgress.accountsCompleted++
-          return { account, streams, messages: mergeIndexedMessages(streams.flatMap((item) => item.page.messages)) }
-        }))
-        signal.throwIfAborted()
-        for (const result of pages) {
-          if (result.status !== 'fulfilled') continue
-          const page = result.value
-          this.#syncProgress.currentAccount = page.account.name
-          this.#index!.replaceAccount(page.account.id, page.messages, runId, false)
-          for (const item of page.streams) {
-            if (!item.page.nextPageToken) this.#index!.reconcileStream(page.account.id, item.stream.flag, item.page.messages.map((message) => message.id), runId)
+          if (read) {
+            readThisPass.push(...read)
+            this.#index!.replaceAccount(account.id, mergeIndexedMessages(readThisPass), runId, false)
+            this.#syncProgress.pagesFetched++; this.#syncProgress.fetchedMessages += read.length
           }
+          // Messages that left the folder lose it. A complete list says so directly. A first page with more
+          // behind it says so only for a message that was on the previous page, is missing now, and sat
+          // high enough that the new arrivals could not have pushed it off the page: Gmail's own order,
+          // not message dates, which senders can skew. Past the page, only a full sync can tell.
+          const previous = this.#heads.get(account.id)?.get(stream.key)
+          const listed = new Set(ids)
+          const arrivals = ids.filter(id => !previous?.ids.includes(id)).length
+          const { cleared, conflicts: left } = !nextPageToken
+            ? this.#index!.reconcileStream(account.id, stream.flag, ids, runId, { scope: stream.scope, remove: false })
+            : this.#index!.clearFlagFor(account.id, stream.flag, (previous?.ids ?? []).filter((id, position) => !listed.has(id) && position + arrivals < ids.length), runId, stream.scope)
+          if (read?.length || cleared) this.#mailRevision++
+          // A message that changed between an earlier read and this list, leaving or entering it: keep the
+          // list but judge the folder again next time, when that row is no longer this pass's.
+          const entered = readBefore.filter(message => listed.has(message.id) && !inHeadStream(message, stream)).length
+          this.#rememberHead(account.id, stream.key, ids, nextPageToken, epoch, left + entered > 0)
         }
-        this.#syncProgress.currentAccount = null
-        this.#index!.pruneAccounts(accounts.map((account) => account.id))
-        this.#local.pruneAccounts(accounts.map((account) => account.id))
-        for (const accountId of this.#heads.keys()) if (!accounts.some(account => account.id === accountId)) this.#heads.delete(accountId)
-        // Name each failed account: one rate-limited account must not read as every account being stale.
-        const failed = pages.flatMap((result, index) => result.status === 'rejected' ? [`${accounts[index]!.email || accounts[index]!.name}: ${String(result.reason)}`] : [])
-        if (failed.length) throw new Error(failed.join('; '))
-        this.#index!.completeSync(new Date().toISOString(), true)
-      } catch (error) {
-        throw error
-      }
+        // Every folder has been seen: rows left in none are gone from Gmail (deleted, Trash emptied).
+        if (this.#index!.removeFolderless(account.id)) this.#mailRevision++
+        this.#syncProgress.accountsCompleted++
+      }))
+      signal.throwIfAborted()
+      this.#index!.pruneAccounts(accounts.map((account) => account.id))
+      this.#local.pruneAccounts(accounts.map((account) => account.id))
+      for (const accountId of this.#heads.keys()) if (!accounts.some(account => account.id === accountId)) this.#heads.delete(accountId)
+      // Name each failed account: one rate-limited account must not read as every account being stale.
+      const failed = results.flatMap((result, index) => result.status === 'rejected' ? [`${accounts[index]!.email || accounts[index]!.name}: ${String(result.reason)}`] : [])
+      if (failed.length) throw new Error(failed.join('; '))
+      this.#index!.completeSync(new Date().toISOString(), true)
     })
   }
 
@@ -691,6 +754,11 @@ export class GmailConnectorProvider {
       index.replaceAccount(account.id, rows, runId, false)
       index.reconcileStream(account.id, 'drafts', summaries.map((row) => row.messageId), runId)
       this.#local.pruneDrafts(account.id, summaries.map(row => row.draftId), requestedAt)
+      // The web reloads Drafts on a new revision and that reload lists drafts again: bump it only
+      // when Gmail's drafts list changed, or the two keep each other going.
+      const listed = summaries.map(row => `${row.draftId}:${row.messageId}`).sort().join(',')
+      if (this.#draftLists.get(account.id) === listed) return
+      this.#draftLists.set(account.id, listed)
       this.#draftsRevision = Math.max(Date.now(), this.#draftsRevision + 1)
     }))
   }
@@ -775,27 +843,36 @@ export class GmailConnectorProvider {
     return { messages, nextPageToken: text(content.next_page_token) }
   }
 
-  /** One ID-only list (no message reads) tells whether a folder's first page changed since its details were read. */
-  async #headUnchanged(account: GmailAccountProjection, stream: (typeof INDEX_STREAMS)[number]): Promise<boolean> {
-    const known = this.#heads.get(account.id)?.get(stream.flag)
-    if (!known || Date.now() - known.readAt >= this.#headsMaxAgeMs * (QUICK_AGING_STREAMS.has(stream.flag) ? 1 : 6)) return false
+  /** One page of a folder's message IDs: a single Gmail list call, no message reads. */
+  async #listIds(account: GmailAccountProjection, stream: { query: string; labelIds: readonly string[] }, pageToken: string): Promise<{ ids: string[]; nextPageToken: string }> {
     const content = structured(await this.#post('/v1/connectors/gmail/search', {
-      linkId: account.id, query: stream.query, labelIds: stream.labelIds, maxResults: 50, nextPageToken: '',
+      linkId: account.id, query: stream.query, labelIds: stream.labelIds, maxResults: 50, nextPageToken: pageToken,
     }))
     const ids = content.message_ids
     if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) throw new Error(`Gmail ID search for ${account.email || account.name} returned no message_ids`)
-    return headKey(ids as string[], text(content.next_page_token)) === known.ids
+    return { ids: ids as string[], nextPageToken: text(content.next_page_token) }
   }
 
-  #rememberHead(accountId: string, flag: IndexStreamFlag, ids: readonly string[], nextPageToken: string, epoch: number, readAt: number): void {
+  /** Positions of listed messages the index needs read: unknown, not shown in this folder, or with a local change awaiting Gmail. */
+  #needsDetails(accountId: string, flag: IndexStreamFlag, ids: readonly string[]): number[] {
+    const rows = this.#index!.rowsByIds(accountId, ids)
+    return ids.flatMap((id, position) => {
+      const row = rows.get(id)
+      return !row || !row.flags[flag] || row.pending ? [position] : []
+    })
+  }
+
+  #rememberHead(accountId: string, key: string, ids: readonly string[], nextPageToken: string, epoch: number, recheck = false): void {
     if ((this.#headsEpoch.get(accountId) ?? 0) !== epoch) return
-    const heads = this.#heads.get(accountId) ?? new Map<IndexStreamFlag, { ids: string; readAt: number }>()
-    heads.set(flag, { ids: headKey(ids, nextPageToken), readAt })
+    const heads = this.#heads.get(accountId) ?? new Map<string, { ids: string[]; more: boolean; recheck?: boolean }>()
+    heads.set(key, { ids: [...ids], more: Boolean(nextPageToken), recheck })
     this.#heads.set(accountId, heads)
   }
 
+  /** Makes the next refresh judge this folder again. Its last list stays: departures are read against it. */
   #forgetHead(accountId: string, flag: IndexStreamFlag): void {
-    this.#heads.get(accountId)?.delete(flag)
+    const known = this.#heads.get(accountId)?.get(flag)
+    if (known) known.recheck = true
     this.#headsEpoch.set(accountId, (this.#headsEpoch.get(accountId) ?? 0) + 1)
   }
 
@@ -850,6 +927,9 @@ export class GmailConnectorProvider {
         const completion: boolean[] = []
         for (const account of accounts) {
           this.#syncProgress.currentAccount = account.name
+          // An account the index has never seen is read in full. Otherwise every folder is listed by
+          // ID and only messages the index lacks, or does not show in that folder, are read.
+          const fresh = this.#index!.count(account.id) === 0
           const messages: IndexedGmailMessage[] = []
           const completeStreams: Array<{ flag: IndexStreamFlag; ids: string[] }> = []
           let complete = true
@@ -857,18 +937,33 @@ export class GmailConnectorProvider {
             let token = ''
             const streamIds: string[] = []
             for (let pageNumber = 0; pageNumber < maxPagesPerStream; pageNumber += 1) {
-              const page = await this.#searchPage(account, 50, stream.query, stream.labelIds, token)
+              let ids: string[]
+              let next: string
+              if (fresh) {
+                const page = await this.#searchPage(account, 50, stream.query, stream.labelIds, token)
+                messages.push(...page.messages)
+                this.#syncProgress.fetchedMessages += page.messages.length
+                ids = page.messages.map((message) => message.id)
+                next = page.nextPageToken
+              } else {
+                ({ ids, nextPageToken: next } = await this.#listIds(account, stream, token))
+                const readIds = new Set(messages.map((message) => message.id))
+                const needed = this.#needsDetails(account.id, stream.flag, ids).filter(position => !readIds.has(ids[position]!))
+                if (needed.length) {
+                  const page = await this.#searchPage(account, Math.max(...needed) + 1, stream.query, stream.labelIds, token)
+                  messages.push(...page.messages)
+                  this.#syncProgress.fetchedMessages += page.messages.length
+                }
+              }
               signal.throwIfAborted()
               this.#syncProgress.pagesFetched += 1
-              this.#syncProgress.fetchedMessages += page.messages.length
-              messages.push(...page.messages)
-              streamIds.push(...page.messages.map((message) => message.id))
-              if (!page.nextPageToken) {
+              streamIds.push(...ids)
+              if (!next) {
                 token = ''
                 break
               }
-              if (page.nextPageToken === token) throw new Error(`Gmail pagination repeated a page token for account ${account.name}`)
-              token = page.nextPageToken
+              if (next === token) throw new Error(`Gmail pagination repeated a page token for account ${account.name}`)
+              token = next
             }
             if (token) {
               complete = false
@@ -877,9 +972,11 @@ export class GmailConnectorProvider {
               completeStreams.push({ flag: stream.flag, ids: streamIds })
             }
           }
-          this.#index!.replaceAccount(account.id, mergeIndexedMessages(messages), runId, complete)
+          // Rows gone from every complete folder are deleted by reconciling each folder below.
+          this.#index!.replaceAccount(account.id, mergeIndexedMessages(messages), runId, fresh && complete)
           this.#mailRevision++
           for (const stream of completeStreams) this.#index!.reconcileStream(account.id, stream.flag, stream.ids, runId)
+          if (complete) this.#index!.removeFolderless(account.id)
           completion.push(complete)
           this.#syncProgress.accountsCompleted += 1
         }
@@ -1006,7 +1103,11 @@ export class GmailConnectorProvider {
           if (/"success":false/.test(reply)) {
             // A label-change reply holds only message IDs and results, so it is safe to read for a rate limit.
             if (RATE_LIMIT.test(reply)) throw Object.assign(new Error(`Gmail is rate limiting this account. Retry after ${new Date(this.#pauseAccount(job.accountId, reply)).toISOString()}`), { code: 'gmail_backoff' })
-            throw new Error('Gmail did not accept every message change')
+            // A message Gmail no longer has (deleted, Trash emptied) has nothing left to change.
+            const failures = array(structured(value).responses).filter(item => record(item)?.success === false)
+            if (!failures.length || !failures.every(item => /not.?found|\b404\b/i.test(JSON.stringify(item)))) throw new Error('Gmail did not accept every message change')
+            if (this.#stopped) return
+            this.#index!.forgetMessages(job.accountId, failures.map(item => text(record(item)?.message_id)).filter(Boolean))
           }
           if (this.#stopped) return
           this.#index!.finishAction(job.id)
@@ -1481,13 +1582,21 @@ export class GmailConnectorProvider {
     }
     if (!response.ok) throw new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`)
     if (record(value)?.isError || structured(value).error) throw Object.assign(new Error(`Gmail connector rejected the request: ${JSON.stringify(value)}`), { connectorPayload: value })
+    if (!array(content.responses).some(item => record(item)?.success === false)) this.#rateLimitStreak.delete(linkId)
     return value
   }
 
-  /** Blocks calls for the account until Gmail's Retry-After (at least a minute), and remembers it across restarts. */
+  /**
+   * Blocks calls for the account until Gmail's Retry-After, and remembers it across restarts. Without
+   * one, the pause starts at a minute and doubles with each limit in a row, up to half an hour, so an
+   * account Gmail keeps limiting is not asked again every minute.
+   */
   #pauseAccount(linkId: string, failure: string): number {
+    const streak = (this.#rateLimitStreak.get(linkId) ?? 0) + 1
+    this.#rateLimitStreak.set(linkId, streak)
+    const wait = Math.min(60_000 * 2 ** (streak - 1), MAX_RATE_LIMIT_PAUSE_MS)
     const named = Date.parse(/Retry after (\d{4}-\d\d-\d\dT[\d:.]+Z)/.exec(failure)?.[1] ?? '')
-    const retryAt = Number.isFinite(named) ? Math.max(Date.now() + 60_000, named) : Date.now() + 60_000
+    const retryAt = Number.isFinite(named) ? Math.max(Date.now() + wait, named) : Date.now() + wait
     this.#gmailBackoff.set(linkId, retryAt)
     if (!this.#stopped) this.#local.putRetryAfter(linkId, retryAt)
     return retryAt

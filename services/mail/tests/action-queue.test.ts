@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { GmailIndex, type IndexedGmailMessage } from '../src/gmail-index.js'
 import { GmailConnectorProvider } from '../src/gmail-provider.js'
 import { LocalMailStore } from '../src/local-mail-store.js'
@@ -132,6 +132,89 @@ it('pauses the account when Gmail rate limits individual messages in a label cha
     await provider.flushActions(); await provider.flushActions()
     expect(modifies).toBe(1)
   } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(directory, { recursive: true, force: true }) }
+})
+
+it('waits longer each time Gmail keeps rate limiting an account, and starts over after a success', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  let limited = true
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* drain the request */ }
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail') { res.end(JSON.stringify({ accounts: [{ linkId: 'one', name: 'Test', email: 'test@example.com' }] })); return }
+    res.end(JSON.stringify(limited
+      ? { isError: true, structuredContent: { error: 'GmailApiError: Failed to search emails', error_code: 'RATE_LIMITED', error_data: { reason: 'rateLimitExceeded' } } }
+      : { structuredContent: { emails: [], next_page_token: '' } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const p = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false })
+  const pause = async () => {
+    const started = Date.now()
+    await expect(p.listMessages('one')).rejects.toMatchObject({ code: 'gmail_backoff' })
+    const until = Date.parse(/Retry after (\S+?Z)/.exec(String(await p.listMessages('one').catch(error => error)))![1]!)
+    vi.setSystemTime(until + 1)
+    return Math.round((until - started) / 60_000)
+  }
+  try {
+    expect([await pause(), await pause(), await pause(), await pause()]).toEqual([1, 2, 4, 8])
+    for (let i = 0; i < 4; i += 1) await pause()
+    expect(await pause()).toBe(30)
+    limited = false
+    await expect(p.listMessages('one')).resolves.toEqual([])
+    limited = true
+    expect(await pause()).toBe(1)
+  } finally { vi.useRealTimers(); p.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
+})
+
+it('keeps doubling the wait when Gmail rate limits label changes message by message', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const directory = mkdtempSync(join(tmpdir(), 'dispatch-batch-backoff-'))
+  let modifies = 0
+  const server = createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk
+    const input = JSON.parse(body || '{}')
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail') { res.end(JSON.stringify({ accounts: [{ linkId: 'one', name: 'Test', email: 'test@example.com' }] })); return }
+    if (req.url === '/v1/connectors/gmail/modify') { modifies++; res.end(JSON.stringify({ structuredContent: { responses: input.messageIds.map((id: string) => ({ message_id: id, success: false, error: 'RATE_LIMITED' })) } })); return }
+    res.end(JSON.stringify({ structuredContent: { emails: [{ id: 'm1', thread_id: 't1', from_: 'a@example.com', subject: 'Hi', snippet: '', labels: ['INBOX', 'UNREAD'], email_ts: '2026-09-12T00:00:00Z' }], next_page_token: '' } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: join(directory, 'gmail.sqlite') })
+  const waited: number[] = []
+  try {
+    await provider.refreshNow()
+    await provider.setConversationUnread('one', 't1', false, ['m1'])
+    for (let i = 0; i < 3; i += 1) {
+      const before = modifies; const started = Date.now()
+      await provider.flushActions()
+      expect(modifies).toBe(before + 1)
+      const until = Date.parse(/Retry after (\S+?Z)/.exec(String(await provider.readMessage('one', 'm1').catch(error => error)))![1]!)
+      waited.push(Math.round((until - started) / 60_000))
+      vi.setSystemTime(until + 1)
+    }
+    expect(waited).toEqual([1, 2, 4])
+  } finally { vi.useRealTimers(); provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(directory, { recursive: true, force: true }) }
+})
+
+it('tells the web about drafts only when Gmail\'s drafts list changed', async () => {
+  let drafts = [{ draft_id: 'd1', message_id: 'm1', thread_id: 't1', from_: 'test@example.com', subject: 'One', labels: ['DRAFT'], email_ts: '2026-09-11T01:00:00Z' }]
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* drain */ }
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail') { res.end(JSON.stringify({ accounts: [{ linkId: 'one', name: 'Test', email: 'test@example.com' }] })); return }
+    if (req.url === '/v1/connectors/gmail/drafts/list') { res.end(JSON.stringify({ structuredContent: { drafts } })); return }
+    res.statusCode = 404; res.end('{}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: ':memory:' })
+  try {
+    await provider.refreshDrafts(undefined, true)
+    const first = provider.syncStatus()?.draftsRevision
+    await provider.refreshDrafts(undefined, true)
+    expect(provider.syncStatus()?.draftsRevision).toBe(first)
+    drafts = [...drafts, { ...drafts[0]!, draft_id: 'd2', message_id: 'm2', subject: 'Two' }]
+    await provider.refreshDrafts(undefined, true)
+    expect(provider.syncStatus()?.draftsRevision).toBeGreaterThan(first!)
+  } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
 })
 
 it('accepts folder changes during a provider failure and replays them in order after restart', async () => {
