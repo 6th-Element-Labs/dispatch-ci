@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { join, resolve, isAbsolute, basename, extname } from 'node:path'
 import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage, type IndexStreamFlag } from './gmail-index.js'
 import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MailboxCounts, MessageProjection, MessageSummary } from './model.js'
-import { decodeRawMessage, findPart, parseMime } from './mime-part.js'
+import { decodeRawMessage, decodeText, findPart, isUnicodeCharset, mimeCharset, parseMime, partAt, UnsupportedCharsetError } from './mime-part.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -242,14 +242,50 @@ function parts(payload: UnknownRecord): readonly UnknownRecord[] {
   return children
 }
 
-function body(payload: UnknownRecord): MessageProjection['body'] {
+/** The part the reader shows: the first HTML part with content, else the first plain-text part, else the message body. */
+function bodySource(payload: UnknownRecord): { kind: MessageProjection['body']['kind']; part: UnknownRecord; content: string } | undefined {
   const all = [payload, ...parts(payload)]
   const html = all.find((part) => text(part.mime_type).toLowerCase() === 'text/html')
-  const plain = all.find((part) => text(part.mime_type).toLowerCase() === 'text/plain')
   const htmlContent = text(record(html?.body)?.content)
-  if (htmlContent) return { kind: 'sanitized-html', content: htmlContent }
-  const plainContent = text(record(plain?.body)?.content) || text(record(payload.body)?.content)
-  return { kind: 'plain-text', content: plainContent || 'This message has no readable text body.' }
+  if (html && htmlContent) return { kind: 'sanitized-html', part: html, content: htmlContent }
+  const plain = all.find((part) => text(part.mime_type).toLowerCase() === 'text/plain')
+  const plainContent = text(record(plain?.body)?.content)
+  if (plain && plainContent) return { kind: 'plain-text', part: plain, content: plainContent }
+  const messageContent = text(record(payload.body)?.content)
+  return messageContent ? { kind: 'plain-text', part: payload, content: messageContent } : undefined
+}
+
+function body(payload: UnknownRecord): MessageProjection['body'] {
+  const source = bodySource(payload)
+  return source ? { kind: source.kind, content: source.content } : { kind: 'plain-text', content: 'This message has no readable text body.' }
+}
+
+/**
+ * The Gmail connector returns text in charsets other than UTF-8 wrongly: it
+ * reads the part in its charset, then treats that UTF-8 as Latin-1, so a
+ * Windows-1252 "é" arrives as "Ã©". Such a body part must be decoded from the
+ * raw message instead. Returns that part, or undefined when the connector's
+ * text is usable.
+ */
+export function bodyPartNeedingRawDecode(value: unknown): { partId: string; kind: MessageProjection['body']['kind'] } | undefined {
+  const source = bodySource(record(structured(value).payload) ?? {})
+  if (!source || isUnicodeCharset(mimeCharset(headers(source.part).get('content-type') ?? ''))) return undefined
+  return { partId: text(source.part.part_id), kind: source.kind }
+}
+
+/** A projection with a (re)decoded body; HTML bodies point inline images at the mail service. */
+function withBody(projection: MessageProjection, value: MessageProjection['body'], account?: GmailAccountProjection): MessageProjection {
+  if (value.kind !== 'sanitized-html' || !account?.id) return { ...projection, body: value }
+  return { ...projection, body: { kind: 'sanitized-html', content: rewriteCidImages(value.content, projection.id, account.id, projection.attachments) } }
+}
+
+async function mapLimit<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const index = next++; results[index] = await work(items[index]!) }
+  }))
+  return results
 }
 
 function partContentId(part: UnknownRecord): string {
@@ -327,16 +363,7 @@ export function projectGmailMessage(value: unknown, includeBody: boolean, accoun
     accountLabel: account?.email || account?.name,
   }
   if (!projection.id || !projection.threadId) throw new Error('Gmail response is missing stable message identity')
-  if (projection.body.kind === 'sanitized-html' && account?.id) {
-    return {
-      ...projection,
-      body: {
-        kind: 'sanitized-html',
-        content: rewriteCidImages(projection.body.content, projection.id, account.id, projection.attachments),
-      },
-    }
-  }
-  return projection
+  return withBody(projection, projection.body, account)
 }
 
 export function projectGmailSearchEmail(value: unknown, account: GmailAccountProjection): MessageSummary {
@@ -994,7 +1021,31 @@ export class GmailConnectorProvider {
   async readMessage(accountId: string, messageId: string): Promise<MessageProjection> {
     const account = await this.#account(accountId)
     const value = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'full' })
-    return projectGmailMessage(value, true, account)
+    return this.#projectMessage(value, accountId, account)
+  }
+
+  /** Projects a full Gmail message with a correctly decoded body (see bodyPartNeedingRawDecode). */
+  async #projectMessage(value: unknown, accountId: string, account?: GmailAccountProjection): Promise<MessageProjection> {
+    const projection = projectGmailMessage(value, true, account)
+    return bodyPartNeedingRawDecode(value) ? withBody(projection, await this.#messageBody(value, accountId), account) : projection
+  }
+
+  /** The body the connector returned, or the same part decoded from the raw message by its declared charset. */
+  async #messageBody(value: unknown, accountId: string): Promise<MessageProjection['body']> {
+    const needed = bodyPartNeedingRawDecode(value)
+    if (!needed) return body(record(structured(value).payload) ?? {})
+    const messageId = text(structured(value).id)
+    const raw = text(structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'raw' })).raw)
+    if (!raw) throw new Error(`Gmail returned no raw copy of message ${messageId}`)
+    const part = partAt(parseMime(decodeRawMessage(raw)), needed.partId)
+    if (!part || part.children.length) throw new Error(`Gmail message ${messageId} has no text part ${JSON.stringify(needed.partId)} in its raw copy`)
+    try {
+      return { kind: needed.kind, content: decodeText(part) }
+    } catch (error) {
+      // An unknown charset is reported in place of the body, never guessed.
+      if (error instanceof UnsupportedCharsetError) return { kind: 'plain-text', content: error.message }
+      throw error
+    }
   }
 
   async readConversation(accountId: string, threadId: string, downloadedOnly = false, mailbox: GmailMailbox = 'inbox'): Promise<ConversationProjection> {
@@ -1007,7 +1058,8 @@ export class GmailConnectorProvider {
       const account = await this.#account(accountId)
       const value = await this.#post('/v1/connectors/gmail/read-thread', { linkId: accountId, threadId, maxMessages: 100 })
       const thread = structured(value)
-      const messages = array(thread.messages).map((message) => projectGmailMessage({ structuredContent: message }, true, account))
+      // Raw reads for non-UTF-8 bodies run a few at a time, so a long thread does not burst Gmail.
+      const messages = await mapLimit(array(thread.messages), 4, (message) => this.#projectMessage({ structuredContent: message }, accountId, account))
       if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
       const conversation = projectConversation(messages, 'gmail')
       const cachedAt = this.#stopped ? new Date().toISOString() : this.#local.cache(conversation)
@@ -1236,8 +1288,10 @@ export class GmailConnectorProvider {
     const summary = await this.#findGmailDraft(accountId, item => item.draftId === draftId)
     if (!summary) throw new Error('The draft no longer exists. Nothing was attached.')
     const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: summary.messageId, format: 'full' })
-    const message = projectGmailMessage(raw, true, await this.#account(accountId))
-    const originalBody = body(record(structured(raw).payload) ?? {})
+    const account = await this.#account(accountId)
+    // The saved draft keeps its own cid: references, so its body is decoded but not rewritten.
+    const originalBody = await this.#messageBody(raw, accountId)
+    const message = withBody(projectGmailMessage(raw, true, account), originalBody, account)
     const existing = await this.#resolveDraftAttachments(accountId, draftAttachmentsFromMessage(message))
     const attachments = [...existing, ...additions]
     if (attachments.reduce((total, file) => total + Buffer.from(file.contentBase64!, 'base64').length, 0) > 25_000_000) throw new Error('Combined attachments exceed 25 MB. Nothing was attached.')

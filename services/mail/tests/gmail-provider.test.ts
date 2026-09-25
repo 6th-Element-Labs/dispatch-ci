@@ -798,3 +798,77 @@ describe('live drafts', () => {
     expect(await provider.listMailboxConversations!('drafts', 'all')).toEqual([])
   })
 })
+
+describe('message bodies in charsets other than UTF-8', () => {
+  // The Outlook invite that showed "RÃ©union": Windows-1252, quoted-printable.
+  const outlookRaw = [
+    'From: "Laurent, Arnaud" <arnaud@example.com>',
+    'Subject: Taikun update',
+    'Content-Type: multipart/alternative; boundary="alt"',
+    '',
+    '--alt',
+    'Content-Type: text/plain; charset=WINDOWS-1252',
+    'Content-Transfer-Encoding: quoted-printable',
+    '',
+    'R=E9union Microsoft Teams',
+    '--alt',
+    'Content-Type: text/html; charset=WINDOWS-1252',
+    'Content-Transfer-Encoding: quoted-printable',
+    '',
+    '<p>R=E9union Microsoft Teams</p><p>=C9tats-Unis</p>',
+    '--alt--',
+    '',
+  ].join('\r\n')
+  // What the connector returns for it: the Windows-1252 text re-read as Latin-1.
+  const connectorMessage = (charset: string) => ({
+    id: 'm-fr', thread_id: 't-fr', label_ids: ['INBOX'], snippet: 'Réunion Microsoft Teams', internal_date: '1788486120000',
+    payload: {
+      part_id: '', mime_type: 'multipart/alternative',
+      headers: [{ name: 'From', value: '"Laurent, Arnaud" <arnaud@example.com>' }, { name: 'Subject', value: 'Taikun update' }],
+      parts: [
+        { part_id: '0', mime_type: 'text/plain', filename: '', headers: [{ name: 'Content-Type', value: `text/plain; charset=${charset}` }], body: { content: 'RÃ©union Microsoft Teams' } },
+        { part_id: '1', mime_type: 'text/html', filename: '', headers: [{ name: 'Content-Type', value: `text/html; charset=${charset}` }], body: { content: '<p>RÃ©union Microsoft Teams</p><p>Ã‰tats-Unis</p>' } },
+      ],
+    },
+  })
+  async function connector(charset: string, raw = outlookRaw) {
+    const formats: string[] = []
+    const server = createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json')
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as { format?: string } : {}
+      if (request.url === '/v1/connectors/gmail') return response.end(JSON.stringify({ accounts: [{ linkId: 'link-one', name: 'Work', email: 'work@example.com' }] }))
+      if (request.url === '/v1/connectors/gmail/read-thread') return response.end(JSON.stringify({ structuredContent: { messages: [connectorMessage(charset)] } }))
+      if (request.url === '/v1/connectors/gmail/read') {
+        formats.push(body.format ?? '')
+        return response.end(JSON.stringify({ structuredContent: body.format === 'raw' ? { raw: Buffer.from(raw, 'latin1').toString('base64url') } : connectorMessage(charset) }))
+      }
+      response.statusCode = 404
+      response.end('{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    return { provider: new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false }), formats }
+  }
+
+  it('decodes a Windows-1252 body from the raw message instead of the connector text', async () => {
+    const { provider, formats } = await connector('WINDOWS-1252')
+    const conversation = await provider.readConversation('link-one', 't-fr')
+    expect(conversation.messages[0]!.body).toEqual({ kind: 'sanitized-html', content: '<p>Réunion Microsoft Teams</p><p>États-Unis</p>' })
+    expect(formats).toEqual(['raw'])
+    expect((await provider.readMessage('link-one', 'm-fr')).body.content).toBe('<p>Réunion Microsoft Teams</p><p>États-Unis</p>')
+  })
+
+  it('keeps the connector text for UTF-8 bodies, without a raw read', async () => {
+    const { provider, formats } = await connector('UTF-8')
+    await provider.readConversation('link-one', 't-fr')
+    expect(formats).toEqual([])
+  })
+
+  it('names a charset it cannot read in place of the body instead of guessing', async () => {
+    const { provider } = await connector('x-made-up', outlookRaw.replaceAll('WINDOWS-1252', 'x-made-up'))
+    const conversation = await provider.readConversation('link-one', 't-fr')
+    expect(conversation.messages[0]!.body).toEqual({ kind: 'plain-text', content: 'This message uses a character set Dispatch cannot read: x-made-up.' })
+  })
+})
