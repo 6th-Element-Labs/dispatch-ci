@@ -30,6 +30,19 @@ async function start(options: Parameters<typeof createMailServer>[1] = {}, provi
 }
 
 describe('dispatch-mail', () => {
+  it('exposes direct sync connection status and rejects sign-in commands from foreign origins', async () => {
+    const connect = vi.fn(async () => ({ authUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=fixture' }))
+    const base = await start({}, {
+      directSyncStatus: async () => ({ configured: true, accounts: [{ accountId: 'one', email: 'work@example.com', state: 'connector' }] }),
+      connectDirectSync: connect,
+    })
+    expect(await (await fetch(`${base}/v1/gmail-sync`)).json()).toMatchObject({ directSync: { configured: true } })
+    const foreign = await fetch(`${base}/v1/gmail-sync`, { method: 'POST', headers: { origin: 'https://untrusted.example', 'content-type': 'application/json' }, body: JSON.stringify({ accountId: 'one' }) })
+    expect(foreign.status).toBe(403); expect(connect).not.toHaveBeenCalled()
+    expect((await fetch(`${base}/v1/gmail-sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(400)
+    const result = await fetch(`${base}/v1/gmail-sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId: 'one' }) })
+    expect(result.status).toBe(200); expect(connect).toHaveBeenCalledWith('one')
+  })
   it('suggests demo recipients from known senders', async () => {
     const base = await start()
     const value = await (await fetch(`${base}/v1/recipients?q=ana`)).json() as { recipients: Array<{ address: string }> }

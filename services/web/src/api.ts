@@ -36,6 +36,16 @@ function durableDraftFields(fields: Record<string, unknown>): Record<string, unk
 }
 
 export const api = {
+  async directSyncStatus(): Promise<import('./contracts.js').GmailDirectSyncStatus> {
+    const result = await request<{ directSync: import('./contracts.js').GmailDirectSyncStatus }>(`${MAIL}/v1/gmail-sync`)
+    return result.directSync
+  },
+  async connectDirectSync(accountId: string): Promise<{ authUrl: string }> {
+    return request(`${MAIL}/v1/gmail-sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId }) })
+  },
+  async useConnectorSync(accountId: string): Promise<void> {
+    await request(`${MAIL}/v1/gmail-sync?account=${encodeURIComponent(accountId)}`, { method: 'DELETE' })
+  },
   async reconnectAccount(): Promise<{ authUrl: string }> {
     return request(`${AGENT}/v1/account/reconnect`, { method: 'POST' })
   },

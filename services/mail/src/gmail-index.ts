@@ -150,6 +150,8 @@ export class GmailIndex {
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
       CREATE TABLE IF NOT EXISTS gmail_action_overlay (key TEXT PRIMARY KEY, action TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS gmail_history_checkpoint (account_id TEXT PRIMARY KEY, email TEXT NOT NULL, history_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS gmail_direct_sync_disabled (account_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS gmail_unread_overlay (key TEXT PRIMARY KEY, unread INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS gmail_action_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, payload TEXT NOT NULL, error TEXT);
       CREATE TABLE IF NOT EXISTS gmail_messages (
@@ -205,7 +207,26 @@ export class GmailIndex {
     for (const row of this.#db.prepare('SELECT CAST(key AS BLOB) AS key,unread FROM gmail_unread_overlay').all()) this.#acceptedUnread.set(Buffer.from(row.key as Uint8Array).toString(), row.unread === 1)
   }
 
-  replaceAccount(accountId: string, messages: readonly IndexedGmailMessage[], runId: string, complete: boolean): void {
+  historyCheckpoint(accountId: string, email: string): string | undefined {
+    const row = this.#db.prepare('SELECT email, history_id FROM gmail_history_checkpoint WHERE account_id=?').get(accountId);
+    return row && String(row.email).toLowerCase() === email.toLowerCase() ? String(row.history_id) : undefined
+  }
+  directSyncDisabled(accountId: string): boolean { return !!this.#db.prepare('SELECT 1 FROM gmail_direct_sync_disabled WHERE account_id=?').get(accountId) }
+  setDirectSyncEnabled(accountId: string, enabled: boolean): void {
+    if (enabled) this.#db.prepare('DELETE FROM gmail_direct_sync_disabled WHERE account_id=?').run(accountId)
+    else this.#db.prepare('INSERT OR IGNORE INTO gmail_direct_sync_disabled VALUES (?)').run(accountId)
+  }
+
+  /** Rows, confirmed deletions, overlays, and the next checkpoint are one durable commit. */
+  applyHistory(accountId: string, email: string, messages: readonly IndexedGmailMessage[], deletedIds: readonly string[], historyId: string, complete = false): void {
+    if (!email || !/^[1-9]\d*$/.test(historyId)) throw new Error('Invalid Gmail history checkpoint')
+    if (messages.some(message => message.accountId !== accountId)) throw new Error('Gmail history contains another account')
+    this.replaceAccount(accountId, messages, `history:${historyId}`, complete, { email, historyId, deletedIds })
+  }
+
+  replaceAccount(accountId: string, messages: readonly IndexedGmailMessage[], runId: string, complete: boolean, history?: { email: string; historyId: string; deletedIds: readonly string[] }): void {
+    const unreadBefore = new Map(this.#acceptedUnread)
+    const actionsBefore = new Map(this.#acceptedActions)
     this.#db.exec('BEGIN IMMEDIATE')
     try {
       const upsert = this.#db.prepare(`
@@ -237,9 +258,29 @@ export class GmailIndex {
       if (complete) this.#db.prepare('DELETE FROM gmail_messages WHERE account_id = ? AND sync_run_id <> ? AND NOT EXISTS (SELECT 1 FROM gmail_action_overlay WHERE key=account_id || char(0) || id) AND NOT EXISTS (SELECT 1 FROM gmail_unread_overlay WHERE key=account_id || char(0) || id)').run(accountId, runId)
       this.#reapplyAcceptedUnread(accountId, messages)
       this.#reapplyAcceptedActions(accountId, messages)
+      if (history) {
+        const deleted = new Set(history.deletedIds)
+        // A Gmail-confirmed permanent deletion cannot be replayed as a local label action.
+        for (const job of this.pendingActions().filter(job => job.accountId === accountId)) {
+          const remaining = job.messageIds.filter(id => !deleted.has(id))
+          if (remaining.length === job.messageIds.length) continue
+          if (!remaining.length) this.finishAction(job.id)
+          else this.#db.prepare('UPDATE gmail_action_queue SET payload=? WHERE id=?').run(JSON.stringify({ messageIds: remaining, action: job.action }), job.id)
+        }
+        for (const id of history.deletedIds) {
+          this.#db.prepare('DELETE FROM gmail_messages WHERE account_id=? AND id=?').run(accountId, id)
+          const key = `${accountId}\0${id}`
+          this.#db.prepare('DELETE FROM gmail_unread_overlay WHERE key=?').run(key)
+          this.#db.prepare('DELETE FROM gmail_action_overlay WHERE key=?').run(key)
+          this.#acceptedUnread.delete(key); this.#acceptedActions.delete(key)
+        }
+        this.#db.prepare('INSERT OR REPLACE INTO gmail_history_checkpoint VALUES (?,?,?)').run(accountId, history.email.toLowerCase(), history.historyId)
+      }
       this.#db.exec('COMMIT')
     } catch (error) {
       this.#db.exec('ROLLBACK')
+      this.#acceptedUnread.clear(); unreadBefore.forEach((value, key) => this.#acceptedUnread.set(key, value))
+      this.#acceptedActions.clear(); actionsBefore.forEach((value, key) => this.#acceptedActions.set(key, value))
       throw error
     }
   }
@@ -359,6 +400,8 @@ export class GmailIndex {
     if (accountIds.length === 0) throw new Error('Cannot prune Gmail index without an authoritative account list')
     const placeholders = accountIds.map(() => '?').join(', ')
     this.#db.prepare(`DELETE FROM gmail_messages WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
+    this.#db.prepare(`DELETE FROM gmail_history_checkpoint WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
+    this.#db.prepare(`DELETE FROM gmail_direct_sync_disabled WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
   }
 
   replaceAccounts(accounts: readonly IndexedGmailAccount[], seenAt: string): void {

@@ -99,7 +99,7 @@ app.innerHTML = `
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
         <div class="m-3" data-mail-reconnect hidden><button class="btn btn-outline-primary" data-reconnect-account><i class="ti ti-plug-connected me-1"></i>Reconnect Gmail</button><span class="ms-2 text-secondary" data-reconnect-status></span></div>
         <footer class="dispatch-mail-activity"><div class="dispatch-activity-status">        <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
-        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button></div><button class="btn btn-sm" data-activity-toggle aria-expanded="false" aria-controls="dispatch-activity"><i class="ti ti-activity" aria-hidden="true"></i><span>Mail activity</span></button><div class="dispatch-activity-popover" id="dispatch-activity" hidden><strong>Mail activity</strong><div class="dispatch-activity-options"><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button></div><p class="small text-secondary mb-0">Downloaded mail</p></div></footer>
+        <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button></div><button class="btn btn-sm" data-activity-toggle aria-expanded="false" aria-controls="dispatch-activity"><i class="ti ti-activity" aria-hidden="true"></i><span>Mail activity</span></button><div class="dispatch-activity-popover" id="dispatch-activity" hidden><strong>Mail activity</strong><div class="dispatch-activity-options"><button type="button" class="nav-link" data-gmail-sync-open><i class="ti ti-brand-google" aria-hidden="true"></i><span>Gmail sync</span></button><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button></div><p class="small text-secondary mb-0">Downloaded mail</p></div></footer>
       </aside>
       <div class="dispatch-divider" data-divider="messages" role="separator" tabindex="0" aria-label="Resize messages panel" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="640"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <main class="card rounded-0 border-0 dispatch-reader" aria-label="Selected email">
@@ -217,6 +217,7 @@ app.insertAdjacentHTML('beforeend', `
   <div class="dispatch-sidebar-menu dropdown-menu" role="menu" aria-label="Folder rail style" data-sidebar-menu hidden><button class="dropdown-item" role="menuitemradio" aria-checked="true" data-sidebar-style="compact">Compact</button><button class="dropdown-item" role="menuitemradio" aria-checked="false" data-sidebar-style="expanded">Expanded</button></div>
 
   <dialog class="dispatch-utility-dialog dispatch-shortcuts-dialog" data-shortcuts-dialog aria-label="Keyboard shortcuts"><div class="d-flex justify-content-between align-items-center"><h2 class="m-0">Keyboard shortcuts</h2><span class="text-secondary small">Press <kbd>?</kbd> any time</span><button class="btn btn-sm" data-dialog-close>Close</button></div><div class="dispatch-shortcut-groups" data-shortcut-groups></div><p class="text-secondary small mb-0">Single letters work only with focus in the list or the reader, never inside a text field.</p></dialog>
+  <dialog class="dispatch-utility-dialog" data-gmail-sync-dialog aria-label="Gmail sync"><div class="d-flex justify-content-between"><h2>Gmail sync</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p data-gmail-sync-status role="status"></p><div data-gmail-sync-accounts></div></dialog>
   <dialog class="dispatch-utility-dialog" data-offline-dialog aria-label="Downloaded mail"><div class="d-flex justify-content-between"><h2>Downloaded mail</h2><button class="btn btn-sm" data-dialog-close>Close</button></div><p>Opened conversations are saved automatically. Download mailbox saves indexed conversations’ full message bodies. Attachments are separate and work offline when already downloaded.</p><label class="form-check"><input class="form-check-input" type="checkbox" data-offline-mode><span class="form-check-label">Use downloaded mail</span></label><p data-offline-status role="status"></p><button class="btn btn-primary btn-sm" data-download-mailbox>Download mailbox</button><button class="btn btn-sm" data-cancel-download hidden>Cancel download</button></dialog>
 `)
 
@@ -4090,6 +4091,60 @@ function renderDensity(): void {
 }
 app.querySelector('[data-density]')?.addEventListener('click', () => { compactMessages = !compactMessages; localStorage.setItem('dispatch.ui.density', compactMessages ? 'compact' : 'comfortable'); renderDensity() })
 renderDensity()
+let gmailSyncRefresh: Promise<void> | undefined
+function refreshGmailSync(): Promise<void> {
+  if (gmailSyncRefresh) return gmailSyncRefresh
+  const status = app.querySelector<HTMLElement>('[data-gmail-sync-status]')!
+  const accounts = app.querySelector<HTMLElement>('[data-gmail-sync-accounts]')!
+  gmailSyncRefresh = api.directSyncStatus().then(result => {
+    status.textContent = result.error ?? (result.configured ? 'Connect each account once for incremental Gmail sync. Drafts and Codex keep their existing connection.' : 'Gmail uses your Codex connection. Direct sync needs a Google OAuth client registered for Dispatch before accounts can connect.')
+    accounts.replaceChildren()
+    for (const account of result.accounts) {
+      const row = document.createElement('div')
+      row.className = 'd-flex flex-wrap gap-2 align-items-center mb-3'
+      const label = document.createElement('span')
+      label.textContent = account.email
+      const button = document.createElement('button')
+      button.type = 'button'; button.className = 'btn btn-sm'
+      button.textContent = account.state === 'connected' ? 'Connected' : account.state === 'connecting' ? 'Signing in…' : account.state === 'reconnect' ? 'Reconnect' : 'Connect'
+      button.disabled = !result.configured || account.state === 'connected' || account.state === 'connecting'
+      button.addEventListener('click', () => {
+        button.disabled = true
+        const browser = isNativeShell(window as { isTauri?: unknown }) ? null : window.open('about:blank', '_blank')
+        if (browser) browser.opener = null
+        void api.connectDirectSync(account.accountId).then(result => {
+          const url = new URL(result.authUrl)
+          if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com' || url.pathname !== '/o/oauth2/v2/auth') throw new Error('Unexpected Google sign-in address')
+          if (browser) browser.location.href = url.href
+          else {
+            const link = document.createElement('a'); link.href = url.href; link.textContent = 'Sign in to Google'
+            row.append(link); link.click(); link.remove()
+          }
+          status.textContent = 'Finish Google sign-in in your browser. Dispatch will start incremental sync automatically.'
+          return refreshGmailSync()
+        }).catch(error => { browser?.close(); status.textContent = `Could not connect Gmail sync: ${String(error)}`; button.disabled = false })
+      })
+      row.append(label, button)
+      if (account.state === 'connected' || account.state === 'reconnect') {
+        const existing = document.createElement('button'); existing.type = 'button'; existing.className = 'btn btn-sm'
+        existing.textContent = 'Use existing connection'
+        existing.addEventListener('click', () => {
+          existing.disabled = true
+          void api.useConnectorSync(account.accountId).then(refreshGmailSync).catch(error => { status.textContent = `Could not change Gmail sync: ${String(error)}`; existing.disabled = false })
+        })
+        row.append(existing)
+      }
+      if (account.error) { const error = document.createElement('span'); error.textContent = account.error; row.append(error) }
+      accounts.append(row)
+    }
+  }).catch(error => { status.textContent = `Gmail sync status is unavailable: ${String(error)}` }).finally(() => { gmailSyncRefresh = undefined })
+  return gmailSyncRefresh
+}
+app.querySelector('[data-gmail-sync-open]')?.addEventListener('click', () => {
+  closeActivity(); app.querySelector<HTMLDialogElement>('[data-gmail-sync-dialog]')!.show()
+  void refreshGmailSync()
+})
+window.setInterval(() => { if (app.querySelector<HTMLDialogElement>('[data-gmail-sync-dialog]')!.open) void refreshGmailSync() }, 5_000)
 function closeActivity(): void { app.querySelector<HTMLElement>('#dispatch-activity')!.hidden = true; app.querySelector('[data-activity-toggle]')!.setAttribute('aria-expanded', 'false') }
 app.querySelector('[data-activity-toggle]')?.addEventListener('click', () => {
   const panel = app.querySelector<HTMLElement>('#dispatch-activity')!; panel.hidden = !panel.hidden
@@ -4097,7 +4152,7 @@ app.querySelector('[data-activity-toggle]')?.addEventListener('click', () => {
 })
 for (const selector of ['[data-offline-open]']) app.querySelector(selector)?.addEventListener('click', closeActivity)
 document.addEventListener('click', event => { if (!(event.target as Element).closest('.dispatch-mail-activity')) closeActivity() })
-for (const name of ['offline']) {
+for (const name of ['offline', 'gmail-sync']) {
   const dialog = app.querySelector<HTMLDialogElement>(`[data-${name}-dialog]`)!
   dialog.addEventListener('close', () => app.querySelector<HTMLButtonElement>('[data-activity-toggle]')?.focus())
 }

@@ -76,6 +76,16 @@ Mail and agent read `DISPATCH_ALLOWED_ORIGIN` for their CORS origin. The default
 
 ## Failure behavior
 
+Mail can optionally own a Google read-only history transport alongside the existing
+Codex Gmail connector. It requires a Dispatch Desktop OAuth client plus explicit
+per-account Google consent; without those, existing installations continue connector
+sync. Baselines, changed metadata, permanent deletions and string history checkpoints
+commit atomically in the mail index. Expired history restarts a safe baseline. PKCE
+and verified account identity precede Keychain storage. Account backoff and pending
+local action overlays remain authoritative. Mail activity offers an explicit return
+to connector sync, persisted per account. Codex, sending and draft commands retain
+their current paths. See [Gmail sync setup and release gates](GMAIL_SYNC.md).
+
 `POST /v1/sync` accepts a refresh request with HTTP 202. Optional reasons `wake` and `foreground` let mail replace obsolete read-only scans. Mail uses a suspension-gap clock, an abortable sync context, bounded scan lifetimes, and a monotonic mailbox revision. Async-local cancellation applies only to that scan's provider reads; user draft/send operations retain their own lifetime. The browser watches mailbox revisions independently of overall sync success, so one account's failure cannot hide another account's new mail.
 
 - Mail failure leaves the mail panel in a visible failed state.
