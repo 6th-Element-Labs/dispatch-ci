@@ -548,7 +548,7 @@ export class GmailConnectorProvider {
       clearTimeout(this.#syncTimeouts.get(signal))
       const timeout = setTimeout(() => this.#syncController?.signal === signal && this.#syncController.abort(new Error('Gmail baseline synchronization timed out; retrying.')), 900_000)
       timeout.unref(); this.#syncTimeouts.set(signal, timeout)
-    }) : undefined
+    }, kind => { if (kind === 'page') this.#syncProgress.pagesFetched++; else this.#syncProgress.fetchedMessages++ }) : undefined
     this.#draftQueue = new DraftSaveQueue(this.#local, {
       create: job => this.createGmailDraft(job.accountId, job.messageId, job.fields.to ?? '', job.fields.cc ?? '', job.fields.bcc ?? '', job.fields.subject ?? '', job.fields.bodyMarkdown ?? '', appendMissingFiles(job.fields.attachments ?? [], pendingAttachmentAppendFiles(job)), job.id),
       read: (accountId, id) => this.readGmailDraft(accountId, id, true),
@@ -802,7 +802,7 @@ export class GmailConnectorProvider {
     this.#index?.setDirectSyncEnabled(accountId, false)
     this.requestRefresh('manual')
   }
-  async connectDirectSync(accountId: string): Promise<{ authUrl: string }> {
+  async connectDirectSync(accountId: string): Promise<{ authUrl: string } | { connected: true }> {
     const account = this.cachedAccounts().find(account => account.id === accountId)
     if (!account?.email) throw new Error('Select a connected Gmail account before authorizing direct sync')
     return this.#oauth.beginConnect(account)

@@ -40,7 +40,7 @@ export const api = {
     const result = await request<{ directSync: import('./contracts.js').GmailDirectSyncStatus }>(`${MAIL}/v1/gmail-sync`)
     return result.directSync
   },
-  async connectDirectSync(accountId: string): Promise<{ authUrl: string }> {
+  async connectDirectSync(accountId: string): Promise<{ authUrl: string } | { connected: true }> {
     return request(`${MAIL}/v1/gmail-sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId }) })
   },
   async useConnectorSync(accountId: string): Promise<void> {

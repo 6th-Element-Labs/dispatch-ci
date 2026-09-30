@@ -4113,6 +4113,7 @@ function refreshGmailSync(): Promise<void> {
         const browser = isNativeShell(window as { isTauri?: unknown }) ? null : window.open('about:blank', '_blank')
         if (browser) browser.opener = null
         void api.connectDirectSync(account.accountId).then(result => {
+          if ('connected' in result) { browser?.close(); return refreshGmailSync() }
           const url = new URL(result.authUrl)
           if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com' || url.pathname !== '/o/oauth2/v2/auth') throw new Error('Unexpected Google sign-in address')
           if (browser) browser.location.href = url.href

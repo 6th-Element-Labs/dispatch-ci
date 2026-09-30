@@ -40,6 +40,7 @@ export class GmailHistorySync {
     readonly project: (value: unknown, account: IndexedGmailAccount) => IndexedGmailMessage,
     readonly maxPages = 1_000,
     readonly onBootstrap?: (signal: AbortSignal) => void,
+    readonly onProgress?: (kind: 'page' | 'message') => void,
   ) {}
 
   async synchronize(account: IndexedGmailAccount, signal: AbortSignal, full = false): Promise<boolean> {
@@ -56,8 +57,6 @@ export class GmailHistorySync {
         await this.#bootstrap(account, signal)
       }
     }
-    // The baseline was captured BEFORE enumeration. Replay changes made during that scan.
-    await this.#delta(account, this.index.historyCheckpoint(account.id, account.email)!, signal)
     return true
   }
 
@@ -67,6 +66,7 @@ export class GmailHistorySync {
     for (let pageNumber = 0; pageNumber < this.maxPages; pageNumber++) {
       const page = object(await this.transport.get(account, `${path}${token ? `&pageToken=${encodeURIComponent(token)}` : ''}`, signal))
       signal.throwIfAborted()
+      this.onProgress?.('page')
       visit(page)
       token = nextToken(page.nextPageToken)
       if (!token) return page
@@ -76,13 +76,14 @@ export class GmailHistorySync {
     throw new Error(`Gmail API pagination exceeded ${this.maxPages} pages`)
   }
 
-  async #hydrate(account: IndexedGmailAccount, ids: ReadonlySet<string>, signal: AbortSignal): Promise<{ messages: IndexedGmailMessage[]; deleted: string[] }> {
+  async #hydrate(account: IndexedGmailAccount, ids: ReadonlySet<string>, signal: AbortSignal, stage?: (messages: IndexedGmailMessage[], deleted: string[]) => void): Promise<{ messages: IndexedGmailMessage[]; deleted: string[] }> {
     const messages: IndexedGmailMessage[] = []
     const deleted: string[] = []
     const pending = [...ids]
     let offset = 0
     // Batches settle before returning on failure: no orphan work can mutate a later pass.
     while (offset < pending.length) {
+      const messagesBefore = messages.length; const deletedBefore = deleted.length
       const results = await Promise.allSettled(pending.slice(offset, offset + 4).map(async messageId => {
         try {
           const value = await this.transport.get(account, `messages/${encodeURIComponent(messageId)}?format=full`, signal)
@@ -90,12 +91,15 @@ export class GmailHistorySync {
           const message = this.project(value, account)
           if (message.id !== messageId || message.accountId !== account.id) throw new Error('Gmail API returned another message identity')
           messages.push(message)
+          this.onProgress?.('message')
         } catch (error) {
           signal.throwIfAborted()
           if (error instanceof GmailApiError && error.status === 404 && error.code === 'message_not_found') deleted.push(messageId)
           else throw error
         }
       }))
+      signal.throwIfAborted()
+      stage?.(messages.slice(messagesBefore), deleted.slice(deletedBefore))
       const failed = results.find(result => result.status === 'rejected')
       if (failed?.status === 'rejected') throw failed.reason
       offset += 4
@@ -105,19 +109,42 @@ export class GmailHistorySync {
 
   async #bootstrap(account: IndexedGmailAccount, signal: AbortSignal): Promise<void> {
     this.onBootstrap?.(signal)
-    const profile = object(await this.transport.get(account, 'profile', signal))
-    if (typeof profile.emailAddress !== 'string' || profile.emailAddress.toLowerCase() !== account.email.toLowerCase()) throw new Error('Gmail API account does not match the selected account')
-    const start = checkpoint(profile.historyId)
-    const ids = new Set<string>()
-    await this.#pages(account, 'messages?includeSpamTrash=true&maxResults=500', signal, page => {
-      for (const message of list(page.messages)) ids.add(id(object(message).id))
-    })
-    const hydrated = await this.#hydrate(account, ids, signal)
+    let baseline = this.index.historyBaseline(account.id, account.email)
+    if (!baseline) {
+      const profile = object(await this.transport.get(account, 'profile', signal))
+      if (typeof profile.emailAddress !== 'string' || profile.emailAddress.toLowerCase() !== account.email.toLowerCase()) throw new Error('Gmail API account does not match the selected account')
+      const start = checkpoint(profile.historyId)
+      const ids = new Set<string>()
+      await this.#pages(account, 'messages?includeSpamTrash=true&maxResults=500', signal, page => {
+        for (const message of list(page.messages)) ids.add(id(object(message).id))
+      })
+      this.index.beginHistoryBaseline(account.id, account.email, start, ids)
+      baseline = this.index.historyBaseline(account.id, account.email)!
+    }
+    await this.#hydrate(account, new Set(baseline.pending), signal, (messages, deleted) => this.index.stageHistoryBaseline(account.id, messages, deleted))
+    baseline = this.index.historyBaseline(account.id, account.email)!
+    let delta: Awaited<ReturnType<GmailHistorySync['readDelta']>>
+    try { delta = await this.readDelta(account, baseline.historyId, signal) }
+    catch (error) {
+      if (error instanceof GmailApiError && error.code === 'history_expired') this.index.clearHistoryBaseline(account.id)
+      throw error
+    }
     signal.throwIfAborted()
-    this.index.applyHistory(account.id, account.email, hydrated.messages, hydrated.deleted, start, true)
+    const messages = new Map(baseline.messages.map(message => [message.id, message]))
+    for (const message of delta.messages) messages.set(message.id, message)
+    const deleted = new Set([...baseline.deleted, ...delta.deleted])
+    for (const id of deleted) messages.delete(id)
+    // Catch changes made during a long or resumed scan BEFORE publishing its complete snapshot.
+    this.index.applyHistory(account.id, account.email, [...messages.values()], [...deleted], delta.historyId, true)
   }
 
   async #delta(account: IndexedGmailAccount, start: string, signal: AbortSignal): Promise<void> {
+    const delta = await this.readDelta(account, start, signal)
+    signal.throwIfAborted()
+    this.index.applyHistory(account.id, account.email, delta.messages, delta.deleted, delta.historyId)
+  }
+
+  private async readDelta(account: IndexedGmailAccount, start: string, signal: AbortSignal): Promise<{ messages: IndexedGmailMessage[]; deleted: string[]; historyId: string }> {
     const changed = new Set<string>()
     let highest = BigInt(start)
     const last = await this.#pages(account, `history?startHistoryId=${encodeURIComponent(start)}&maxResults=500`, signal, page => {
@@ -137,6 +164,6 @@ export class GmailHistorySync {
     if (BigInt(end) < highest) throw new Error('Gmail history checkpoint moved backwards')
     const hydrated = await this.#hydrate(account, changed, signal)
     signal.throwIfAborted()
-    this.index.applyHistory(account.id, account.email, hydrated.messages, hydrated.deleted, end)
+    return { ...hydrated, historyId: end }
   }
 }

@@ -69,10 +69,63 @@ describe('mail-owned Google authorization', () => {
     expect(f.fetcher).toHaveBeenCalledTimes(1)
   })
 
+  it('paces concurrent message reads using the current per-user quota and isolates accounts', async () => {
+    const delays: number[] = []
+    const f = fixture(() => json({ historyId: '200' }), credential())
+    const manager = new GmailOAuth(config, f.store, { fetch: f.fetcher, now: () => 1000, wait: async milliseconds => { delays.push(milliseconds) } })
+    managers.push(manager)
+    await Promise.all(Array.from({ length: 4 }, (_, i) => manager.get(account, `messages/id${i}?format=full`, new AbortController().signal)))
+    expect(delays).toEqual([250, 500, 750])
+    expect(f.fetcher).toHaveBeenCalledTimes(4)
+    await expect(manager.get({ ...account, id: 'two' }, 'profile', new AbortController().signal)).resolves.toEqual({ historyId: '200' })
+    expect(delays).toHaveLength(3)
+  })
+
+  it('does not issue queued reads after a concurrent request sets account backoff', async () => {
+    const f = fixture(() => new Response('Busy', { status: 429, headers: { 'retry-after': '600' } }), credential())
+    const waiters: Array<() => void> = []
+    const manager = new GmailOAuth(config, f.store, { fetch: f.fetcher, now: () => 1000, retryAfter: f.retryAt, pauseUntil: (_id, time) => { f.manager.options.pauseUntil?.(account.id, time) }, wait: () => new Promise(resolve => waiters.push(resolve)) })
+    managers.push(manager)
+    const queued = manager.get(account, 'messages/one?format=full', new AbortController().signal)
+    const delayed = manager.get(account, 'messages/two?format=full', new AbortController().signal)
+    await expect(queued).rejects.toThrow('gmail_backoff')
+    waiters.forEach(resolve => resolve())
+    await expect(delayed).rejects.toThrow('gmail_backoff')
+    expect(f.fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels a reserved request before it reaches Google', async () => {
+    const controller = new AbortController()
+    const f = fixture(() => json({}), credential())
+    const manager = new GmailOAuth(config, f.store, { fetch: f.fetcher, now: () => 1000, wait: async () => { controller.abort() } })
+    managers.push(manager)
+    await manager.get(account, 'messages/one?format=full', new AbortController().signal)
+    await expect(manager.get(account, 'messages/two?format=full', controller.signal)).rejects.toThrow()
+    expect(f.fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects stored authorization belonging to a different email or client', async () => {
     const f = fixture(() => json({}), credential({ email: 'another@example.com' }))
     await expect(f.manager.connected(account)).rejects.toThrow('another account')
     expect(f.fetcher).not.toHaveBeenCalled()
+  })
+
+  it('resumes an existing grant after verifying its account without asking for consent again', async () => {
+    const f = fixture(() => json({ emailAddress: account.email }), credential())
+    await expect(f.manager.beginConnect(account)).resolves.toEqual({ connected: true })
+    expect(f.onConnected).toHaveBeenCalledWith(account.id)
+    expect(f.write).not.toHaveBeenCalled()
+    expect(f.manager.activeOperations).toBe(0)
+    expect(f.fetcher.mock.calls.map(call => String(call[0]))).toEqual(['https://gmail.googleapis.com/gmail/v1/users/me/profile'])
+  })
+
+  it('does not replace an existing grant or open new consent after a temporary resume failure', async () => {
+    const f = fixture(() => json({}, 503), credential())
+    await expect(f.manager.beginConnect(account)).rejects.toThrow('503')
+    expect(f.write).not.toHaveBeenCalled()
+    expect(f.onConnected).not.toHaveBeenCalled()
+    expect(f.manager.activeOperations).toBe(0)
+    expect((await f.manager.status([account])).accounts[0]?.state).toBe('connected')
   })
 
   it('uses PKCE, validates state, verifies the selected Gmail identity, and stores tokens only after validation', async () => {
@@ -87,6 +140,7 @@ describe('mail-owned Google authorization', () => {
       return json({ emailAddress: account.email, historyId: '100' })
     })
     const start = await f.manager.beginConnect(account)
+    if (!('authUrl' in start)) throw new Error('Expected a new consent flow')
     const auth = new URL(start.authUrl)
     expect(auth.origin).toBe('https://accounts.google.com')
     expect(auth.searchParams.get('scope')).toBe(scope)
@@ -111,7 +165,9 @@ describe('mail-owned Google authorization', () => {
 
   it.each(['wrong account', 'missing scope', 'denied'])('keeps %s sign-in out of the credential store', async kind => {
     const f = fixture(url => url.endsWith('/token') ? json({ access_token: 'signed-in', refresh_token: 'offline-grant', expires_in: 3600, ...(kind !== 'missing scope' ? { scope } : {}) }) : json({ emailAddress: 'another@example.com' }))
-    const auth = new URL((await f.manager.beginConnect(account)).authUrl)
+    const start = await f.manager.beginConnect(account)
+    if (!('authUrl' in start)) throw new Error('Expected a new consent flow')
+    const auth = new URL(start.authUrl)
     const callback = new URL(auth.searchParams.get('redirect_uri')!)
     callback.searchParams.set('state', auth.searchParams.get('state')!)
     callback.searchParams.set(kind === 'denied' ? 'error' : 'code', kind === 'denied' ? 'access_denied' : 'fixture-code')

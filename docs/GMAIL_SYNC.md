@@ -24,8 +24,16 @@ tools keep the existing application contracts and connector paths.
 
 The first authorized pass captures `profile.historyId` before enumerating all
 message IDs, including Spam and Trash. It hydrates message metadata with at most
-four reads at once. A complete baseline and its initial history checkpoint commit
-in one SQLite transaction; then history catches changes made during enumeration.
+four reads at once, paced to 4,800 quota units per account per minute. Current
+Google projects allow 6,000 units and each message read costs 20 units.
+
+Completed batches are stored in private SQLite staging. A timeout, rate limit,
+cancellation or restart resumes the unread IDs instead of restarting the scan.
+Staging never changes the visible mailbox or its published checkpoint. History
+catches changes made during enumeration and hydration before the complete
+baseline and final checkpoint commit in one SQLite transaction. Staging is
+removed in that same transaction. If catch-up history has expired, discard the
+staged scan and retry a fresh baseline; retain the prior visible mailbox.
 
 Subsequent refresh, wake, startup and six-hour passes use unfiltered
 `history.list(startHistoryId)` across all folders. Changed IDs are deduplicated;
@@ -41,7 +49,8 @@ Failed enumeration, repeated page tokens, the page safety limit, malformed data,
 storage failure and cancellation keep the prior rows and checkpoint. Each pass
 is bounded; an initial baseline can take longer than an ordinary history check.
 OAuth expiry renews one shared token request. A rejected GET retries once after
-renewal. Gmail rate limits persist through the mail owner's existing account
+renewal. Requests waiting for a quota slot recheck account backoff before going
+to Google. Gmail rate limits persist through the mail owner's existing account
 backoff. A failed account cannot prevent another account from committing changes.
 
 For accounts already authorized directly, connector account discovery runs
@@ -77,6 +86,9 @@ Sign-in uses the external browser, S256 PKCE, a random state, and a temporary
 remain in the mail service and macOS Keychain. The keychain writer uses stdin so
 tokens do not appear in process arguments. Expired or revoked grants preserve
 mail and pending drafts, with a working reconnect or connector-choice control.
+Returning to direct sync reuses a valid existing grant after verifying its Gmail
+profile. A temporary resume failure preserves that grant and does not open a
+replacement consent flow.
 
 ## Release evidence
 
@@ -91,7 +103,7 @@ revocation and checkpoint expiry against Gmail's actual state. Measure initial
 baseline duration and steady-state provider requests; fixture tests cannot stand
 in for these results.
 
-Local verification on 2026-10-01 passed 720 checks across scripts, mail, agent,
+Local verification on 2026-10-01 passed 729 checks across scripts, mail, agent,
 web units and browser acceptance, plus 43 native Rust tests. One existing optional
 browser screenshot test was skipped. A real macOS Keychain round-trip used only
 an owned fake credential and removed that fixture afterward. These checks do not
@@ -102,3 +114,4 @@ References: [Gmail sync](https://developers.google.com/workspace/gmail/api/guide
 [native OAuth](https://developers.google.com/identity/protocols/oauth2/native-app),
 [refresh-token expiry](https://developers.google.com/identity/protocols/oauth2),
 [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes).
+Quota reference: [Gmail usage limits](https://developers.google.com/workspace/gmail/api/reference/quota).

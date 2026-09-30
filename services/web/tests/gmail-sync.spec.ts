@@ -10,6 +10,7 @@ test('Gmail sync setup is explicit, account-scoped, and does not show an unsolic
   let postedAccount = ''
   let state = 'connector'
   let disabledAccount = ''
+  let resume = false
   await page.route(/8411\/v1\/gmail-sync(?:\?|$)/, async route => {
     if (route.request().method() === 'DELETE') {
       disabledAccount = new URL(route.request().url()).searchParams.get('account')!
@@ -17,6 +18,7 @@ test('Gmail sync setup is explicit, account-scoped, and does not show an unsolic
     }
     if (route.request().method() === 'POST') {
       postedAccount = route.request().postDataJSON().accountId
+      if (resume) { state = 'connected'; await route.fulfill({ json: { connected: true } }); return }
       await route.fulfill({ status: 400, json: { error: 'fixture_sign_in_unavailable' } }); return
     }
     await route.fulfill({ json: { directSync: { configured, accounts: [{ accountId: 'one', email: 'work@example.com', state }] } } })
@@ -46,4 +48,8 @@ test('Gmail sync setup is explicit, account-scoped, and does not show an unsolic
   await dialog.getByRole('button', { name: 'Use existing connection', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
   expect(disabledAccount).toBe('one')
+  resume = true
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Connected', exact: true })).toBeDisabled()
+  await expect(dialog).not.toContainText('Finish Google sign-in')
 })

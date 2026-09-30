@@ -5,6 +5,7 @@ import { createServer, type Server } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
+import { setTimeout as wait } from 'node:timers/promises'
 import type { IndexedGmailAccount } from './gmail-index.js'
 import { GmailApiError, object, type GmailHistoryTransport } from './gmail-history-sync.js'
 
@@ -83,6 +84,7 @@ export class GmailOAuth implements GmailHistoryTransport {
   readonly #refreshes = new Map<string, Promise<GmailCredential>>()
   readonly #errors = new Map<string, string>()
   readonly #pending = new Map<string, { server: Server; controller: AbortController; timer: ReturnType<typeof setTimeout> }>()
+  readonly #nextRead = new Map<string, number>()
   #closed = false
   get activeOperations(): number { return this.#pending.size + this.#refreshes.size }
   constructor(
@@ -91,6 +93,7 @@ export class GmailOAuth implements GmailHistoryTransport {
     readonly options: {
       fetch?: typeof fetch; onConnected?: (accountId: string) => void; configurationError?: string
       retryAfter?: (accountId: string) => number; pauseUntil?: (accountId: string, timestamp: number) => void
+      now?: () => number; wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
     } = {},
   ) {}
   #fetch(url: string, init?: RequestInit): Promise<Response> { return (this.options.fetch ?? fetch)(url, { ...init, redirect: 'error' }) }
@@ -166,6 +169,9 @@ export class GmailOAuth implements GmailHistoryTransport {
     if (credential.expiresAt <= Date.now() + 60_000) credential = await this.#refresh(account, credential, signal)
     for (let attempt = 0; attempt < 2; attempt++) {
       signal.throwIfAborted()
+      await this.#pace(account.id, path, signal)
+      // Another reader can receive Retry-After while this request waits for its slot.
+      if ((this.options.retryAfter?.(account.id) ?? 0) > Date.now()) throw new GmailApiError(429, 'gmail_backoff')
       const response = await this.#fetch(`${API_URL}${path}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), headers: { authorization: `Bearer ${credential.accessToken}` } })
       if (response.ok) return response.json()
       if (response.status === 401 && attempt === 0) { credential = await this.#refresh(account, credential, signal); continue }
@@ -186,15 +192,38 @@ export class GmailOAuth implements GmailHistoryTransport {
     }
     throw new GmailApiError(401, 'oauth_reconnect_required')
   }
+  async #pace(accountId: string, path: string, signal: AbortSignal): Promise<void> {
+    // New Google projects allow 6,000 units/user/minute; message reads cost 20.
+    // Reserve slots synchronously across concurrent readers, using 80% of that budget.
+    const cost = path.startsWith('messages/') ? 20 : path.startsWith('messages?') ? 5 : path.startsWith('history?') ? 2 : 1
+    const now = (this.options.now ?? Date.now)()
+    const slot = Math.max(now, this.#nextRead.get(accountId) ?? 0)
+    this.#nextRead.set(accountId, slot + cost * 60_000 / 4_800)
+    if (slot > now) await (this.options.wait ?? ((ms, abort) => wait(ms, undefined, { signal: abort })))(slot - now, signal)
+    signal.throwIfAborted()
+    if (this.#closed) throw new Error('Dispatch is stopping')
+  }
   #pause(accountId: string, retry: string | null): void {
     const date = retry && /^\d+$/.test(retry) ? Date.now() + Number(retry) * 1_000 : Date.parse(retry ?? '')
     this.options.pauseUntil?.(accountId, Math.max(Date.now() + 60_000, Number.isFinite(date) ? date : 0))
   }
 
-  async beginConnect(account: IndexedGmailAccount): Promise<{ authUrl: string }> {
+  async beginConnect(account: IndexedGmailAccount): Promise<{ authUrl: string } | { connected: true }> {
     if (this.#closed) throw new Error('Dispatch is stopping')
     if (!this.configuration) throw new Error(this.options.configurationError ?? 'Dispatch needs a Google Desktop OAuth client before direct sync can connect')
     this.#cancel(account.id)
+    const saved = await this.#credential(account).catch(() => undefined)
+    if (saved && !this.#errors.has(account.id)) {
+      try {
+        const profile = object(await this.get(account, 'profile', AbortSignal.timeout(30_000)))
+        if (typeof profile.emailAddress !== 'string' || profile.emailAddress.toLowerCase() !== account.email.toLowerCase()) throw new Error('Stored Gmail authorization does not match the selected account')
+        this.options.onConnected?.(account.id)
+        return { connected: true }
+      } catch (error) {
+        // A temporary failure keeps the grant. Only rejected authorization needs new consent.
+        if (!(error instanceof GmailApiError) || error.code !== 'oauth_reconnect_required') throw error
+      }
+    }
     const verifier = randomBytes(32).toString('base64url')
     const state = randomBytes(32).toString('base64url')
     const controller = new AbortController()

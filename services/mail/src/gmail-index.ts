@@ -151,6 +151,8 @@ export class GmailIndex {
       PRAGMA synchronous = FULL;
       CREATE TABLE IF NOT EXISTS gmail_action_overlay (key TEXT PRIMARY KEY, action TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS gmail_history_checkpoint (account_id TEXT PRIMARY KEY, email TEXT NOT NULL, history_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS gmail_history_baseline (account_id TEXT PRIMARY KEY, email TEXT NOT NULL, history_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS gmail_history_baseline_rows (account_id TEXT NOT NULL, id TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0, payload TEXT, PRIMARY KEY(account_id,id));
       CREATE TABLE IF NOT EXISTS gmail_direct_sync_disabled (account_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS gmail_unread_overlay (key TEXT PRIMARY KEY, unread INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS gmail_action_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, payload TEXT NOT NULL, error TEXT);
@@ -217,6 +219,53 @@ export class GmailIndex {
     else this.#db.prepare('INSERT OR IGNORE INTO gmail_direct_sync_disabled VALUES (?)').run(accountId)
   }
 
+  /** Private staging is resumable; it never changes visible mail or the published checkpoint. */
+  historyBaseline(accountId: string, email: string): { historyId: string; pending: string[]; messages: IndexedGmailMessage[]; deleted: string[] } | undefined {
+    const header = this.#db.prepare('SELECT email,history_id FROM gmail_history_baseline WHERE account_id=?').get(accountId)
+    if (!header || String(header.email).toLowerCase() !== email.toLowerCase()) return undefined
+    const result = { historyId: String(header.history_id), pending: [] as string[], messages: [] as IndexedGmailMessage[], deleted: [] as string[] }
+    for (const row of this.#db.prepare('SELECT id,ready,payload FROM gmail_history_baseline_rows WHERE account_id=? ORDER BY rowid').all(accountId)) {
+      if (!row.ready) result.pending.push(String(row.id))
+      else if (row.payload === null) result.deleted.push(String(row.id))
+      else {
+        const message = JSON.parse(String(row.payload)) as IndexedGmailMessage
+        if (message.id !== row.id || message.accountId !== accountId) throw new Error('Invalid staged Gmail message identity')
+        result.messages.push(message)
+      }
+    }
+    return result
+  }
+  beginHistoryBaseline(accountId: string, email: string, historyId: string, ids: ReadonlySet<string>): void {
+    if (!email || !/^[1-9]\d*$/.test(historyId)) throw new Error('Invalid Gmail baseline identity')
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      this.#clearHistoryBaseline(accountId)
+      this.#db.prepare('INSERT INTO gmail_history_baseline VALUES (?,?,?)').run(accountId, email.toLowerCase(), historyId)
+      const insert = this.#db.prepare('INSERT INTO gmail_history_baseline_rows(account_id,id) VALUES (?,?)')
+      for (const id of ids) insert.run(accountId, id)
+      this.#db.exec('COMMIT')
+    } catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  }
+  stageHistoryBaseline(accountId: string, messages: readonly IndexedGmailMessage[], deleted: readonly string[]): void {
+    if (messages.some(message => message.accountId !== accountId)) throw new Error('Gmail baseline contains another account')
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      const update = this.#db.prepare('UPDATE gmail_history_baseline_rows SET ready=1,payload=? WHERE account_id=? AND id=?')
+      for (const message of messages) if (update.run(JSON.stringify(message), accountId, message.id).changes !== 1) throw new Error('Unlisted Gmail baseline message')
+      for (const id of deleted) if (update.run(null, accountId, id).changes !== 1) throw new Error('Unlisted Gmail baseline deletion')
+      this.#db.exec('COMMIT')
+    } catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  }
+  clearHistoryBaseline(accountId: string): void {
+    this.#db.exec('BEGIN IMMEDIATE')
+    try { this.#clearHistoryBaseline(accountId); this.#db.exec('COMMIT') }
+    catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  }
+  #clearHistoryBaseline(accountId: string): void {
+    this.#db.prepare('DELETE FROM gmail_history_baseline_rows WHERE account_id=?').run(accountId)
+    this.#db.prepare('DELETE FROM gmail_history_baseline WHERE account_id=?').run(accountId)
+  }
+
   /** Rows, confirmed deletions, overlays, and the next checkpoint are one durable commit. */
   applyHistory(accountId: string, email: string, messages: readonly IndexedGmailMessage[], deletedIds: readonly string[], historyId: string, complete = false): void {
     if (!email || !/^[1-9]\d*$/.test(historyId)) throw new Error('Invalid Gmail history checkpoint')
@@ -275,6 +324,7 @@ export class GmailIndex {
           this.#acceptedUnread.delete(key); this.#acceptedActions.delete(key)
         }
         this.#db.prepare('INSERT OR REPLACE INTO gmail_history_checkpoint VALUES (?,?,?)').run(accountId, history.email.toLowerCase(), history.historyId)
+        if (complete) this.#clearHistoryBaseline(accountId)
       }
       this.#db.exec('COMMIT')
     } catch (error) {
@@ -402,6 +452,8 @@ export class GmailIndex {
     this.#db.prepare(`DELETE FROM gmail_messages WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
     this.#db.prepare(`DELETE FROM gmail_history_checkpoint WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
     this.#db.prepare(`DELETE FROM gmail_direct_sync_disabled WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
+    this.#db.prepare(`DELETE FROM gmail_history_baseline WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
+    this.#db.prepare(`DELETE FROM gmail_history_baseline_rows WHERE account_id NOT IN (${placeholders})`).run(...accountIds)
   }
 
   replaceAccounts(accounts: readonly IndexedGmailAccount[], seenAt: string): void {
