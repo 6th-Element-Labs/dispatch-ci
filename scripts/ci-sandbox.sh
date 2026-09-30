@@ -64,7 +64,9 @@ ensure_remote() {
 }
 
 ensure_repo() {
-  if gh repo view "$CI_REPO" --json nameWithOwner >/dev/null 2>&1; then
+  local private
+  if private="$(gh repo view "$CI_REPO" --json isPrivate --jq .isPrivate 2>/dev/null)"; then
+    [ "$private" = false ] || die "private CI is prohibited; $CI_REPO must be public"
     return 0
   fi
   cat >&2 <<EOF

@@ -60,6 +60,7 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
  */
 export function draftArguments(payload: Record<string, unknown>): Record<string, unknown> {
   const html = String(payload.bodyHtml ?? '')
+  const inlineContentIds = new Set([...html.matchAll(/cid:([^"'>\s]+)/gi)].map(match => match[1]))
   const textBody = String(payload.bodyMarkdown ?? payload.bodyText ?? '')
   const alternative = {
     mime_type: 'multipart/alternative',
@@ -73,7 +74,7 @@ export function draftArguments(payload: Record<string, unknown>): Record<string,
     .map((item) => ({
       mime_type: String(item.mime_type ?? item.mediaType ?? 'application/octet-stream'),
       filename: String(item.filename ?? item.name ?? 'attachment'),
-      content_disposition: item.contentId ? 'inline' : 'attachment',
+      content_disposition: item.contentId && inlineContentIds.has(String(item.contentId)) ? 'inline' : 'attachment',
       ...item.contentId ? { content_id: String(item.contentId) } : {},
       body: { base64_url_content: base64Url(String(item.data ?? item.contentBase64 ?? '')) },
     }))

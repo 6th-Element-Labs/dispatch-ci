@@ -13,6 +13,16 @@ it('puts the stable draft marker on a MIME leaf accepted by Gmail', () => {
   expect(payload.parts[0]?.content_id).toBe('dispatch-key@draft.dispatch.local')
 })
 
+it('keeps append markers as normal attachments while preserving images referenced by CID', () => {
+  const args = draftArguments({ to: 'test@example.com', subject: 'Draft', bodyMarkdown: 'Body', bodyHtml: '<p>Body <img src="cid:logo@example.com"></p>', attachments: [
+    { filename: 'proposal.txt', mime_type: 'text/plain', data: 'aGk=', contentId: 'dispatch-operation-0@draft.dispatch.local' },
+    { filename: 'logo.png', mime_type: 'image/png', data: 'aGk=', contentId: 'logo@example.com' },
+  ] })
+  const payload = args.payload as { parts: { content_id?: string; content_disposition?: string }[] }
+  expect(payload.parts[1]).toMatchObject({ content_id: 'dispatch-operation-0@draft.dispatch.local', content_disposition: 'attachment' })
+  expect(payload.parts[2]).toMatchObject({ content_id: 'logo@example.com', content_disposition: 'inline' })
+})
+
 const servers: ReturnType<typeof createAgentServer>[] = []
 
 afterEach(async () => {

@@ -56,7 +56,7 @@ const gmailDraftMessage = {
 
 type FakeDraftFile = { filename: string; mime_type: string; data: string; contentId?: string }
 
-async function startAttachmentConnector(options: { files?: FakeDraftFile[]; loseFirstUpdateReply?: boolean; pauseCreate?: boolean; pauseUpdate?: boolean } = {}) {
+async function startAttachmentConnector(options: { files?: FakeDraftFile[]; loseFirstUpdateReply?: boolean; pauseCreate?: boolean; pauseUpdate?: boolean; emptyFileWithoutDownloadId?: boolean; omitEmptyFileContent?: boolean } = {}) {
   let files = [...(options.files ?? [])]
   let draftId: string | undefined = options.pauseCreate ? undefined : 'draft'
   let bodyText = 'Original plain MIME body.\n'
@@ -66,6 +66,7 @@ async function startAttachmentConnector(options: { files?: FakeDraftFile[]; lose
   let bcc = 'private@example.com'
   let subject = 'Keep'
   let updateCount = 0
+  let attachmentReadCount = 0
   let createStarted!: () => void
   let releaseCreate!: () => void
   let updateStarted!: () => void
@@ -102,11 +103,16 @@ async function startAttachmentConnector(options: { files?: FakeDraftFile[]; lose
       const parts = [
         { mime_type: 'text/plain', filename: '', body: { content: bodyText } },
         { mime_type: 'text/html', filename: '', body: { content: bodyHtml } },
-        ...files.map((file, index) => ({ mime_type: file.mime_type, filename: file.filename, headers: file.contentId ? [{ name: 'Content-ID', value: `<${file.contentId}>` }] : [], body: { attachment_id: String(index), size: Buffer.from(file.data, 'base64').length } })),
+        ...files.map((file, index) => ({ part_id: String(index + 1), mime_type: file.mime_type, filename: file.filename, headers: file.contentId ? [{ name: 'Content-ID', value: `<${file.contentId}>` }] : [], body: options.emptyFileWithoutDownloadId && file.data === ''
+          ? { attachment_id: null, size: 0, content: options.omitEmptyFileContent ? null : '', base64_url_content: null }
+          : { attachment_id: String(index), size: Buffer.from(file.data, 'base64').length } })),
       ]
       return response.end(JSON.stringify({ structuredContent: { id: 'gmail-message-1', thread_id: 'gmail-thread-1', label_ids: ['DRAFT'], snippet: '', internal_date: '1788486120000', payload: { mime_type: 'multipart/mixed', headers, parts } } }))
     }
-    if (request.url === '/v1/connectors/gmail/attachment') return response.end(JSON.stringify({ structuredContent: { data: files[Number(input.attachmentId)]?.data } }))
+    if (request.url === '/v1/connectors/gmail/attachment') {
+      attachmentReadCount += 1
+      return response.end(JSON.stringify({ structuredContent: { data: files[Number(input.attachmentId)]?.data } }))
+    }
     if (request.url === '/v1/connectors/gmail/drafts/update') {
       updateCount += 1
       if (options.pauseUpdate && updateCount === 1) { updateStarted(); await updateGate }
@@ -126,7 +132,7 @@ async function startAttachmentConnector(options: { files?: FakeDraftFile[]; lose
   servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false, draftListLagMs: 0 })
-  return { provider, createReached, releaseCreate, updateReached, releaseUpdate, get files() { return files }, get updateCount() { return updateCount } }
+  return { provider, createReached, releaseCreate, updateReached, releaseUpdate, get files() { return files }, get updateCount() { return updateCount }, get attachmentReadCount() { return attachmentReadCount } }
 }
 
 function conversationMessage(id: string, threadId = 'thread-large') {
@@ -281,6 +287,33 @@ describe('GmailConnectorProvider', () => {
     expect(fixture.updateCount).toBe(1)
     expect(fixture.files.filter(file => file.filename === 'empty.txt')).toHaveLength(1)
     expect(fixture.files[0]?.data).toBe('')
+    fixture.provider.stopBackgroundSync()
+  })
+
+  it('confirms an empty Gmail MIME file without a download ID and never requests a nonexistent attachment', async () => {
+    const fixture = await startAttachmentConnector({ emptyFileWithoutDownloadId: true })
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-embedded-empty-')); directories.push(directory)
+    const path = join(directory, 'empty.txt'); writeFileSync(path, Buffer.alloc(0))
+    const operationId = randomUUID()
+    const result = await fixture.provider.attachDraftFiles('one', 'draft', [path], operationId)
+    expect(result.syncState).toBeUndefined()
+    expect(result.verifiedFiles).toEqual([{ name: 'empty.txt', bytes: 0, sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' }])
+    expect(result.draft.attachments).toMatchObject([{ name: 'empty.txt', contentBase64: '' }])
+    expect(fixture.attachmentReadCount).toBe(0)
+    const repeated = await fixture.provider.attachDraftFiles('one', 'draft', [path], operationId)
+    expect(repeated.syncState).toBeUndefined()
+    expect(fixture.updateCount).toBe(1)
+    fixture.provider.stopBackgroundSync()
+  })
+
+  it('does not confirm an empty MIME attachment when Gmail omits its content', async () => {
+    const fixture = await startAttachmentConnector({ emptyFileWithoutDownloadId: true, omitEmptyFileContent: true })
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-missing-empty-')); directories.push(directory)
+    const path = join(directory, 'empty.txt'); writeFileSync(path, Buffer.alloc(0))
+    const result = await fixture.provider.attachDraftFiles('one', 'draft', [path], randomUUID())
+    expect(result.syncState).toBe('pending')
+    expect(result.verifiedFiles).toEqual([])
+    expect(fixture.attachmentReadCount).toBe(0)
     fixture.provider.stopBackgroundSync()
   })
 

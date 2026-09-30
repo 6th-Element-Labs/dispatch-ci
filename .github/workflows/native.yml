@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   macos-shell:
+    if: ${{ github.event.repository.private == false }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -68,6 +69,7 @@ jobs:
         run: npm --prefix apps/desktop run smoke
 
   macos-intel:
+    if: ${{ github.event.repository.private == false }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:

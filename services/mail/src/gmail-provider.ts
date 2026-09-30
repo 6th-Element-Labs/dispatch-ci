@@ -351,7 +351,7 @@ function attachments(payload: UnknownRecord): readonly AttachmentProjection[] {
     const partBody = record(part.body)
     const size = typeof partBody?.size === 'number' ? partBody.size : 0
     return [{
-      id: text(partBody?.attachment_id) || text(part.part_id) || filename || contentId,
+      id: text(partBody?.attachment_id) || (text(part.part_id) ? `mime-part:${text(part.part_id)}` : filename || contentId),
       name: filename || contentId,
       mediaType: text(part.mime_type) || 'application/octet-stream',
       sizeLabel: size > 1_000_000 ? `${(size / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1000))} KB`,
@@ -1756,6 +1756,24 @@ export class GmailConnectorProvider {
     }
   }
   async readAttachment(accountId: string, messageId: string, attachmentId: string, filename: string): Promise<unknown> {
+    // Gmail embeds small/empty files in the MIME part and gives them no download ID.
+    // The projection then uses an explicit MIME part selector. Verify that exact part before
+    // returning embedded bytes; missing content must never be treated as an empty file.
+    const mimePartId = /^mime-part:(\d+(?:\.\d+)*)$/.exec(attachmentId)?.[1]
+    if (mimePartId !== undefined) {
+      const message = structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'full' }))
+      const part = parts(record(message.payload) ?? {}).find(item => text(item.part_id) === mimePartId && text(item.filename) === filename)
+      if (!part) throw Object.assign(new Error(`Attachment ${filename} is not part of this message`), { code: 'attachment_not_found' })
+      const partBody = record(part?.body)
+      if (!text(partBody?.attachment_id)) {
+        const data = typeof partBody?.base64_url_content === 'string' ? partBody.base64_url_content
+          : partBody?.size === 0 && partBody.content === '' ? '' : undefined
+        if (data !== undefined) return { structuredContent: { base64_url_content: data, mime_type: text(part.mime_type),
+          ...typeof partBody?.size === 'number' ? { size_bytes: partBody.size } : {} } }
+        return this.#attachmentFromRawMessage(accountId, messageId, attachmentId, filename)
+      }
+      return this.#post('/v1/connectors/gmail/attachment', { linkId: accountId, messageId, attachmentId: text(partBody?.attachment_id) })
+    }
     // The connector selects by attachment id. Sending the filename as well makes
     // the selector ambiguous when a message carries several files with one name.
     try {
