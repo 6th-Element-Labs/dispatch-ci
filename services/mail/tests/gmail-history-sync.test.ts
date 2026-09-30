@@ -72,6 +72,21 @@ describe('durable Gmail history synchronization', () => {
     expect(f.index.historyCheckpoint(account.id, account.email)).toBe('220')
   })
 
+  it('uses metadata for cached immutable messages, retains their attachment hint, and accepts an omitted empty label list', async () => {
+    const f = fixture(path => {
+      if (path === 'profile') return { emailAddress: account.email, historyId: '200' }
+      if (path.startsWith('messages?')) return { messages: [{ id: 'old' }, { id: 'new' }] }
+      if (path.startsWith('history?startHistoryId=100')) throw new GmailApiError(404, 'history_expired')
+      if (path.startsWith('history?')) return { historyId: '220' }
+      if (path === 'messages/old?format=metadata') return { ...message('old'), labelIds: undefined, payload: { headers: message('old').payload.headers } }
+      return message('new')
+    })
+    await f.sync.synchronize(account, new AbortController().signal)
+    expect(f.calls).toContain('messages/old?format=metadata')
+    expect(f.calls).toContain('messages/new?format=full')
+    expect(f.index.messages(account.id).find(row => row.id === 'old')).toMatchObject({ inArchive: true, inInbox: false, unread: false, hasAttachment: true })
+  })
+
   it('retains cached rows and the old checkpoint when an expired-history replacement scan fails', async () => {
     const f = fixture(path => {
       if (path.startsWith('history?')) throw new GmailApiError(404, 'history_expired')
@@ -179,7 +194,7 @@ describe('durable Gmail history synchronization', () => {
 
   it.each(['missing historyId', 'backwards checkpoint', 'pagination cycle', 'invalid message'])('rejects %s without committing', async kind => {
     const f = fixture(path => {
-      if (path.startsWith('messages/')) return { ...message('new'), labelIds: undefined }
+      if (path.startsWith('messages/')) return { ...message('new'), labelIds: 'INBOX' }
       if (kind === 'missing historyId') return {}
       if (kind === 'backwards checkpoint') return { historyId: '90' }
       if (kind === 'pagination cycle') return { historyId: '200', nextPageToken: 'loop' }

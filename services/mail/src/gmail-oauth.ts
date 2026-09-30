@@ -161,7 +161,7 @@ export class GmailOAuth implements GmailHistoryTransport {
     return flight
   }
   async get(account: IndexedGmailAccount, path: string, signal: AbortSignal): Promise<unknown> {
-    if (!/^(?:profile|messages\?[^#]*|messages\/[a-zA-Z0-9_-]+\?format=full|history\?[^#]*)$/.test(path)) throw new Error('Unsupported Gmail sync endpoint')
+    if (!/^(?:profile|messages\?[^#]*|messages\/[a-zA-Z0-9_-]+\?format=(?:full|metadata)|history\?[^#]*)$/.test(path)) throw new Error('Unsupported Gmail sync endpoint')
     const retryAt = this.options.retryAfter?.(account.id) ?? 0
     if (retryAt > Date.now()) throw new GmailApiError(429, 'gmail_backoff')
     let credential = await this.#credential(account)
@@ -193,9 +193,9 @@ export class GmailOAuth implements GmailHistoryTransport {
     throw new GmailApiError(401, 'oauth_reconnect_required')
   }
   async #pace(accountId: string, path: string, signal: AbortSignal): Promise<void> {
-    // New Google projects allow 6,000 units/user/minute; message reads cost 20.
-    // Reserve slots synchronously across concurrent readers, using 80% of that budget.
-    const cost = path.startsWith('messages/') ? 20 : path.startsWith('messages?') ? 5 : path.startsWith('history?') ? 2 : 1
+    // Reserve slots across concurrent readers, using 80% of the 6,000-unit budget.
+    // Full MIME reads use a conservative 3x reservation after live quota exhaustion.
+    const cost = path.startsWith('messages/') ? path.endsWith('format=full') ? 60 : 20 : path.startsWith('messages?') ? 5 : path.startsWith('history?') ? 2 : 1
     const now = (this.options.now ?? Date.now)()
     const slot = Math.max(now, this.#nextRead.get(accountId) ?? 0)
     this.#nextRead.set(accountId, slot + cost * 60_000 / 4_800)

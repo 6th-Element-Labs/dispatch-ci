@@ -26,15 +26,17 @@ export interface GmailAccountProjection {
 /** Normalize Google's REST casing at the adapter boundary; mail projections stay unchanged. */
 export function projectGmailApiMessage(value: unknown, account: GmailAccountProjection): IndexedGmailMessage {
   const message = gmailObject(value)
-  if (!Array.isArray(message.labelIds) || !message.labelIds.every(label => typeof label === 'string')) throw new Error('Gmail API message is missing labels')
+  // Google omits empty repeated fields; a label-free message is valid archived mail.
+  const labels = message.labelIds === undefined ? [] : message.labelIds
+  if (!Array.isArray(labels) || !labels.every(label => typeof label === 'string')) throw new Error('Gmail API message has invalid labels')
   const payload = gmailObject(message.payload)
-  const projection = projectGmailMessage({ structuredContent: { id: message.id, thread_id: message.threadId, label_ids: message.labelIds, internal_date: message.internalDate, snippet: message.snippet, payload } }, false, account)
+  const projection = projectGmailMessage({ structuredContent: { id: message.id, thread_id: message.threadId, label_ids: labels, internal_date: message.internalDate, snippet: message.snippet, payload } }, false, account)
   const files = (part: UnknownRecord): boolean => {
     if (typeof part.filename === 'string' && part.filename) return true
     if (part.parts !== undefined && !Array.isArray(part.parts)) throw new Error('Invalid Gmail API MIME parts')
     return Array.isArray(part.parts) && part.parts.some(child => files(gmailObject(child)))
   }
-  return { ...projection, hasAttachment: files(payload), ...folderFlagsFromLabels(message.labelIds) }
+  return { ...projection, hasAttachment: files(payload), ...folderFlagsFromLabels(labels) }
 }
 
 type UnknownRecord = Record<string, unknown>

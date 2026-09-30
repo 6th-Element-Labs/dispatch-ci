@@ -24,8 +24,11 @@ tools keep the existing application contracts and connector paths.
 
 The first authorized pass captures `profile.historyId` before enumerating all
 message IDs, including Spam and Trash. It hydrates message metadata with at most
-four reads at once, paced to 4,800 quota units per account per minute. Current
-Google projects allow 6,000 units and each message read costs 20 units.
+four reads at once, paced to a conservative 4,800-unit budget per account per
+minute. Cached message IDs use metadata reads and keep their immutable MIME
+attachment hint. New IDs require full MIME reads, with a larger budget reservation
+after live quota exhaustion. Gmail draft replacement creates a new message ID,
+so new attachment/body content is never inferred from a different message.
 
 Completed batches are stored in private SQLite staging. A timeout, rate limit,
 cancellation or restart resumes the unread IDs instead of restarting the scan.
@@ -103,7 +106,7 @@ revocation and checkpoint expiry against Gmail's actual state. Measure initial
 baseline duration and steady-state provider requests; fixture tests cannot stand
 in for these results.
 
-Local verification on 2026-10-01 passed 729 checks across scripts, mail, agent,
+Local verification on 2026-10-01 passed 730 checks across scripts, mail, agent,
 web units and browser acceptance, plus 43 native Rust tests. One existing optional
 browser screenshot test was skipped. A real macOS Keychain round-trip used only
 an owned fake credential and removed that fixture afterward. These checks do not

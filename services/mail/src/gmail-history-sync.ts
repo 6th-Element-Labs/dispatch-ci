@@ -76,7 +76,7 @@ export class GmailHistorySync {
     throw new Error(`Gmail API pagination exceeded ${this.maxPages} pages`)
   }
 
-  async #hydrate(account: IndexedGmailAccount, ids: ReadonlySet<string>, signal: AbortSignal, stage?: (messages: IndexedGmailMessage[], deleted: string[]) => void): Promise<{ messages: IndexedGmailMessage[]; deleted: string[] }> {
+  async #hydrate(account: IndexedGmailAccount, ids: ReadonlySet<string>, signal: AbortSignal, stage?: (messages: IndexedGmailMessage[], deleted: string[]) => void, cached?: ReadonlyMap<string, IndexedGmailMessage>): Promise<{ messages: IndexedGmailMessage[]; deleted: string[] }> {
     const messages: IndexedGmailMessage[] = []
     const deleted: string[] = []
     const pending = [...ids]
@@ -86,9 +86,12 @@ export class GmailHistorySync {
       const messagesBefore = messages.length; const deletedBefore = deleted.length
       const results = await Promise.allSettled(pending.slice(offset, offset + 4).map(async messageId => {
         try {
-          const value = await this.transport.get(account, `messages/${encodeURIComponent(messageId)}?format=full`, signal)
+          const known = cached?.get(messageId)
+          const value = await this.transport.get(account, `messages/${encodeURIComponent(messageId)}?format=${known ? 'metadata' : 'full'}`, signal)
           signal.throwIfAborted()
-          const message = this.project(value, account)
+          const projected = this.project(value, account)
+          // Gmail message MIME is immutable by message ID; draft replacement creates a new ID.
+          const message = known ? { ...projected, hasAttachment: known.hasAttachment } : projected
           if (message.id !== messageId || message.accountId !== account.id) throw new Error('Gmail API returned another message identity')
           messages.push(message)
           this.onProgress?.('message')
@@ -121,7 +124,8 @@ export class GmailHistorySync {
       this.index.beginHistoryBaseline(account.id, account.email, start, ids)
       baseline = this.index.historyBaseline(account.id, account.email)!
     }
-    await this.#hydrate(account, new Set(baseline.pending), signal, (messages, deleted) => this.index.stageHistoryBaseline(account.id, messages, deleted))
+    const cached = new Map(this.index.messages(account.id).map(message => [message.id, message]))
+    await this.#hydrate(account, new Set(baseline.pending), signal, (messages, deleted) => this.index.stageHistoryBaseline(account.id, messages, deleted), cached)
     baseline = this.index.historyBaseline(account.id, account.email)!
     let delta: Awaited<ReturnType<GmailHistorySync['readDelta']>>
     try { delta = await this.readDelta(account, baseline.historyId, signal) }

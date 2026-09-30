@@ -75,7 +75,7 @@ describe('mail-owned Google authorization', () => {
     const manager = new GmailOAuth(config, f.store, { fetch: f.fetcher, now: () => 1000, wait: async milliseconds => { delays.push(milliseconds) } })
     managers.push(manager)
     await Promise.all(Array.from({ length: 4 }, (_, i) => manager.get(account, `messages/id${i}?format=full`, new AbortController().signal)))
-    expect(delays).toEqual([250, 500, 750])
+    expect(delays).toEqual([750, 1500, 2250])
     expect(f.fetcher).toHaveBeenCalledTimes(4)
     await expect(manager.get({ ...account, id: 'two' }, 'profile', new AbortController().signal)).resolves.toEqual({ historyId: '200' })
     expect(delays).toHaveLength(3)
