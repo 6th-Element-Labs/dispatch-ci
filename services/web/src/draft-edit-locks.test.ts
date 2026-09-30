@@ -43,6 +43,16 @@ describe('DraftEditLocks', () => {
     expect((await pop.localKeysHeldElsewhere()).size).toBe(0)
   })
 
+  it('scopes Gmail draft edit locks by account', async () => {
+    const manager = lockManager()
+    const first = new DraftEditLocks(manager.client())
+    const second = new DraftEditLocks(manager.client())
+    first.hold({ accountId: 'work', gmailDraftId: 'same-id' })
+    await settle()
+    expect(await second.heldElsewhere({ accountId: 'work', gmailDraftId: 'same-id' })).toBe(true)
+    expect(await second.heldElsewhere({ accountId: 'personal', gmailDraftId: 'same-id' })).toBe(false)
+  })
+
   it('follows the draft as its identity changes and releases it when the editor closes', async () => {
     const manager = lockManager()
     const pop = new DraftEditLocks(manager.client())

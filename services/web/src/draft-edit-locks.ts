@@ -11,6 +11,7 @@
 export interface DraftIdentity {
   readonly localKey?: string
   readonly gmailDraftId?: string
+  readonly accountId?: string
 }
 
 export type LockManagerLike = {
@@ -23,7 +24,12 @@ const LOCAL = `${PREFIX}local:`
 const GMAIL = `${PREFIX}gmail:`
 
 function names(identity: DraftIdentity | undefined): string[] {
-  return [identity?.localKey && `${LOCAL}${identity.localKey}`, identity?.gmailDraftId && `${GMAIL}${identity.gmailDraftId}`].filter((name): name is string => Boolean(name))
+  const gmailName = identity?.gmailDraftId
+    ? identity.accountId
+      ? `${GMAIL}${encodeURIComponent(identity.accountId)}:${encodeURIComponent(identity.gmailDraftId)}`
+      : `${GMAIL}${identity.gmailDraftId}`
+    : undefined
+  return [identity?.localKey && `${LOCAL}${identity.localKey}`, gmailName].filter((name): name is string => Boolean(name))
 }
 
 export class DraftEditLocks {

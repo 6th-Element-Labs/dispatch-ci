@@ -123,6 +123,10 @@ fn focus_mail(app: &AppHandle) {
 }
 pub fn return_to_mail(app: &AppHandle) { if let Some(window) = app.get_window(WINDOW) { let _ = window.close(); } focus_mail(app); }
 
+fn is_sign_in_url(url: &Url) -> bool {
+    url.scheme() == "https" && url.host_str() == Some("auth.openai.com") && url.path() == "/oauth/authorize"
+}
+
 #[tauri::command]
 pub async fn open_web_link(app: AppHandle, webview: Webview, url: String) -> Result<(), String> {
     if !mail_view_label(webview.label()) { return Err("This command is only available from Dispatch controls".into()); }
@@ -130,6 +134,9 @@ pub async fn open_web_link(app: AppHandle, webview: Webview, url: String) -> Res
     let parsed = Url::parse(&url).map_err(|_| "This link is not a valid URL")?;
     if parsed.scheme() == "mailto" { return app.opener().open_url(parsed.to_string(), None::<&str>).map_err(|e| e.to_string()); }
     if parsed.scheme() == "codex" { return app.opener().open_url(external_app_url(&url)?.to_string(), None::<&str>).map_err(|e| e.to_string()); }
+    // The Codex OAuth callback belongs to App Server. Use the system browser so
+    // sign-in uses the user's existing login and returns to its localhost callback.
+    if is_sign_in_url(&parsed) { return app.opener().open_url(parsed.to_string(), None::<&str>).map_err(|e| e.to_string()); }
     open_page(&app, web_url(&url)?)
 }
 // Query and navigate the actual WKWebView history, not a JavaScript history invented by the page.
@@ -179,6 +186,14 @@ pub fn perform_action(app: &AppHandle, action: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_official_oauth_authorize_opens_external_sign_in() {
+        assert!(is_sign_in_url(&Url::parse("https://auth.openai.com/oauth/authorize?state=test").unwrap()));
+        for value in ["http://auth.openai.com/oauth/authorize", "https://auth.openai.com.example.com/oauth/authorize", "https://auth.openai.com/other", "https://example.com/oauth/authorize"] {
+            assert!(!is_sign_in_url(&Url::parse(value).unwrap()));
+        }
+    }
+
     #[test]
     fn only_web_pages_enter_remote_view() {
         for url in ["https://example.com/a?b=c#d", "http://example.com"] { assert!(web_url(url).is_ok()); }

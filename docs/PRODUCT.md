@@ -85,6 +85,8 @@ Dispatch embeds the full installed Codex experience, not an email-only agent. It
 
 ## Search with Codex
 
+Installed Dispatch keeps its Codex runtime current automatically using stable OpenAI releases. Checks run at launch and every six hours while the background agent is running; failed checks retry after fifteen minutes. Downloads are verified before use, activation waits for all Codex work to finish, and failed startup restores the working runtime. Models come from that runtime's account catalog, so new releases need no Dispatch rebuild or separate login. Explicit runtime overrides remain available for pinned installations.
+
 Typing in Search keeps the instant indexed filter. Enter or the adjacent Tabler sparkles button submits a natural-language search to the existing unbound Codex task. The selected account is the search scope; All inboxes searches connected accounts across mail folders. Unsaved drafts must be saved successfully before navigating into search.
 
 Codex uses its installed Gmail tools to search and read candidate messages, then publishes a result list through `dispatch_mail.show_search_results`. The mail service verifies every account/message identity and quoted body passage before returning a projection. Codex supplies relevance judgments; unread status is not treated as evidence that a question is unanswered.

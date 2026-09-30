@@ -1,3 +1,4 @@
+import DOMPurify from 'dompurify'
 import { installWebLinks } from './web-links.js'
 import { DraftRecovery, type RecoveryDraft } from './draft-recovery.js'
 import { resultExcerpt, highlightPassage } from './search-highlights.js'
@@ -96,6 +97,7 @@ app.innerHTML = `
         <div class="dispatch-search-status" data-search-status hidden><span data-search-summary role="status"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-clear-search aria-label="Return to mailbox">Clear</button></div>
         <div class="list-group list-group-flush dispatch-message-list" data-message-list></div>
         <div class="alert alert-danger m-3 dispatch-pane-error" role="alert" data-mail-error hidden></div>
+        <div class="m-3" data-mail-reconnect hidden><button class="btn btn-outline-primary" data-reconnect-account><i class="ti ti-plug-connected me-1"></i>Reconnect Gmail</button><span class="ms-2 text-secondary" data-reconnect-status></span></div>
         <footer class="dispatch-mail-activity"><div class="dispatch-activity-status">        <span class="dispatch-sync" data-sync-state="idle"><span class="dispatch-sync-dot" aria-hidden="true"></span><span class="text-secondary" data-mail-source>Loading</span></span>
         <button class="btn btn-icon btn-ghost-secondary btn-sm" type="button" data-refresh aria-label="Refresh" title="Refresh Gmail"><i class="ti ti-refresh" aria-hidden="true"></i></button></div><button class="btn btn-sm" data-activity-toggle aria-expanded="false" aria-controls="dispatch-activity"><i class="ti ti-activity" aria-hidden="true"></i><span>Mail activity</span></button><div class="dispatch-activity-popover" id="dispatch-activity" hidden><strong>Mail activity</strong><div class="dispatch-activity-options"><button type="button" class="nav-link" data-offline-open><i class="ti ti-cloud-down" aria-hidden="true"></i><span>Offline</span></button></div><p class="small text-secondary mb-0">Downloaded mail</p></div></footer>
       </aside>
@@ -127,6 +129,7 @@ app.innerHTML = `
             </div>
             <div class="dispatch-thread-meta" data-thread-meta><span class="dispatch-account-dot" data-account-dot hidden aria-hidden="true"></span><span data-address hidden></span><span class="dispatch-meta-sep" data-account-sep hidden>·</span><span data-thread-mailbox></span><span class="dispatch-meta-sep" data-count-sep hidden>·</span><span data-message-count hidden></span><span class="dispatch-copy-chip" data-copy-status data-mode="live" hidden role="status"><i class="ti ti-cloud-down" aria-hidden="true"></i><span data-copy-label></span></span><button type="button" class="btn btn-sm btn-ghost-primary dispatch-thread-files-toggle" data-thread-files-toggle aria-expanded="false" aria-controls="dispatch-thread-files" hidden></button></div>
           </header>
+          <div class="dispatch-thread-completeness" data-thread-completeness hidden role="status"><span data-thread-completeness-text></span><button class="btn btn-sm btn-ghost-primary" type="button" data-refresh-thread-completeness>Refresh thread</button></div>
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="card-body dispatch-draft" data-draft hidden>
@@ -139,6 +142,11 @@ app.innerHTML = `
               <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-account">From</label><select class="form-select" id="dispatch-draft-account" data-draft-account aria-label="Draft account"></select></div>
             </div>
             <textarea class="form-control dispatch-draft-text" data-draft-body aria-label="Draft body" placeholder="Write your message"></textarea>
+            <section class="dispatch-draft-conflict" data-draft-conflict hidden role="group" aria-label="Gmail draft conflict">
+              <div class="dispatch-draft-conflict-heading"><strong>Gmail changed this draft</strong><span data-draft-conflict-summary></span></div>
+              <pre class="dispatch-draft-conflict-remote" data-draft-conflict-remote aria-label="Gmail version"></pre>
+              <div class="dispatch-draft-conflict-actions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-use-gmail-version>Use Gmail version</button><button class="btn btn-sm btn-primary" type="button" data-keep-local-edits>Keep my edits</button></div>
+            </section>
             <ul class="dispatch-draft-attachments" data-draft-attachments aria-label="Draft attachments" hidden></ul>
             <div class="dispatch-draft-preview markdown" id="dispatch-draft-preview" data-draft-preview aria-label="Draft preview" hidden></div>
             <p class="text-secondary small" data-draft-error hidden></p>
@@ -225,6 +233,9 @@ const elements = {
   mailboxTitle: app.querySelector<HTMLElement>('[data-mailbox-title]')!,
   account: app.querySelector<HTMLSelectElement>('[data-account]')!,
   mailError: app.querySelector<HTMLElement>('[data-mail-error]')!,
+  mailReconnect: app.querySelector<HTMLElement>('[data-mail-reconnect]')!,
+  reconnectAccount: app.querySelector<HTMLButtonElement>('[data-reconnect-account]')!,
+  reconnectStatus: app.querySelector<HTMLElement>('[data-reconnect-status]')!,
   reader: app.querySelector<HTMLElement>('[data-reader]')!,
   readerEmpty: app.querySelector<HTMLElement>('[data-reader-empty]')!,
   subject: app.querySelector<HTMLElement>('[data-subject]')!,
@@ -241,6 +252,9 @@ const elements = {
   readerMenu: app.querySelector<HTMLElement>('[data-reader-menu]')!,
   body: app.querySelector<HTMLElement>('[data-body]')!,
   threadFilesToggle: app.querySelector<HTMLButtonElement>('[data-thread-files-toggle]')!,
+  threadCompleteness: app.querySelector<HTMLElement>('[data-thread-completeness]')!,
+  threadCompletenessText: app.querySelector<HTMLElement>('[data-thread-completeness-text]')!,
+  refreshThreadCompleteness: app.querySelector<HTMLButtonElement>('[data-refresh-thread-completeness]')!,
   attachments: app.querySelector<HTMLElement>('[data-attachments]')!,
   draft: app.querySelector<HTMLElement>('[data-draft]')!,
   draftTo: app.querySelector<HTMLInputElement>('[data-draft-to]')!,
@@ -251,6 +265,11 @@ const elements = {
   draftBody: app.querySelector<HTMLTextAreaElement>('[data-draft-body]')!,
   draftPreview: app.querySelector<HTMLElement>('[data-draft-preview]')!,
   draftError: app.querySelector<HTMLElement>('[data-draft-error]')!,
+  draftConflict: app.querySelector<HTMLElement>('[data-draft-conflict]')!,
+  draftConflictSummary: app.querySelector<HTMLElement>('[data-draft-conflict-summary]')!,
+  draftConflictRemote: app.querySelector<HTMLElement>('[data-draft-conflict-remote]')!,
+  useGmailVersion: app.querySelector<HTMLButtonElement>('[data-use-gmail-version]')!,
+  keepLocalEdits: app.querySelector<HTMLButtonElement>('[data-keep-local-edits]')!,
   draftAttachments: app.querySelector<HTMLElement>('[data-draft-attachments]')!,
   draftFiles: app.querySelector<HTMLInputElement>('[data-draft-files]')!,
   discardDraft: app.querySelector<HTMLButtonElement>('[data-discard-draft]')!,
@@ -339,6 +358,8 @@ new MutationObserver(renderServiceStatus).observe(elements.mailSource, { childLi
 new MutationObserver(renderServiceStatus).observe(elements.agentStatus, { attributes: true, attributeFilter: ['data-status'] })
 renderServiceStatus()
 let activeDraft: DraftProjection | undefined
+let activeForwardOrigin: { accountId: string; messageId: string } | undefined
+let activeDraftReplyMode: { accountId?: string; messageId: string; replyAll: boolean } | undefined
 let draftPreviewTimer: number | undefined
 let draftAutosaveTimer: number | undefined
 let recipientSuggestTimer: number | undefined
@@ -346,7 +367,13 @@ let draftPreviewSequence = 0
 let draftEditSession = 0
 let draftDirty = false
 let draftEditRevision = 0
+let draftBase: DraftProjection | undefined
+let resolvingDraftConflict = false
 function markDraftDirty(): void { draftDirty = true; draftEditRevision += 1; checkpointDraft() }
+
+function sanitizeDraftPreview(html: string): string {
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+}
 // Keep Gmail draft writes in order so a slow save cannot overwrite a newer save.
 let draftSaveFlight: Promise<DraftProjection | undefined> | undefined
 // Keep Gmail send confirmation single-flight.
@@ -357,7 +384,7 @@ const recovery = new DraftRecovery()
 const draftEditLocks = new DraftEditLocks((navigator as Navigator & { locks?: unknown }).locks as LockManagerLike | undefined)
 /** Hold the cross-window claim on whatever this window is editing (see draft-edit-locks.ts). */
 function syncDraftEditLock(): void {
-  draftEditLocks.hold(activeDraft ? { localKey: recoveryKey, gmailDraftId: activeDraft.id || undefined } : undefined)
+  draftEditLocks.hold(activeDraft ? { localKey: recoveryKey, accountId: activeDraft.accountId, gmailDraftId: activeDraft.id || undefined } : undefined)
 }
 let draftSyncTimer: number | undefined
 const backgroundDraftSaves = new Map<string, Promise<DraftProjection | undefined>>()
@@ -404,9 +431,18 @@ async function syncPendingDrafts(): Promise<void> {
       const restored = await recovery.restore(record.key)
       if (restored.missing.length) return
       const current = restored.record
+      if (current.conflict) { pending = true; return undefined }
       if ([current.to, current.cc, current.bcc].flatMap(parseRecipientList).some(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) return
-      const fields = { accountId: current.accountId, messageId: current.inReplyToMessageId, clientDraftId: current.key, to: current.to, cc: current.cc, bcc: current.bcc, subject: current.subject, bodyMarkdown: current.bodyMarkdown, attachments: restored.attachments }
-      const saved = current.gmailDraftId ? await api.updateDraft(current.gmailDraftId, fields) : await api.createDraft('', fields)
+      const base = current.base && current.base.id === current.gmailDraftId ? baselineSnapshot(current.base) : undefined
+      const fields = {
+        accountId: current.accountId, draftId: current.gmailDraftId || undefined, messageId: current.inReplyToMessageId,
+        clientDraftId: current.key, to: current.to, cc: current.cc, bcc: current.bcc, subject: current.subject, bodyMarkdown: current.bodyMarkdown,
+        ...(!current.gmailDraftId || current.attachmentsChanged !== false ? { attachments: restored.attachments } : {}),
+        ...(base ? { base } : {}),
+      }
+      const saved = current.accountId === 'demo'
+        ? current.gmailDraftId ? await api.updateDraft(current.gmailDraftId, fields) : await api.createDraft('', fields)
+        : await api.saveDraft(fields)
       void linkDraftTask(current.key, saved).catch(error => console.error('Draft task binding will need reconnection:', error))
       recovery.bindGmailIdentity(current.key, current.accountId!, saved.id, saved.gmailThreadId)
       recovery.removeSavedRevision(current.key, current.revision)
@@ -434,6 +470,7 @@ async function syncPendingDrafts(): Promise<void> {
 window.addEventListener('online', () => { if (draftSyncTimer !== undefined) window.clearTimeout(draftSyncTimer); draftSyncTimer = undefined; scheduleDraftSync(0) })
 let recoveryKey: string | undefined
 let draftSeed: { fields: string; attachments: DraftProjection['attachments'] } | undefined
+let draftAttachmentsChanged = false
 function editorFields(): string { return JSON.stringify([recipientValue(elements.draftTo), recipientValue(elements.draftCc), recipientValue(elements.draftBcc), elements.draftSubject.value, elements.draftBody.value]) }
 // Older builds persisted network loss as an explicit offline preference.
 // Only a deliberate user choice may disable live Gmail reads and refresh.
@@ -955,6 +992,22 @@ function renderThreadMeta(summary: Pick<ConversationSummary, 'messageCount' | 'a
   elements.accountDot.style.background = accountColor(summary.accountId)
 }
 
+let threadRefreshInFlight = false
+let threadRefreshFailed = false
+function renderThreadCompleteness(conversation: ConversationProjection | undefined): void {
+  const completeness = conversation?.completeness
+  const incomplete = completeness?.complete === false
+  elements.threadCompleteness.hidden = !incomplete
+  if (!incomplete) return
+  const shown = completeness.loadedCount
+  const known = completeness.knownCount
+  elements.threadCompletenessText.textContent = threadRefreshFailed
+    ? `Showing ${shown} of at least ${known} messages. More messages could not be loaded; the messages shown remain available.`
+    : `Showing ${shown} of at least ${known} messages. Refresh to check for the rest.`
+  elements.refreshThreadCompleteness.disabled = threadRefreshInFlight
+  elements.refreshThreadCompleteness.textContent = threadRefreshInFlight ? 'Refreshing…' : 'Refresh thread'
+}
+
 function renderThreadMessage(message: MessageProjection, expanded: boolean): HTMLElement {
   const article = document.createElement('article')
   article.className = 'card dispatch-thread-message'
@@ -1083,25 +1136,6 @@ function renderThreadMessage(message: MessageProjection, expanded: boolean): HTM
   return article
 }
 
-/**
- * Warms the mail cache for every attachment in the thread, newest message
- * first, so opening or previewing one later is instant. Stops as soon as the
- * selection moves on; failures are left for the explicit open to report.
- */
-async function warmAttachments(conversation: ConversationProjection, sequence: number): Promise<void> {
-  const ordered = [...conversation.messages].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))
-  for (const message of ordered) {
-    for (const attachment of message.attachments) {
-      if (sequence !== selectionSequence) return
-      try {
-        await api.cacheAttachment(message.id, attachment.id, message.accountId, attachment.name)
-      } catch {
-        // The explicit open reports connector failures; warming stays silent.
-      }
-    }
-  }
-}
-
 async function openAttachment(message: MessageProjection, attachmentId: string, filename: string): Promise<void> {
   selectedAttachmentContext = { accountId: message.accountId, threadId: message.threadId, messageId: message.id, attachmentId, filename }
   try {
@@ -1115,6 +1149,13 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   const matchResult = searchView?.results.find(result => result.conversation.id === id)
   const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
   if (!summary) return
+  const preserveReader = Boolean(options.refresh && id === selectedConversationId && selected)
+  const preserveDraftEditor = Boolean(preserveReader && activeDraft)
+  if (!preserveReader) {
+    threadRefreshFailed = false
+    threadRefreshInFlight = false
+    renderThreadCompleteness(undefined)
+  }
   readerNeedsRetry = false
   // Navigation depends only on a durable local checkpoint. The existing save
   // flight and outbox finish independently of the selected email.
@@ -1138,23 +1179,27 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   selectedConversationId = id
   selection = { ids: [id], anchor: id }
   selectedSummary = summary
-  selected = undefined
-  activeDraft = undefined
-  recoveryKey = undefined
-  syncDraftEditLock()
-  draftEditSession += 1
-  draftDirty = false
-  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
-  if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  if (!preserveReader) {
+    selected = undefined
+    activeDraft = undefined
+    recoveryKey = undefined
+    syncDraftEditLock()
+    draftEditSession += 1
+    draftDirty = false
+    if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
+    if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
+  }
   renderList()
   elements.readerEmpty.hidden = true
   elements.reader.hidden = false
-  elements.reader.classList.remove('dispatch-drafting')
-  elements.reader.classList.remove('dispatch-composing')
-  elements.reader.classList.remove('dispatch-multi')
+  if (!preserveDraftEditor) {
+    elements.reader.classList.remove('dispatch-drafting')
+    elements.reader.classList.remove('dispatch-composing')
+    elements.reader.classList.remove('dispatch-multi')
+  }
   elements.body.hidden = false
   renderMailbox()
-  elements.draft.hidden = true
+  if (!preserveDraftEditor) elements.draft.hidden = true
   elements.body.hidden = false
   elements.attachments.hidden = false
   elements.copyStatus.hidden = true
@@ -1163,19 +1208,21 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
   const loading = document.createElement('div')
   loading.className = 'empty text-secondary dispatch-reader-loading'
   loading.textContent = 'Loading conversation…'
-  elements.body.replaceChildren(loading)
-  elements.attachments.replaceChildren()
-  elements.threadFilesToggle.hidden = true
+  if (!preserveReader) {
+    elements.body.replaceChildren(loading)
+    elements.attachments.replaceChildren()
+    elements.threadFilesToggle.hidden = true
+  }
   if (!offlineMode && options.startReadDwell && summary.unread && summary.accountId) {
     const conversationId = summary.id
     markReadDwell.schedule(conversationId, () => { void completeReadDwell(conversationId) })
   }
 
-  if (!offlineMode && !searchView && mailbox === 'drafts' && summary.accountId) {
+  if (!offlineMode && !searchView && mailbox === 'drafts' && summary.accountId && !preserveDraftEditor) {
     try {
       const draft = await api.openDraftFromMessage(summary.accountId, summary.latestMessageId, summary.threadId)
       if (sequence !== selectionSequence || selectedConversationId !== id) return
-      if (await draftEditLocks.heldElsewhere({ gmailDraftId: draft.id })) {
+      if (await draftEditLocks.heldElsewhere({ accountId: summary.accountId, gmailDraftId: draft.id })) {
         if (sequence !== selectionSequence || selectedConversationId !== id) return
         loading.className = 'alert alert-info m-4 dispatch-reader-load-error'
         loading.textContent = 'This draft is open in another window.'
@@ -1184,7 +1231,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
       showDraft(draft, false)
       if (draft.cachedAt) void refreshOpenedDraft(draft, sequence, draftEditRevision)
       try {
-        const key = conversationBindingKey({ accountId: summary.accountId, threadId: summary.threadId })
+        const key: CodexPaneKey = draft.id.startsWith('queued-') ? { kind: 'draft', draftKey: draft.id } : conversationBindingKey({ accountId: summary.accountId, threadId: summary.threadId })
         await bindAndShowCodex(key, { sequence })
       } catch (error) {
         if (sequence !== selectionSequence) return
@@ -1222,6 +1269,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     // accepted commands own the row and toolbar's read state together.
     const currentSummary = conversations.find(item => item.id === id) ?? summary
     selected = { ...conversation, unread: acceptedReadState.get(id) ?? currentSummary.unread }
+    threadRefreshFailed = false
     readerNeedsRetry = !offlineMode && conversation.availability?.mode === 'downloaded'
     renderCopyChip(conversation.availability)
     if (conversation.availability?.mode === 'downloaded') markReadDwell.cancel()
@@ -1229,6 +1277,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     renderReadState(selected.unread)
     elements.subject.textContent = conversation.subject
     renderThreadMeta({ ...conversation, messageCount: conversation.messages.length })
+    renderThreadCompleteness(conversation)
     const newestFirst = [...conversation.messages].sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
     elements.body.replaceChildren(...newestFirst.map((message, index) => renderThreadMessage(message, index === 0 || Boolean(matchResult?.hits.some(hit => hit.messageId === message.id)))))
     const attachmentCount = newestFirst.reduce((count, message) => count + message.attachments.length, 0)
@@ -1245,6 +1294,10 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
         expanded.tabIndex = -1
         expanded.focus({ preventScroll: true })
         expanded.scrollIntoView({ block: 'nearest' })
+      }, {
+        status: async (message, attachmentId, name) => (await api.attachmentCacheStatus(message.id, attachmentId, message.accountId, name)).cached,
+        download: async (message, attachmentId, name) => api.cacheAttachment(message.id, attachmentId, message.accountId, name),
+        isCurrent: () => sequence === selectionSequence && selectedConversationId === id,
       })
       const toggle = elements.threadFilesToggle
       const renderDisclosure = () => {
@@ -1281,7 +1334,6 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
         ;(message?.querySelector('mark') ?? message)?.scrollIntoView({ block: 'center' })
       }
     }
-    if (!offlineMode && conversation.availability?.mode !== 'downloaded') void warmAttachments(conversation, sequence)
     prefetchConversations(id)
     if (keepCodex) return
     try {
@@ -1295,6 +1347,11 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     }
   } catch (error) {
     if (sequence !== selectionSequence) return
+    if (preserveReader) {
+      threadRefreshFailed = true
+      renderThreadCompleteness(selected)
+      return
+    }
     readerNeedsRetry = true
     loading.className = 'alert alert-danger m-4 dispatch-reader-load-error'
     loading.textContent = 'This message is not available yet. Dispatch will retry when Gmail reconnects.'
@@ -1647,7 +1704,7 @@ function clearDraftAttachmentObjectUrls(): void {
 }
 
 function draftAttachmentFileUrl(draft: DraftProjection, attachment: DraftProjection['attachments'][number]): string | undefined {
-  if (attachment.contentBase64) {
+  if (attachment.contentBase64 !== undefined) {
     const bytes = Uint8Array.from(atob(attachment.contentBase64), (char) => char.charCodeAt(0))
     const url = URL.createObjectURL(new Blob([bytes], { type: attachment.mediaType }))
     draftAttachmentObjectUrls.add(url)
@@ -1661,7 +1718,7 @@ function draftAttachmentFileUrl(draft: DraftProjection, attachment: DraftProject
 
 async function openDraftAttachment(draft: DraftProjection, attachment: DraftProjection['attachments'][number]): Promise<void> {
   try {
-    if (attachment.contentBase64) await api.openLocalDraftAttachment(attachment.name, attachment.contentBase64)
+    if (attachment.contentBase64 !== undefined) await api.openLocalDraftAttachment(attachment.name, attachment.contentBase64, draft.accountId)
     else {
       const messageId = attachment.sourceMessageId ?? draft.gmailMessageId
       if (!messageId || !attachment.id) throw new Error('This attachment has no file identity. Reopen the draft and try again.')
@@ -1684,7 +1741,7 @@ function renderDraftAttachments(): void {
     open.textContent = attachment.name
     open.setAttribute('aria-label', `Open ${attachment.name}`)
     const draft = activeDraft!
-    open.disabled = !attachment.contentBase64 && !(attachment.id && (attachment.sourceMessageId || draft.gmailMessageId))
+    open.disabled = attachment.contentBase64 === undefined && !(attachment.id && (attachment.sourceMessageId || draft.gmailMessageId))
     open.addEventListener('click', () => { void openDraftAttachment(draft, attachment) })
     actions.append(open)
     if (attachment.mediaType.startsWith('image/') || attachment.mediaType === 'application/pdf') {
@@ -1722,7 +1779,9 @@ function renderDraftAttachments(): void {
     remove.setAttribute('aria-label', `Remove attachment ${attachment.name}`)
     remove.addEventListener('click', () => {
       if (!activeDraft) return
+      updateDraftAttachmentBaselineFromEditor()
       activeDraft = { ...activeDraft, attachments: activeDraft.attachments.filter((_, itemIndex) => itemIndex !== index) }
+      draftAttachmentsChanged = true
       renderDraftAttachments()
       markDraftDirty()
       if (activeDraft.id) void saveDraft(false).catch(draftError)
@@ -1769,6 +1828,9 @@ function checkpointDraft(): boolean {
       gmailThreadId: activeDraft.gmailThreadId ?? selected?.threadId,
       accountId, accountLabel: accounts.find(account => account.id === accountId)?.email, gmailDraftId: activeDraft.id,
       inReplyToMessageId: activeDraft.inReplyToMessageId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, bodyMarkdown: elements.draftBody.value,
+      ...(draftBase ? { base: baselineSnapshot(draftBase) } : {}), ...(activeDraft.conflict ? { conflict: activeDraft.conflict } : {}),
+      ...(activeDraft.draftRevision ? { draftRevision: activeDraft.draftRevision } : {}),
+      attachmentsChanged: draftAttachmentsChanged,
     }, activeDraft.attachments)
     elements.recoveryStatus.textContent = 'Saved · waiting to sync'
     scheduleDraftSync()
@@ -1782,6 +1844,142 @@ function checkpointDraft(): boolean {
     }).catch(draftError)
     return true
   } catch (error) { draftError(new Error('This device could not save your draft. Keep it open and free some disk space before leaving.')); return false }
+}
+
+function baselineSnapshot(draft: DraftProjection): DraftProjection {
+  return {
+    id: draft.id,
+    ...(draft.accountId ? { accountId: draft.accountId } : {}),
+    inReplyToMessageId: draft.inReplyToMessageId,
+    to: draft.to.map(address => ({ ...address })),
+    cc: draft.cc ?? '',
+    bcc: draft.bcc ?? '',
+    subject: draft.subject,
+    bodyMarkdown: draft.bodyMarkdown,
+    bodyText: draft.bodyMarkdown,
+    bodyHtml: '',
+    attachments: draft.attachments.map(attachment => {
+      const metadata = { ...attachment }
+      delete (metadata as { contentBase64?: string }).contentBase64
+      return metadata
+    }),
+    state: 'draft',
+    ...(draft.gmailThreadId ? { gmailThreadId: draft.gmailThreadId } : {}),
+    ...(draft.gmailMessageId ? { gmailMessageId: draft.gmailMessageId } : {}),
+  }
+}
+
+/** Record the attachment list the editor just showed to the user without advancing other fields. */
+function updateDraftAttachmentBaselineFromEditor(): void {
+  if (!activeDraft?.id || !draftBase || draftBase.id !== activeDraft.id
+    || (draftBase.accountId && draftBase.accountId !== activeDraft.accountId)) return
+  const attachments = baselineSnapshot({ ...draftBase, attachments: activeDraft.attachments }).attachments
+  draftBase = { ...draftBase, attachments }
+}
+
+function baselineFromSubmittedEditor(draft: DraftProjection, fields: Record<string, unknown>, attachments: DraftProjection['attachments']): DraftProjection {
+  const to = typeof fields.to === 'string' ? parseRecipientList(fields.to) : draft.to.map(address => address.address)
+  return baselineSnapshot({
+    ...draft,
+    inReplyToMessageId: typeof fields.messageId === 'string' ? fields.messageId : draft.inReplyToMessageId,
+    to: to.map(address => ({ name: address, address, initials: '@' })),
+    cc: typeof fields.cc === 'string' ? fields.cc : '',
+    bcc: typeof fields.bcc === 'string' ? fields.bcc : '',
+    subject: typeof fields.subject === 'string' ? fields.subject : draft.subject,
+    bodyMarkdown: typeof fields.bodyMarkdown === 'string' ? fields.bodyMarkdown : draft.bodyMarkdown,
+    attachments,
+  })
+}
+
+function sameEditorAttachments(left: DraftProjection['attachments'], right: DraftProjection['attachments']): boolean {
+  const identity = (items: DraftProjection['attachments']) => items.map(item => [
+    item.id ?? '', item.sourceMessageId ?? '', item.name, item.mediaType, item.contentBase64 ?? null, item.sizeLabel ?? '',
+  ])
+  return JSON.stringify(identity(left)) === JSON.stringify(identity(right))
+}
+
+function renderDraftConflict(): void {
+  const conflict = activeDraft?.conflict
+  elements.draftConflict.hidden = !conflict
+  if (!conflict) return
+  const label: Record<string, string> = { to: 'recipients', cc: 'Cc', bcc: 'Bcc', subject: 'subject', bodyMarkdown: 'message', attachments: 'attachments' }
+  elements.draftConflictSummary.textContent = `Changed in Gmail: ${conflict.fields.map(field => label[field] ?? field).join(', ')}.`
+  const remote = conflict.remote
+  const recipients = (items: DraftProjection['to']) => items.map(item => item.address).join(', ') || 'None'
+  const lines = [
+    `To: ${recipients(remote.to)}`,
+    `Cc: ${remote.cc || 'None'}`,
+    `Bcc: ${remote.bcc || 'None'}`,
+    `Subject: ${remote.subject || '(no subject)'}`,
+    '',
+    remote.bodyMarkdown || '(empty message)',
+  ]
+  if (remote.attachments.length) lines.push('', `Attachments: ${remote.attachments.map(item => item.name).join(', ')}`)
+  elements.draftConflictRemote.textContent = lines.join('\n')
+  elements.useGmailVersion.disabled = resolvingDraftConflict
+  elements.keepLocalEdits.disabled = resolvingDraftConflict
+}
+
+async function resolveDraftConflict(choice: 'keep-local' | 'use-remote'): Promise<void> {
+  const draft = activeDraft
+  const conflict = draft?.conflict
+  if (!draft || !conflict || !draft.accountId || !draft.id || resolvingDraftConflict) return
+  const expectedRevision = draft.draftRevision
+  if (!Number.isSafeInteger(expectedRevision) || !expectedRevision || expectedRevision < 1) {
+    draftError(new Error('This Gmail draft changed. Refresh the draft before choosing a version.'))
+    return
+  }
+  if (!checkpointDraft()) return
+  const key = recoveryKey
+  if (!key) return
+  const session = draftEditSession
+  const revision = draftEditRevision
+  const remoteBase = baselineSnapshot(conflict.remote)
+  resolvingDraftConflict = true
+  renderDraftConflict()
+  try {
+    const resolved = await api.resolveDraftConflict(draft.id, draft.accountId, choice, expectedRevision)
+    if (session !== draftEditSession || activeDraft?.id !== draft.id || activeDraft.accountId !== draft.accountId) return
+    draftBase = remoteBase
+    const changedDuringResolution = draftEditRevision !== revision
+    if (choice === 'use-remote' && !changedDuringResolution) {
+      const resolvedIdentity = { ...resolved, conflict: undefined }
+      showDraft(resolvedIdentity, false)
+      draftBase = remoteBase
+      try { recovery.removeSavedRevision(key, revision); renderRecoveryList() }
+      catch (error) { draftError(new Error(`Gmail version selected, but local recovery could not be cleared: ${String(error)}`)) }
+      elements.recoveryStatus.textContent = 'Gmail version selected'
+    } else {
+      activeDraft = {
+        ...resolved,
+        ...(changedDuringResolution && activeDraft ? { attachments: activeDraft.attachments } : {}),
+        conflict: undefined,
+      }
+      if (changedDuringResolution) {
+        draftDirty = true
+        checkpointDraft()
+      } else {
+        draftDirty = false
+        try { recovery.removeSavedRevision(key, revision); renderRecoveryList() }
+        catch (error) { draftError(new Error(`Draft choice saved, but local recovery could not be cleared: ${String(error)}`)) }
+      }
+      renderDraftConflict()
+      syncDraftEditLock()
+      elements.recoveryStatus.textContent = choice === 'keep-local' && resolved.syncState ? 'Saved · waiting to sync' : 'Gmail version selected'
+      if (changedDuringResolution) autosaveDraft()
+    }
+    elements.draftError.hidden = true
+    elements.draftError.textContent = ''
+    if (resolved.syncState) scheduleDraftSync(0)
+  } catch (error) {
+    if (session === draftEditSession && activeDraft?.id === draft.id) {
+      draftError(error)
+      if (/409|draft_revision_changed|changed before conflict resolution/i.test(String(error))) void refreshQueuedDraft()
+    }
+  } finally {
+    resolvingDraftConflict = false
+    renderDraftConflict()
+  }
 }
 function clearRecovery(key = recoveryKey): void {
   if (!key) return
@@ -1823,8 +2021,11 @@ async function restoreLocalDraft(key: string): Promise<void> {
   elements.accountSep.hidden = true
   showDraft({ id: record.gmailDraftId, accountId: record.accountId, inReplyToMessageId: record.inReplyToMessageId,
     gmailThreadId: record.gmailThreadId,
-    to: parseRecipientList(record.to).map(address => ({ name: address, address, initials: '@' })), cc: record.cc, bcc: record.bcc, subject: record.subject, bodyMarkdown: record.bodyMarkdown, bodyText: record.bodyMarkdown, bodyHtml: '', attachments: restored.attachments, state: 'draft' }, !record.gmailDraftId)
+    to: parseRecipientList(record.to).map(address => ({ name: address, address, initials: '@' })), cc: record.cc, bcc: record.bcc, subject: record.subject, bodyMarkdown: record.bodyMarkdown, bodyText: record.bodyMarkdown, bodyHtml: '', attachments: restored.attachments, state: 'draft',
+    ...(record.conflict ? { conflict: record.conflict } : {}), ...(record.draftRevision ? { draftRevision: record.draftRevision } : {}) }, !record.gmailDraftId)
+  draftBase = record.base
   draftSeed = undefined
+  draftAttachmentsChanged = record.attachmentsChanged ?? true
   recoveryKey = key; draftDirty = true; draftEditRevision = Math.max(draftEditRevision, record.revision) + 1
   syncDraftEditLock()
   elements.recoveryStatus.textContent = 'Saved · waiting to sync'
@@ -1835,7 +2036,7 @@ async function restoreLocalDraft(key: string): Promise<void> {
 function freezeDraft(disabled: boolean): void {
   elements.draft.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input,textarea,select,button').forEach(control => { control.disabled = disabled })
   if (!disabled) elements.draftAccount.disabled = Boolean(activeDraft?.id)
-  if (!disabled) elements.sendDraft.disabled = Boolean(activeDraft?.cachedAt)
+  if (!disabled) elements.sendDraft.disabled = Boolean(activeDraft?.cachedAt || activeDraft?.syncState)
 }
 
 function draftError(error: unknown): void {
@@ -1891,14 +2092,34 @@ app.querySelector<HTMLButtonElement>('[data-toggle-preview]')!.addEventListener(
   elements.draftPreview.hidden = !elements.draftPreview.hidden
   button.setAttribute('aria-pressed', String(!elements.draftPreview.hidden))
 })
+elements.refreshThreadCompleteness.addEventListener('click', () => {
+  const id = selectedConversationId
+  if (!id || selected?.completeness?.complete !== false || threadRefreshInFlight) return
+  threadRefreshFailed = false
+  threadRefreshInFlight = true
+  renderThreadCompleteness(selected)
+  dropConversationCache(id)
+  void selectConversation(id, { refresh: true }).finally(() => {
+    if (selectedConversationId !== id) return
+    threadRefreshInFlight = false
+    renderThreadCompleteness(selected)
+  })
+})
 app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!.addEventListener('click', () => {
   setDraftCollapsed(!app.querySelector<HTMLElement>('[data-draft-content]')!.hidden)
 })
 
 function showDraft(draft: DraftProjection, accountMutable: boolean): void {
-  const sameDraft = Boolean(activeDraft && activeDraft.id === draft.id && activeDraft.accountId === draft.accountId && activeDraft.inReplyToMessageId === draft.inReplyToMessageId)
+  if (!draft.syncState && draft.resolvedFromDraftId) void linkDraftTask(draft.resolvedFromDraftId, draft).catch(error => console.error('Draft task binding needs reconnection:', error))
+  const resolvedSameDraft = Boolean(activeDraft && draft.resolvedFromDraftId === activeDraft.id && activeDraft.accountId === draft.accountId)
+  const sameDraft = Boolean(activeDraft && draft.id && activeDraft.id && (activeDraft.id === draft.id || resolvedSameDraft) && activeDraft.accountId === draft.accountId && activeDraft.inReplyToMessageId === draft.inReplyToMessageId)
   if (!sameDraft) setDraftCollapsed(false)
-  if (!draft.id || activeDraft?.id !== draft.id || activeDraft?.accountId !== draft.accountId) recoveryKey = undefined
+  if (!sameDraft) {
+    activeForwardOrigin = undefined
+    activeDraftReplyMode = undefined
+  }
+  if (!sameDraft && (activeDraft?.id !== draft.id || activeDraft?.accountId !== draft.accountId)) recoveryKey = undefined
+  if (!sameDraft) draftBase = undefined
   if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
   if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
   draftPreviewTimer = undefined
@@ -1907,6 +2128,9 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   draftEditSession += 1
   draftDirty = false
   activeDraft = draft
+  if (!draft.conflict && draft.id && !draftBase) draftBase = baselineSnapshot(draft)
+  if (!draft.conflict && !draft.syncState && draft.id) draftBase = baselineSnapshot(draft)
+  draftAttachmentsChanged = false
   elements.reader.hidden = false
   elements.readerEmpty.hidden = true
   elements.reader.classList.add('dispatch-drafting')
@@ -1936,14 +2160,17 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   }
   elements.draftSubject.value = draft.subject
   elements.draftBody.value = draft.bodyMarkdown || draft.bodyText
-  elements.draftPreview.innerHTML = draft.bodyHtml
+  elements.draftPreview.innerHTML = sanitizeDraftPreview(draft.bodyHtml)
   elements.draftError.hidden = true
   elements.draftError.textContent = ''
+  resolvingDraftConflict = false
+  renderDraftConflict()
   elements.sendConfirm.hidden = true
   renderDraftAttachments()
   draftSeed = { fields: editorFields(), attachments: draft.attachments }
   draftDiscarding = false
-  elements.recoveryStatus.textContent = draft.cachedAt ? 'Checking Gmail…' : ''
+  elements.recoveryStatus.textContent = draft.syncState ? (draft.syncError ?? 'Saved · waiting to sync') : draft.cachedAt ? 'Checking Gmail…' : ''
+  if (draft.reconnectRequired) elements.mailReconnect.hidden = false
   elements.recoveryStatus.title = draft.cachedAt ? `Last confirmed ${new Date(draft.cachedAt).toLocaleString()}` : ''
   freezeDraft(Boolean(draftSendFlight))
   syncDraftEditLock()
@@ -1962,6 +2189,9 @@ function hideDraftEditor(): void {
   draftDiscarding = false
   activeDraft = undefined
   recoveryKey = undefined
+  draftBase = undefined
+  resolvingDraftConflict = false
+  renderDraftConflict()
   syncDraftEditLock()
   elements.draft.hidden = true
   elements.sendConfirm.hidden = true
@@ -1984,7 +2214,7 @@ function refreshPreview(): void {
   draftPreviewTimer = window.setTimeout(() => {
     draftPreviewTimer = undefined
     void api.previewDraft(elements.draftBody.value).then((bodyHtml) => {
-      if (sequence === draftPreviewSequence && activeDraft) elements.draftPreview.innerHTML = bodyHtml
+      if (sequence === draftPreviewSequence && activeDraft) elements.draftPreview.innerHTML = sanitizeDraftPreview(bodyHtml)
     }).catch(draftError)
   }, 300)
 }
@@ -1994,6 +2224,7 @@ function autosaveDraft(): void {
   draftAutosaveTimer = window.setTimeout(() => {
     draftAutosaveTimer = undefined
     if (draftDirty && activeDraft && !offlineMode && !draftSendFlight) {
+      if (activeDraft.conflict) return
       const addresses = [elements.draftTo, elements.draftCc, elements.draftBcc].flatMap(field => parseRecipientList(recipientValue(field)))
       if (addresses.some(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) return
       if (!activeDraft.id && draftSeed?.fields === editorFields() && draftSeed.attachments === activeDraft.attachments) return
@@ -2032,8 +2263,28 @@ async function openDraft(replyAll = false): Promise<void> {
   const subject = /^re:/i.test(selected.subject) ? selected.subject : `Re: ${selected.subject}`
   const fields = { to, cc, bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown }
   if (offlineMode || (selected.source === 'gmail' && accountId)) {
-    if (draftSaveFlight && activeDraft?.inReplyToMessageId === latest.id && activeDraft.accountId === accountId) { elements.draftBody.focus(); return }
+    if (!draftDiscarding && activeDraft?.inReplyToMessageId === latest.id && activeDraft.accountId === accountId) {
+      setDraftCollapsed(false)
+      const replyModeMatches = Boolean(activeDraftReplyMode && activeDraftReplyMode.accountId === accountId && activeDraftReplyMode.messageId === latest.id && activeDraftReplyMode.replyAll === replyAll)
+      if (!replyModeMatches) {
+        const replyTo = parseRecipientList(to).map(address => ({ name: address, address, initials: '@' }))
+        const bcc = recipientValue(elements.draftBcc)
+        activeDraft = { ...activeDraft, to: replyTo, cc, bcc }
+        setRecipientField(elements.draftTo, to)
+        setRecipientField(elements.draftCc, cc)
+        const ccRow = app.querySelector<HTMLElement>('[data-copy-row="cc"]')!
+        const ccToggle = app.querySelector<HTMLButtonElement>('[data-show-copy="cc"]')!
+        ccRow.hidden = !cc.trim()
+        ccToggle.hidden = !ccRow.hidden
+        activeDraftReplyMode = { accountId, messageId: latest.id, replyAll }
+        markDraftDirty()
+        if (activeDraft.id) autosaveDraft()
+      }
+      elements.draftBody.focus()
+      return
+    }
     showDraft({ id: '', accountId, inReplyToMessageId: latest.id, to: parseRecipientList(to).map(address => ({ name: address, address, initials: '@' })), cc, bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, bodyHtml: '', attachments: [], state: 'draft' }, true)
+    activeDraftReplyMode = { accountId, messageId: latest.id, replyAll }
     markDraftDirty(); refreshPreview(); elements.draftBody.focus()
     if (!offlineMode) void saveDraft(false).catch(draftError)
     return
@@ -2042,6 +2293,7 @@ async function openDraft(replyAll = false): Promise<void> {
     ? await api.createDraft(latest.id, { accountId, ...fields })
     : await api.createDraft(selected.latestMessageId, fields)
   showDraft(draft, false)
+  activeDraftReplyMode = { accountId, messageId: latest.id, replyAll }
 }
 
 async function openForward(): Promise<void> {
@@ -2050,11 +2302,17 @@ async function openForward(): Promise<void> {
   const latest = selected.messages.find((message) => message.id === latestMessageId) ?? selected.messages[0]
   if (!latest) return
   const subject = selected.subject.startsWith('Fwd:') ? selected.subject : `Fwd: ${selected.subject}`
-  if (draftSaveFlight && activeDraft?.subject === subject && activeDraft.accountId === selected.accountId) { elements.draftBody.focus(); return }
+  if (!draftDiscarding && activeDraft && activeForwardOrigin?.accountId === selected.accountId
+    && activeForwardOrigin.messageId === latestMessageId && activeDraft.accountId === selected.accountId) {
+    setDraftCollapsed(false)
+    elements.draftBody.focus()
+    return
+  }
   const content = emailPlainText(latest.body.kind, latest.body.content)
   const bodyMarkdown = `\n\n---------- Forwarded message ----------\nFrom: ${latest.sender.name} <${latest.sender.address}>\nDate: ${latest.receivedFullLabel}\nSubject: ${latest.subject}\n\n${content}`
   if (offlineMode || selected.source === 'gmail') {
     showDraft({ id: '', accountId: selected.accountId, inReplyToMessageId: '', to: [], cc: '', bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, bodyHtml: '', attachments: latest.attachments.map(file => ({ ...file, sourceMessageId: latest.id })), state: 'draft' }, true)
+    activeForwardOrigin = { accountId: selected.accountId, messageId: latestMessageId }
     markDraftDirty(); refreshPreview()
     if (!offlineMode) void saveDraft(false).catch(draftError)
     return
@@ -2076,6 +2334,7 @@ async function openForward(): Promise<void> {
     })),
   })
   showDraft(draft, false)
+  activeForwardOrigin = { accountId: selected.accountId, messageId: latestMessageId }
 }
 
 function openCompose(existingKey?: string): void {
@@ -2113,6 +2372,7 @@ function openCompose(existingKey?: string): void {
 
 async function saveDraft(notify = true): Promise<void> {
   if (offlineMode) { checkpointDraft(); throw new Error('This draft is saved locally. Go online to save it to Gmail.') }
+  if (activeDraft?.conflict) throw new Error('Choose which draft version to keep before saving.')
   if (draftDiscarding) return
   const session = draftEditSession
   if (recoveryKey && backgroundDraftSaves.has(recoveryKey)) {
@@ -2127,15 +2387,24 @@ async function saveDraft(notify = true): Promise<void> {
   const accountId = draft.id ? draft.accountId : elements.draftAccount.value
   if (!accountId) throw new Error('Choose a Gmail account for this draft.')
   const bodyMarkdown = elements.draftBody.value
-  const fields = { accountId, clientDraftId: savingRecoveryKey, messageId: draft.inReplyToMessageId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, bodyMarkdown, bodyText: bodyMarkdown, attachments: draft.attachments }
+  const base = draft.id && draftBase?.id === draft.id ? baselineSnapshot(draftBase) : undefined
+  const submittedAttachments = draft.attachments
+  const includeAttachments = !draft.id || draftAttachmentsChanged
+  const fields = {
+    accountId, clientDraftId: savingRecoveryKey, draftId: draft.id || undefined, messageId: draft.inReplyToMessageId,
+    to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc),
+    subject: elements.draftSubject.value, bodyMarkdown, bodyText: bodyMarkdown,
+    ...(includeAttachments ? { attachments: submittedAttachments } : {}), ...(base ? { base } : {}),
+  }
   elements.draftAccount.disabled = true
   elements.recoveryStatus.textContent = 'Saving…'
   let savedSuccessfully = false
   let retrySave = false
   const operation = (async () => {
-    const savedDraft = draft.id
-      ? await api.updateDraft(draft.id, fields)
-      : await api.createDraft('', fields)
+    const legacyFields = { accountId, clientDraftId: savingRecoveryKey, messageId: draft.inReplyToMessageId, to: fields.to, cc: fields.cc, bcc: fields.bcc, subject: fields.subject, bodyMarkdown, bodyText: bodyMarkdown, attachments: draft.attachments }
+    const savedDraft = accountId === 'demo'
+      ? draft.id ? await api.updateDraft(draft.id, legacyFields) : await api.createDraft('', legacyFields)
+      : await api.saveDraft(fields)
     savedSuccessfully = true
     if (savingRecoveryKey) void linkDraftTask(savingRecoveryKey, savedDraft).catch(error => console.error('Draft task binding will need reconnection:', error))
     if (savingRecoveryKey) draftSyncErrors.delete(savingRecoveryKey)
@@ -2150,10 +2419,17 @@ async function saveDraft(notify = true): Promise<void> {
     }
     if (session !== draftEditSession || !activeDraft || activeDraft.id !== draft.id || draftDiscarding) return savedDraft
     activeDraft = draftEditRevision === savingRevision ? savedDraft : { ...savedDraft, attachments: activeDraft.attachments }
+    if (savedDraft.id && draftBase && draftBase.id !== savedDraft.id
+      && (draftBase.id === draft.id || savedDraft.resolvedFromDraftId === draftBase.id)) draftBase = { ...draftBase, id: savedDraft.id }
+    if (savedDraft.id && !draftBase) draftBase = baselineFromSubmittedEditor(savedDraft, fields, submittedAttachments)
+    if (draftEditRevision === savingRevision && !savedDraft.syncState) draftBase = baselineSnapshot(savedDraft)
+    if (draftEditRevision === savingRevision || sameEditorAttachments(activeDraft.attachments, submittedAttachments)) draftAttachmentsChanged = false
+    if (draftEditRevision === savingRevision) renderDraftAttachments()
+    renderDraftConflict()
     syncDraftEditLock()
-    elements.sendDraft.disabled = false
+    elements.sendDraft.disabled = Boolean(savedDraft.syncState)
     elements.draftAccount.disabled = true
-    elements.draftPreview.innerHTML = savedDraft.bodyHtml
+    elements.draftPreview.innerHTML = sanitizeDraftPreview(savedDraft.bodyHtml)
     elements.draftError.hidden = true
     elements.draftError.textContent = ''
     if (draftEditRevision === savingRevision && recipientValue(elements.draftTo) === fields.to
@@ -2163,9 +2439,9 @@ async function saveDraft(notify = true): Promise<void> {
       && elements.draftBody.value === bodyMarkdown) {
       draftDirty = false
       clearRecovery(savingRecoveryKey)
-      elements.recoveryStatus.textContent = 'Saved to Gmail'
+      elements.recoveryStatus.textContent = savedDraft.syncState ? (savedDraft.syncError ?? 'Saved · waiting to sync') : 'Saved to Gmail'
     } else { checkpointDraft() }
-    if (notify) addAgentMessage('tool', 'Gmail draft saved.')
+    if (notify) addAgentMessage('tool', savedDraft.syncState ? 'Draft saved on this device; waiting for Gmail.' : 'Gmail draft saved.')
     return savedDraft
   })()
   draftSaveFlight = operation
@@ -2313,6 +2589,7 @@ async function attachDraftFiles(): Promise<void> {
     await recovery.cacheFiles(attachments)
     if (!activeDraft || attachmentSession !== draftEditSession) return
     activeDraft = { ...activeDraft, attachments: [...activeDraft.attachments, ...attachments] }
+    draftAttachmentsChanged = true
     renderDraftAttachments()
     markDraftDirty()
     if (!offlineMode) await saveDraft()
@@ -3009,12 +3286,12 @@ async function refreshCodexDraft(draftId: string, accountId: string, createdByCo
   try {
     const draft = await api.getDraft(draftId, accountId)
     if (request !== codexDraftRequest || snapshot.selection !== selectionSequence || snapshot.pane !== paneSequence) return
-    if (draft.id !== draftId || draft.accountId !== accountId) throw new Error('Gmail returned a different draft or account; the editor was not changed.')
+    if ((draft.id !== draftId && draft.resolvedFromDraftId !== draftId) || draft.accountId !== accountId) throw new Error('Gmail returned a different draft or account; the editor was not changed.')
     const unchanged = snapshot.session === draftEditSession && snapshot.revision === draftEditRevision
       && snapshot.draftId === activeDraft?.id && snapshot.accountId === activeDraft?.accountId
       && !snapshot.dirty && !snapshot.saving && !draftDirty && !draftSaveFlight
     if (unchanged) showDraft(draft, false)
-    else if (createdByCodex) addAgentMessage('tool', 'Gmail saved the draft. Your current edits were kept; open Drafts to review the saved version.')
+    else if (createdByCodex) addAgentMessage('tool', `${draft.syncState ? 'Dispatch saved the draft on this device.' : 'Gmail saved the draft.'} Your current edits were kept; open Drafts to review the saved version.`)
     if (createdByCodex && mailbox === 'drafts') void loadConversations(true)
   } catch (error) {
     if (snapshot.selection !== selectionSequence || snapshot.pane !== paneSequence) return
@@ -3047,6 +3324,11 @@ async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
     return
   }
   if (effect.kind === 'draft') {
+    if (effect.draftId.startsWith('queued-') && threadId) {
+      const key: CodexPaneKey = { kind: 'draft', draftKey: effect.draftId }
+      writeBindingCache(key, threadId)
+      void api.bindThread(key, threadId).catch(error => console.error('Draft task binding needs reconnection:', error))
+    }
     await refreshCodexDraft(effect.draftId, effect.accountId, true)
     return
   }
@@ -3573,6 +3855,8 @@ async function refreshSyncStatus(): Promise<void> {
   if (!inMessageWindow) void refreshMailboxCounts()
   try {
     const sync = await api.syncStatus()
+    elements.mailReconnect.hidden = !sync.reconnectRequired && !activeDraft?.reconnectRequired
+    void refreshQueuedDraft()
     if (sync.mailRevision !== undefined && observedMailRevision !== sync.mailRevision) {
       const changed = observedMailRevision !== undefined
       observedMailRevision = sync.mailRevision
@@ -3620,6 +3904,56 @@ async function refreshSyncStatus(): Promise<void> {
     syncErrorVisible = true
   }
 }
+
+let queuedDraftRefresh = false
+async function refreshQueuedDraft(): Promise<void> {
+  const draft = activeDraft
+  if (!draft || (!draft.syncState && !draft.conflict) || !draft.accountId || queuedDraftRefresh || draftSaveFlight || draftSendFlight || draftDiscarding) return
+  const session = draftEditSession
+  const revision = draftEditRevision
+  queuedDraftRefresh = true
+  try {
+    const fresh = await api.getDraft(draft.id, draft.accountId)
+    if (session !== draftEditSession || activeDraft?.id !== draft.id || draftSaveFlight || draftSendFlight || draftDiscarding) return
+    if (fresh.accountId !== draft.accountId || (fresh.id !== draft.id && fresh.resolvedFromDraftId !== draft.id)) throw new Error('Draft identity changed unexpectedly')
+    if (draftBase?.id === draft.id && fresh.id !== draft.id && fresh.resolvedFromDraftId === draft.id) draftBase = { ...draftBase, id: fresh.id }
+    if (!draftDirty && revision === draftEditRevision) showDraft(fresh, false)
+    else {
+      if (!fresh.syncState && fresh.resolvedFromDraftId) void linkDraftTask(fresh.resolvedFromDraftId, fresh).catch(error => console.error('Draft task binding needs reconnection:', error))
+      // Adopt only the confirmed identity. Text entered during the background save stays in the editor.
+      const confirmedSameRevision = !fresh.syncState && !fresh.conflict && fresh.draftRevision !== undefined && fresh.draftRevision === draft.draftRevision
+      if (confirmedSameRevision) draftBase = baselineSnapshot(fresh)
+      activeDraft = { ...activeDraft, id: fresh.id, gmailThreadId: fresh.gmailThreadId, gmailMessageId: fresh.gmailMessageId, draftRevision: fresh.draftRevision, syncState: fresh.syncState, syncError: fresh.syncError, reconnectRequired: fresh.reconnectRequired, conflict: fresh.conflict }
+      renderDraftConflict()
+      syncDraftEditLock()
+      checkpointDraft()
+      if (activeDraft.id && !activeDraft.conflict) autosaveDraft()
+    }
+  } catch {
+    if (session === draftEditSession && activeDraft?.id === draft.id) elements.recoveryStatus.textContent = 'Saved · waiting to confirm Gmail'
+  }
+  finally { queuedDraftRefresh = false }
+}
+
+elements.reconnectAccount.addEventListener('click', () => {
+  elements.reconnectAccount.disabled = true
+  elements.reconnectStatus.textContent = 'Opening sign-in…'
+  const browser = isNativeShell(window as { isTauri?: unknown }) ? null : window.open('about:blank', '_blank')
+  if (browser) browser.opener = null
+  void api.reconnectAccount().then(result => {
+    const url = new URL(result.authUrl)
+    if (url.protocol !== 'https:' || !['auth.openai.com', 'chatgpt.com', 'chat.openai.com'].includes(url.hostname)) throw new Error('Unexpected sign-in address')
+    if (browser) browser.location.href = url.href
+    const link = document.createElement('a')
+    link.href = url.href
+    link.textContent = 'Sign in'
+    elements.mailReconnect.append(link)
+    if (!browser) link.click()
+    link.remove()
+    elements.reconnectStatus.textContent = 'Finish sign-in in the browser. Your drafts will sync automatically.'
+  }).catch(error => { browser?.close(); elements.reconnectStatus.textContent = `Could not start sign-in: ${String(error)}` })
+    .finally(() => { elements.reconnectAccount.disabled = false })
+})
 
 function startSyncStatusWatch(): void {
   if (syncStatusTimer !== undefined) return
@@ -3784,7 +4118,7 @@ async function start(): Promise<void> {
 }
 if (inMessageWindow) {
   // Errors show above the message; the list pane that normally holds them is hidden.
-  elements.readerPanel.prepend(elements.mailError)
+  elements.readerPanel.prepend(elements.mailError, elements.mailReconnect)
   elements.readerEmpty.textContent = messageWindowAddressError ?? 'Loading message…'
   document.title = 'Message'
   window.addEventListener('pagehide', () => { messageWindowChannel?.postMessage({ type: 'closed' }) })
@@ -3883,7 +4217,9 @@ elements.spam.addEventListener('click', () => { void mutateSelected('spam') })
 elements.trash.addEventListener('click', () => { void mutateSelected('trash') })
 elements.moveInbox.addEventListener('click', () => { void mutateSelected('inbox') })
 app.querySelector('[data-ask]')?.addEventListener('click', askCodex)
-app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch((error) => addAgentMessage('error', error instanceof Error ? error.message : String(error))) })
+app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch(draftError) })
+elements.useGmailVersion.addEventListener('click', () => { void resolveDraftConflict('use-remote') })
+elements.keepLocalEdits.addEventListener('click', () => { void resolveDraftConflict('keep-local') })
 app.querySelector('[data-send-draft]')?.addEventListener('click', sendDraft)
 app.querySelector('[data-send-cancel]')?.addEventListener('click', () => { elements.sendConfirm.hidden = true })
 app.querySelector('[data-send-confirm-go]')?.addEventListener('click', () => { void confirmSendDraft().catch(draftError) })

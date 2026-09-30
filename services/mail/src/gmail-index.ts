@@ -110,12 +110,12 @@ function folderMember(message: IndexedGmailMessage, mailbox: Exclude<GmailMailbo
 }
 
 function filterSearch(messages: readonly IndexedGmailMessage[], query: string): IndexedGmailMessage[] {
-  const terms = query.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((term) => term.replace(/^"|"$/g, '')) ?? []
+  const terms = query.match(/(?:[^\s"]|"[^"]*")+/g)?.map((term) => term.replace(/^"|"$/g, '')) ?? []
   let filtered = [...messages]
   for (const term of terms) {
     const separator = term.indexOf(':')
     const field = separator > 0 ? term.slice(0, separator).toLowerCase() : ''
-    const value = separator > 0 ? term.slice(separator + 1).toLowerCase() : term.toLowerCase()
+    const value = (separator > 0 ? term.slice(separator + 1) : term).replace(/^"|"$/g, '').toLowerCase()
     if (field === 'from') filtered = filtered.filter((message) => `${message.sender.name} ${message.sender.address}`.toLowerCase().includes(value))
     else if (field === 'subject') filtered = filtered.filter((message) => message.subject.toLowerCase().includes(value))
     else if (field === 'is' && value === 'unread') filtered = filtered.filter((message) => message.unread)
@@ -607,6 +607,15 @@ export class GmailIndex {
       filterSearch(this.messages(accountId), query).filter((message) => folderMember(message, mailbox)),
       state,
     )
+  }
+
+  searchDownloadedConversations(mailbox: GmailMailbox, query: string, state: MailStateFilter, bodyHits: ReadonlySet<string>, accountId?: string): readonly ConversationSummary[] {
+    const terms = query.match(/(?:[^\s"]|"[^"]*")+/g) ?? []
+    const filters = terms.filter(term => /^[^:]+:/.test(term)).join(' ')
+    const freeText = terms.filter(term => !/^[^:]+:/.test(term)).join(' ')
+    const eligible = filterSearch(this.messages(accountId), filters).filter(message => mailbox === 'inbox' ? queueEligible(message, state) : folderMember(message, mailbox))
+    const metadataHits = new Set(filterSearch(eligible, freeText).map(message => `${message.accountId}:${message.id}`))
+    return groupConversations(eligible.filter(message => !freeText || metadataHits.has(`${message.accountId}:${message.id}`) || bodyHits.has(`${message.accountId}:${message.id}`)), state)
   }
 
   mailboxCounts(accountId?: string): MailboxCounts {

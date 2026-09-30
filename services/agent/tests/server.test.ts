@@ -29,6 +29,7 @@ function runtime() {
     subscribe: vi.fn((_next: (message: { id?: number | string; method?: string; params?: unknown }) => void) => () => undefined),
     respond: vi.fn(),
     close: vi.fn(),
+    setIdleGuard: vi.fn((_guard: () => boolean) => undefined),
   }
 }
 
@@ -63,13 +64,22 @@ describe('dispatch-agent', () => {
   it('refuses an update while Codex works and stops admitting work once idle drain succeeds', async () => {
     const { base, fake } = await start()
     const emit = fake.subscribe.mock.calls[0]![0]
+    const idle = fake.setIdleGuard.mock.calls[0]![0]
+    expect(idle()).toBe(true)
     const control = { method: 'POST', headers: { 'x-dispatch-runtime': 'development' } }
     expect((await fetch(`${base}/v1/runtime/drain`, { method: 'POST' })).status).toBe(403)
     emit({ method: 'turn/started', params: { threadId: 'background', turn: { id: 'turn-1' } } })
+    expect(idle()).toBe(false)
     expect((await fetch(`${base}/v1/runtime/drain`, control)).status).toBe(409)
     expect(await (await fetch(`${base}/v1/runtime`)).json()).toMatchObject({ activeOperations: 1, draining: false })
     emit({ method: 'turn/completed', params: { threadId: 'background', turn: { id: 'turn-1', status: 'completed' } } })
+    expect(idle()).toBe(true)
+    emit({ id: 7, method: 'mcpServer/elicitation/request', params: { threadId: 'background' } })
+    expect(idle()).toBe(false)
+    emit({ method: 'serverRequest/resolved', params: { requestId: 7 } })
+    expect(idle()).toBe(true)
     expect((await fetch(`${base}/v1/runtime/drain`, control)).status).toBe(200)
+    expect(idle()).toBe(false)
     expect((await fetch(`${base}/v1/threads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(503)
     expect((await fetch(`${base}/v1/runtime/resume`, control)).status).toBe(200)
     expect((await fetch(`${base}/v1/threads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(201)
@@ -775,4 +785,14 @@ it('updates only draft headers without replacing the MIME body or attachments', 
   const response = await fetch(`${base}/v1/connectors/gmail/drafts/update`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-one', preserveContent: true, to: 'new@example.com' }) })
   expect(response.status).toBe(200)
   expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ arguments: { link_id: 'link-one', draft_id: 'draft-one', to: 'new@example.com' } }))
+})
+
+it('starts managed Codex reconnection without replaying email writes or logging out', async () => {
+  const { base, fake } = await start()
+  fake.request.mockResolvedValueOnce({ authUrl: 'https://auth.openai.com/oauth/authorize?state=test', loginId: 'test' })
+  const response = await fetch(`${base}/v1/account/reconnect`, { method: 'POST' })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ authUrl: 'https://auth.openai.com/oauth/authorize?state=test' })
+  expect(fake.request).toHaveBeenCalledWith('account/login/start', { type: 'chatgpt' })
+  expect(fake.request.mock.calls.some(call => call[0] === 'account/logout' || call[0] === 'mcpServer/tool/call')).toBe(false)
 })

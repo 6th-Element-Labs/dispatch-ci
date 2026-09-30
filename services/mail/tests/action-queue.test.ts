@@ -266,3 +266,72 @@ it('accepts folder changes during a provider failure and replays them in order a
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+it('keeps same-account action order while another account progresses and drain pauses later claims', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dispatch-action-workers-'))
+  const path = join(directory, 'gmail.sqlite')
+  const index = new GmailIndex(path)
+  const message = (accountId: string, id: string, threadId: string): IndexedGmailMessage => ({
+    id, threadId, accountId, accountLabel: accountId,
+    sender: { name: accountId, address: `${accountId}@example.com`, initials: accountId[0]! },
+    subject: 'Synthetic', receivedAt: '2026-09-11T00:00:00Z', receivedLabel: 'Today', receivedFullLabel: 'Today',
+    preview: '', unread: false, inInbox: true, inArchive: false, inSent: false, inDrafts: false, inSpam: false, inTrash: false,
+  })
+  index.replaceAccount('A', [message('A', 'mA', 'tA')], 'seed-A', true)
+  index.replaceAccount('B', [message('B', 'mB', 'tB')], 'seed-B', true)
+  index.close()
+
+  let releaseA!: () => void
+  let firstAStarted!: () => void
+  let bStarted!: () => void
+  const gateA = new Promise<void>(resolve => { releaseA = resolve })
+  const firstA = new Promise<void>(resolve => { firstAStarted = resolve })
+  const bRequest = new Promise<void>(resolve => { bStarted = resolve })
+  const calls: Array<{ account: string; addLabels: string[]; removeLabels: string[] }> = []
+  const server = createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk
+    const input = JSON.parse(body || '{}')
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail/modify') {
+      const call = { account: input.linkId as string, addLabels: input.addLabels as string[], removeLabels: input.removeLabels as string[] }
+      calls.push(call)
+      if (call.account === 'A' && calls.filter(item => item.account === 'A').length === 1) { firstAStarted(); await gateA }
+      if (call.account === 'B') bStarted()
+      res.end(JSON.stringify({ structuredContent: { success: true } })); return
+    }
+    res.end(JSON.stringify({ accounts: [] }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: path })
+  try {
+    await provider.mutateConversation('A', 'tA', ['mA'], 'archive')
+    await firstA
+    await provider.mutateConversation('A', 'tA', ['mA'], 'trash')
+    await provider.mutateConversation('B', 'tB', ['mB'], 'archive')
+    await bRequest
+    await vi.waitFor(() => expect(provider.runtimeStatus().activeOperations).toBe(1))
+    expect(calls.map(call => call.account)).toEqual(['A', 'B'])
+
+    // The runtime drain can now wait on exactly the outstanding provider claim. A's later
+    // action remains durable and cannot start until the runtime resumes.
+    provider.setRuntimeDraining(true)
+    expect(provider.runtimeStatus().activeOperations).toBe(1)
+    releaseA()
+    await vi.waitFor(() => expect(provider.runtimeStatus().activeOperations).toBe(0))
+    expect(calls.map(call => call.account)).toEqual(['A', 'B'])
+
+    provider.setRuntimeDraining(false)
+    await vi.waitFor(() => expect(calls).toHaveLength(3))
+    expect(calls.map(call => [call.account, call.addLabels, call.removeLabels])).toEqual([
+      ['A', [], ['INBOX']],
+      ['B', [], ['INBOX']],
+      ['A', ['TRASH'], ['INBOX']],
+    ])
+    expect(provider.runtimeStatus().activeOperations).toBe(0)
+  } finally {
+    releaseA()
+    provider.stopBackgroundSync()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
