@@ -1,0 +1,76 @@
+{
+  "schema": "dispatch.public_export.v1",
+  "copies": [
+    { "source": ".gitignore", "destination": ".gitignore" },
+    { "source": "LICENSE", "destination": "LICENSE" },
+    { "source": "NOTICE", "destination": "NOTICE" },
+    { "source": "THIRD_PARTY_NOTICES.md", "destination": "THIRD_PARTY_NOTICES.md" },
+    { "source": "apps/desktop", "destination": "apps/desktop" },
+    { "source": "services/web", "destination": "services/web" },
+    { "source": "services/mail", "destination": "services/mail" },
+    { "source": "services/agent", "destination": "services/agent" },
+    { "source": "contracts", "destination": "contracts" },
+    {
+      "source": "deploy/service-boundary-contract.json",
+      "destination": "deploy/service-boundary-contract.json"
+    },
+    { "source": "docs/PRODUCT.md", "destination": "docs/PRODUCT.md" },
+    { "source": "docs/ARCHITECTURE.md", "destination": "docs/ARCHITECTURE.md" },
+    { "source": "docs/DESIGN.md", "destination": "docs/DESIGN.md" },
+    { "source": "docs/assets", "destination": "docs/assets" },
+    { "source": "scripts/check-boundaries.mjs", "destination": "scripts/check-boundaries.mjs" },
+    { "source": "scripts/dispatch_ci.sh", "destination": "scripts/dispatch_ci.sh" },
+    { "source": "scripts/install.sh", "destination": "scripts/install.sh" },
+    { "source": "scripts/dev.sh", "destination": "scripts/dev.sh" },
+    { "source": "scripts/dev-service.sh", "destination": "scripts/dev-service.sh" },
+    {
+      "source": "scripts/check-dependency-licenses.mjs",
+      "destination": "scripts/check-dependency-licenses.mjs"
+    },
+    {
+      "source": "scripts/check-dependency-licenses.test.mjs",
+      "destination": "scripts/check-dependency-licenses.test.mjs"
+    },
+    { "source": "scripts/public_ci.sh", "destination": "scripts/public_ci.sh" },
+    { "source": "scripts/version-contract.mjs", "destination": "scripts/version-contract.mjs" },
+    {
+      "source": "scripts/version-contract.test.mjs",
+      "destination": "scripts/version-contract.test.mjs"
+    },
+    {
+      "source": "scripts/release-workflow.test.mjs",
+      "destination": "scripts/release-workflow.test.mjs"
+    },
+    {
+      "source": "deploy/public-license-policy.json",
+      "destination": "deploy/public-license-policy.json"
+    },
+    { "source": "deploy/licenses", "destination": "deploy/licenses" },
+    { "source": "deploy/public", "destination": "." }
+  ],
+  "required": [
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "services/web/package-lock.json",
+    "services/mail/package-lock.json",
+    "services/agent/package-lock.json",
+    "contracts/mail.v1.json",
+    "scripts/dispatch_ci.sh",
+    "scripts/public_ci.sh",
+    ".github/workflows/verify.yml",
+    ".github/workflows/native.yml",
+    ".github/workflows/release.yml",
+    "docs/RELEASING.md",
+    "docs/UPDATES.md"
+  ],
+  "forbiddenPrefixes": [
+    ".superpowers/",
+    "docs/superpowers/",
+    "docs/CI-SANDBOX.md",
+    "scripts/ci-sandbox.sh",
+    "AGENTS.md"
+  ]
+}

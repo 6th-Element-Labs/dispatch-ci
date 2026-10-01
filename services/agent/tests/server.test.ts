@@ -13,6 +13,16 @@ it('puts the stable draft marker on a MIME leaf accepted by Gmail', () => {
   expect(payload.parts[0]?.content_id).toBe('dispatch-key@draft.dispatch.local')
 })
 
+it('keeps append markers as normal attachments while preserving images referenced by CID', () => {
+  const args = draftArguments({ to: 'test@example.com', subject: 'Draft', bodyMarkdown: 'Body', bodyHtml: '<p>Body <img src="cid:logo@example.com"></p>', attachments: [
+    { filename: 'proposal.txt', mime_type: 'text/plain', data: 'aGk=', contentId: 'dispatch-operation-0@draft.dispatch.local' },
+    { filename: 'logo.png', mime_type: 'image/png', data: 'aGk=', contentId: 'logo@example.com' },
+  ] })
+  const payload = args.payload as { parts: { content_id?: string; content_disposition?: string }[] }
+  expect(payload.parts[1]).toMatchObject({ content_id: 'dispatch-operation-0@draft.dispatch.local', content_disposition: 'attachment' })
+  expect(payload.parts[2]).toMatchObject({ content_id: 'logo@example.com', content_disposition: 'inline' })
+})
+
 const servers: ReturnType<typeof createAgentServer>[] = []
 
 afterEach(async () => {
@@ -29,6 +39,7 @@ function runtime() {
     subscribe: vi.fn((_next: (message: { id?: number | string; method?: string; params?: unknown }) => void) => () => undefined),
     respond: vi.fn(),
     close: vi.fn(),
+    setIdleGuard: vi.fn((_guard: () => boolean) => undefined),
   }
 }
 
@@ -63,13 +74,22 @@ describe('dispatch-agent', () => {
   it('refuses an update while Codex works and stops admitting work once idle drain succeeds', async () => {
     const { base, fake } = await start()
     const emit = fake.subscribe.mock.calls[0]![0]
+    const idle = fake.setIdleGuard.mock.calls[0]![0]
+    expect(idle()).toBe(true)
     const control = { method: 'POST', headers: { 'x-dispatch-runtime': 'development' } }
     expect((await fetch(`${base}/v1/runtime/drain`, { method: 'POST' })).status).toBe(403)
     emit({ method: 'turn/started', params: { threadId: 'background', turn: { id: 'turn-1' } } })
+    expect(idle()).toBe(false)
     expect((await fetch(`${base}/v1/runtime/drain`, control)).status).toBe(409)
     expect(await (await fetch(`${base}/v1/runtime`)).json()).toMatchObject({ activeOperations: 1, draining: false })
     emit({ method: 'turn/completed', params: { threadId: 'background', turn: { id: 'turn-1', status: 'completed' } } })
+    expect(idle()).toBe(true)
+    emit({ id: 7, method: 'mcpServer/elicitation/request', params: { threadId: 'background' } })
+    expect(idle()).toBe(false)
+    emit({ method: 'serverRequest/resolved', params: { requestId: 7 } })
+    expect(idle()).toBe(true)
     expect((await fetch(`${base}/v1/runtime/drain`, control)).status).toBe(200)
+    expect(idle()).toBe(false)
     expect((await fetch(`${base}/v1/threads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(503)
     expect((await fetch(`${base}/v1/runtime/resume`, control)).status).toBe(200)
     expect((await fetch(`${base}/v1/threads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(201)
@@ -295,6 +315,27 @@ describe('dispatch-agent', () => {
     expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
       arguments: { link_id: 'link-one', query: '-in:spam', label_ids: ['INBOX', 'UNREAD'], max_results: 20, next_page_token: 'next-1' },
     }))
+  })
+
+  it('passes exact Gmail system label IDs to the message ID search', async () => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.search_email_ids': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      if (method === 'mcpServer/tool/call') return { structuredContent: { message_ids: ['m1'], next_page_token: '' } }
+      return { ok: true }
+    })
+    const search = (payload: Record<string, unknown>) => fetch(`${base}/v1/connectors/gmail/search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    })
+    expect((await search({ linkId: 'link-one', query: '-in:inbox -in:sent', labelIds: [], maxResults: 50, nextPageToken: 'next-1' })).status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      tool: 'gmail.search_email_ids',
+      arguments: { link_id: 'link-one', query: '-in:inbox -in:sent', label_ids: [], max_results: 50, next_page_token: 'next-1' },
+    }))
+    expect((await search({ linkId: 'link-one', query: 'in:inbox', labelIds: 'INBOX' })).status).toBe(400)
   })
 
   it('applies accepted Gmail read-state label changes', async () => {
@@ -754,4 +795,14 @@ it('updates only draft headers without replacing the MIME body or attachments', 
   const response = await fetch(`${base}/v1/connectors/gmail/drafts/update`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkId: 'link-one', draftId: 'draft-one', preserveContent: true, to: 'new@example.com' }) })
   expect(response.status).toBe(200)
   expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({ arguments: { link_id: 'link-one', draft_id: 'draft-one', to: 'new@example.com' } }))
+})
+
+it('starts managed Codex reconnection without replaying email writes or logging out', async () => {
+  const { base, fake } = await start()
+  fake.request.mockResolvedValueOnce({ authUrl: 'https://auth.openai.com/oauth/authorize?state=test', loginId: 'test' })
+  const response = await fetch(`${base}/v1/account/reconnect`, { method: 'POST' })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ authUrl: 'https://auth.openai.com/oauth/authorize?state=test' })
+  expect(fake.request).toHaveBeenCalledWith('account/login/start', { type: 'chatgpt' })
+  expect(fake.request.mock.calls.some(call => call[0] === 'account/logout' || call[0] === 'mcpServer/tool/call')).toBe(false)
 })

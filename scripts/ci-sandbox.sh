@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Public CI sandbox helpers for Dispatch.
 #
-# The canonical tree lives on a PRIVATE repo (6th-Element-Labs/dispatch), where
-# GitHub Actions minutes are billed. The sandbox is a separate PUBLIC repo with
-# the full actual tree and the same workflows, where Actions minutes are free.
+# The canonical tree lives on a PRIVATE repo (6th-Element-Labs/dispatch).
+# 6th-Element-Labs/dispatch-public is the release mirror. GitHub Actions minutes
+# are billed on the private repo. The sandbox is a separate PUBLIC repo with the
+# full actual tree and the same workflows, where Actions minutes are free.
 #
 # Flow: push the branch to the sandbox -> dispatch workflows -> wait for green ->
 # push the exact same SHA to the canonical repo -> stamp the required canonical
@@ -18,7 +19,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CI_REPO="${CI_REPO:-6th-Element-Labs/dispatch-ci}"
 CI_REMOTE="${CI_REMOTE:-ci}"
 CI_REMOTE_URL="${CI_REMOTE_URL:-https://github.com/${CI_REPO}.git}"
-CANONICAL_REPO="${CANONICAL_REPO:-6th-Element-Labs/dispatch}"
+canonical_repo() {
+  if [ -n "${CANONICAL_REPO:-}" ]; then
+    printf '%s\n' "$CANONICAL_REPO"
+    return
+  fi
+  gh repo view --json nameWithOwner --jq .nameWithOwner
+}
+
+CANONICAL_REPO="$(canonical_repo)"
 ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-3600}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-20}"
@@ -55,7 +64,9 @@ ensure_remote() {
 }
 
 ensure_repo() {
-  if gh repo view "$CI_REPO" --json nameWithOwner >/dev/null 2>&1; then
+  local private
+  if private="$(gh repo view "$CI_REPO" --json isPrivate --jq .isPrivate 2>/dev/null)"; then
+    [ "$private" = false ] || die "private CI is prohibited; $CI_REPO must be public"
     return 0
   fi
   cat >&2 <<EOF

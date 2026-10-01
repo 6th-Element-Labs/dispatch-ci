@@ -1,0 +1,301 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: public-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Verify tag and source version
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          node scripts/version-contract.mjs --expect "$VERSION"
+
+      - name: Install Chromium
+        run: |
+          npm --prefix services/web ci --prefer-offline --no-audit --no-fund
+          npm --prefix services/web exec -- playwright install --with-deps chromium
+
+      - name: Run the public gate
+        run: bash scripts/public_ci.sh
+
+  macos-build:
+    name: signed ${{ matrix.arch }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    environment: release
+    permissions:
+      contents: read
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: release-macos-${{ matrix.target }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: release-macos-${{ matrix.target }}-
+
+      - name: Install workspace dependencies
+        run: |
+          set -euo pipefail
+          for dir in services/web services/mail services/agent apps/desktop; do
+            npm --prefix "$dir" ci --prefer-offline --no-audit --no-fund
+          done
+
+      - name: Fetch the pinned Node sidecar
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          npm --prefix apps/desktop run fetch-node
+
+      - name: Import the Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/DeveloperID.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security set-keychain-settings -t 3600 -u "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/DeveloperID.p12" \
+            -k "$RUNNER_TEMP/build.keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" \
+            "$RUNNER_TEMP/build.keychain"
+          security find-identity -v -p codesigning "$RUNNER_TEMP/build.keychain" \
+            | grep -F "$APPLE_SIGNING_IDENTITY"
+
+      - name: Prepare the notarization key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_API_KEY_P8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Build signed and notarized artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          rm -rf "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          npm --prefix apps/desktop run build:native -- \
+            --target "${{ matrix.target }}" \
+            --bundles app,dmg
+
+      - name: Verify the bundled Node JIT entitlement
+        run: |
+          set -euo pipefail
+          NODE="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Dispatch.app/Contents/MacOS/node"
+          test -x "$NODE"
+          codesign --display --xml --entitlements "$RUNNER_TEMP/node-entitlements.plist" "$NODE"
+          python3 - <<'PY'
+          import os, plistlib
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'node-entitlements.plist'), 'rb') as stream:
+              entitlements = plistlib.load(stream)
+          if entitlements.get('com.apple.security.cs.allow-jit') is not True:
+              raise SystemExit('The signed Node sidecar is missing the JIT entitlement')
+          PY
+          "$NODE" -e 'console.log("Bundled Node can run JavaScript")'
+
+      - name: Notarize and staple the outer DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        run: |
+          set -euo pipefail
+          BUNDLE="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          DMG="$(find "$BUNDLE/dmg" -name '*.dmg' -print -quit)"
+          test -s "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --output-format json > "$RUNNER_TEMP/dmg-notary.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'dmg-notary.json')) as stream:
+              result = json.load(stream)
+          if result.get('status') != 'Accepted':
+              raise SystemExit(f"DMG notarization failed: {result.get('status')}")
+          print('Outer DMG notarization accepted')
+          PY
+          xcrun stapler staple "$DMG"
+
+      - name: Verify the signed release
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          BUNDLE="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          APP="$BUNDLE/macos/Dispatch.app"
+          DMG="$(find "$BUNDLE/dmg" -name '*.dmg' -print -quit)"
+          test -n "$DMG"
+          npm --prefix apps/desktop run release:verify -- \
+            --app "${APP#apps/desktop/}" \
+            --dmg "${DMG#apps/desktop/}"
+          npm --prefix apps/desktop run smoke -- "$(pwd)/$APP"
+          NODE="$APP/Contents/MacOS/node"
+          test "$(lipo -archs "$APP/Contents/MacOS/dispatch")" = "${{ matrix.arch }}"
+          test "$(lipo -archs "$NODE")" = "${{ matrix.arch }}"
+          codesign --verify --strict "$NODE"
+          TEAM="$(codesign -dv --verbose=4 "$NODE" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          test "$TEAM" = "$APPLE_TEAM_ID"
+
+      - name: Stage verified release assets
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUNDLE="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          DMG="$(find "$BUNDLE/dmg" -name '*.dmg' -print -quit)"
+          ARCHIVE="$BUNDLE/macos/Dispatch.app.tar.gz"
+          test -s "$DMG"
+          test -s "$ARCHIVE"
+          test -s "${ARCHIVE}.sig"
+          mkdir -p release
+          cp "$DMG" "release/Dispatch_${VERSION}_${{ matrix.arch }}.dmg"
+          cp "$ARCHIVE" "release/Dispatch_${VERSION}_${{ matrix.arch }}.app.tar.gz"
+          cp "${ARCHIVE}.sig" "release/Dispatch_${VERSION}_${{ matrix.arch }}.app.tar.gz.sig"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/DeveloperID.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+  publish:
+    name: create verified draft release
+    needs: [verify, macos-build]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-*
+          path: release
+          merge-multiple: true
+
+      - name: Check both architectures and write the update feed
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          for ARCH in arm64 x86_64; do
+            test -s "release/Dispatch_${VERSION}_${ARCH}.dmg"
+            test -s "release/Dispatch_${VERSION}_${ARCH}.app.tar.gz"
+            test -s "release/Dispatch_${VERSION}_${ARCH}.app.tar.gz.sig"
+          done
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          node apps/desktop/scripts/validate-updater-manifest.mjs --write \
+            --output "$RUNNER_TEMP/latest.json" \
+            --version "$VERSION" \
+            --url "$BASE/Dispatch_${VERSION}_arm64.app.tar.gz" \
+            --sig "release/Dispatch_${VERSION}_arm64.app.tar.gz.sig" \
+            --url-intel "$BASE/Dispatch_${VERSION}_x86_64.app.tar.gz" \
+            --sig-intel "release/Dispatch_${VERSION}_x86_64.app.tar.gz.sig" \
+            --notes "Signed Apple Silicon and Intel release for macOS 14 or later."
+          npm --prefix apps/desktop run release:verify-updater -- \
+            --manifest "$RUNNER_TEMP/latest.json" \
+            --assets "$(pwd)/release" \
+            --version "$VERSION"
+          node apps/desktop/scripts/write-sha256sums.mjs \
+            --output "$RUNNER_TEMP/SHA256SUMS.txt" release/* "$RUNNER_TEMP/latest.json"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; assets are immutable." >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            release/* \
+            "$RUNNER_TEMP/latest.json" \
+            "$RUNNER_TEMP/SHA256SUMS.txt" \
+            --verify-tag \
+            --draft \
+            --title "Dispatch $GITHUB_REF_NAME" \
+            --notes "Signed Apple Silicon and Intel release for macOS 14 or later."

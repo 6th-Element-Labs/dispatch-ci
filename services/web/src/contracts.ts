@@ -30,6 +30,12 @@ export interface MessageProjection extends MessageSummary {
 }
 
 export interface DraftProjection {
+  readonly draftRevision?: number
+  readonly conflict?: { readonly fields: readonly string[]; readonly remote: DraftProjection }
+  readonly syncState?: 'pending' | 'failed'
+  readonly syncError?: string
+  readonly reconnectRequired?: boolean
+  readonly resolvedFromDraftId?: string
   readonly cachedAt?: string
   readonly gmailThreadId?: string
   readonly gmailMessageId?: string
@@ -88,6 +94,7 @@ export interface MailboxCounts { readonly inbox: number; readonly drafts: number
 export type GmailConversationAction = 'archive' | 'spam' | 'trash' | 'inbox'
 
 export interface GmailSyncStatus {
+  readonly reconnectRequired?: boolean
   readonly mailRevision?: number
   readonly draftsRevision?: number
   readonly state: 'idle' | 'syncing' | 'partial' | 'ready' | 'failed'
@@ -121,6 +128,7 @@ export interface ConversationSummary {
 }
 
 export interface ConversationProjection extends ConversationSummary {
+  readonly completeness?: { readonly complete: boolean; readonly knownCount: number; readonly loadedCount: number; readonly reason?: string }
   readonly availability?: { readonly mode: 'live' | 'downloaded'; readonly cachedAt: string; readonly reason?: string }
   readonly messages: readonly MessageProjection[]
   readonly source: 'demo' | 'gmail'
@@ -143,3 +151,8 @@ export interface OfflineDownload { id: string; state: 'running' | 'complete' | '
 
 
 export interface OfflineStatus { conversations: number; bytes: number; download?: OfflineDownload }
+export interface GmailDirectSyncStatus {
+  configured: boolean
+  error?: string
+  accounts: Array<{ accountId: string; email: string; state: 'connector' | 'connecting' | 'connected' | 'reconnect'; error?: string }>
+}

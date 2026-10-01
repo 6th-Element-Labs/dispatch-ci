@@ -1,14 +1,19 @@
 # CI sandbox (`dispatch-ci`)
 
 Dispatch keeps its canonical source on the **private** repo
-[`6th-Element-Labs/dispatch`](https://github.com/6th-Element-Labs/dispatch). GitHub
-Actions minutes are billed on private repos and free on public ones, so — exactly
-as Helm and Switchboard already do — CI runs on a separate **public sandbox** that
-holds the **full actual tree** and the **same workflows**.
+[`6th-Element-Labs/dispatch`](https://github.com/6th-Element-Labs/dispatch).
+The public product mirror is
+[`6th-Element-Labs/dispatch-public`](https://github.com/6th-Element-Labs/dispatch-public).
+GitHub Actions minutes are billed on private repos and free on public ones, so —
+exactly as Helm and Switchboard already do — CI runs on a separate **public
+sandbox** that holds the **full actual tree** and the **same workflows**.
+
+Scripts resolve the canonical repo from `CANONICAL_REPO` or from `origin`.
 
 | Repo | Role | Authority |
 |---|---|---|
 | `6th-Element-Labs/dispatch` | Canonical source, PRs, Switchboard merge webhook | `done` · `merge_provenance` · `code_truth` |
+| `6th-Element-Labs/dispatch-public` | Public release mirror | signed source snapshots |
 | `6th-Element-Labs/dispatch-ci` | Public CI sandbox — push branches here first | `verification_only` |
 
 The sandbox is **not** a product mirror. It is not scrubbed, its feature branches
@@ -124,6 +129,24 @@ completes and `prove` refuses to stamp. `ci-sandbox.sh doctor` fails on this.
 Actions logs and artifacts in the sandbox are public. The sandbox may run source,
 unit, contract, and browser verification. It must not publish signed installers,
 credentials, private mail, account identifiers, or provider payloads.
+
+## Push protection
+
+The sandbox is public, so GitHub push protection scans every push to it: each
+commit the sandbox does not already have, not only the tip. One match declines
+the whole push, and a fake token in a test fixture is still a match.
+
+- Test fixtures build fake credentials at runtime, as
+  `scripts/public-export.test.mjs` does, instead of committing token literals.
+- A clean tip does not unblock a push whose earlier commits hold a token.
+  `sync-main` and `refresh-main` push that same history and are blocked too.
+- `main` is never rewritten, and its history before the runtime-built fixtures
+  holds a fake Slack token (first in `c915945`). The sandbox accepts it through
+  one allowance: open the unblock URL the declined push prints, choose **It's
+  used in tests**, and push again within three hours. That leaves a closed
+  alert, and GitHub does not block a secret that already has an alert in the
+  repository, so later pushes pass.
+- Never allow a real credential. Revoke it and remove it from the branch.
 
 ## Current state
 

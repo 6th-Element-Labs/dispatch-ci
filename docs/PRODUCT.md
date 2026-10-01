@@ -18,11 +18,15 @@ The middle reading surface is visually primary. Selection of a Gmail conversatio
 
 All connected Gmail accounts enter one date-ordered queue by default. The user can filter that queue to one account. Message rows show a compact date and time. The rendered message header shows the full date and time.
 
+The macOS Dock icon shows the total number of unread Inbox conversations across all connected accounts. An account filter changes the visible mailbox counts, but not the Dock total. The badge disappears when that total is zero.
+
 The queue contains conversations, not duplicate individual messages. A conversation is scoped by Gmail account and Gmail thread ID. Inbox contains only Gmail INBOX members, excluding drafts, spam and trash. All, Unread, and Read filter conversations within the selected mailbox. Unread archived mail remains in Archive and never enters Inbox merely because it is unread.
 
 Selecting a conversation loads the complete Gmail thread with the newest message first. The reader shows the subject on its own row, then the action buttons. A long subject stays on one line and uses an ellipsis. Each message shows sender, address, full date, and time. Repeated quoted history is collapsed by default but remains available through a disclosure.
 
 Selecting an unread Gmail conversation starts a 5-second dwell. If that conversation stays selected, Dispatch marks it read through mail. The row stays unread until mail accepts the command. After mail accepts, the row stays read without Refresh, even if a later thread fetch or Gmail sync still reports unread. Demo conversations do not auto-mark. On the Unread filter, the row leaves the list and the reader stays on that conversation.
+
+An explicit Mark as Unread makes the row unread immediately and leaves it unread while the user stays on that selection. After the user moves away and selects it again, the normal 5-second dwell marks it read. Live Gmail messages do not display an Offline badge; a saved copy used because Gmail is unavailable is labeled Downloaded copy.
 
 A right-click on a thread row selects that conversation and does not start the dwell. In Dispatch.app the shell shows a native macOS menu of the same reader actions. The browser shows an HTML menu with the same command ids. Mail still owns every Gmail write. A failed native popup is a visible mail error and does not open the page menu.
 
@@ -80,6 +84,8 @@ Dispatch embeds the full installed Codex experience, not an email-only agent. It
 
 
 ## Search with Codex
+
+Installed Dispatch keeps its Codex runtime current automatically using stable OpenAI releases. Checks run at launch and every six hours while the background agent is running; failed checks retry after fifteen minutes. Downloads are verified before use, activation waits for all Codex work to finish, and failed startup restores the working runtime. Models come from that runtime's account catalog, so new releases need no Dispatch rebuild or separate login. Explicit runtime overrides remain available for pinned installations.
 
 Typing in Search keeps the instant indexed filter. Enter or the adjacent Tabler sparkles button submits a natural-language search to the existing unbound Codex task. The selected account is the search scope; All inboxes searches connected accounts across mail folders. Unsaved drafts must be saved successfully before navigating into search.
 

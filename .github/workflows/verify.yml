@@ -13,9 +13,10 @@ concurrency:
 
 jobs:
   gate:
+    if: ${{ github.event.repository.private == false }}
     name: dispatch-ci/full-suite
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:

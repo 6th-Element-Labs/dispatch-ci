@@ -33,6 +33,8 @@ Reuse suitable SimpleMark patterns for the Tauri/Vite/WebKit shell, native windo
 
 ## Validation
 
+Remote CI must run only in the public `6th-Element-Labs/dispatch-ci` repository. Private CI is prohibited. Never enable or dispatch GitHub Actions in the private canonical repository. Use `scripts/ci-sandbox.sh` and prove the exact commit before merging.
+
 Run:
 
 ```bash

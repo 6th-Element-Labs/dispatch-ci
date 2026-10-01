@@ -5,5 +5,8 @@ playwright-report/
 test-results/
 .artifacts/
 .dispatch-data/
+.worktrees/
+.public-export/
+.public-release/
 .DS_Store
 *.log
