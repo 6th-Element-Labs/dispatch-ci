@@ -11,6 +11,8 @@ import { resolveAttachmentBytes } from './open-attachment.js'
 import { homedir } from 'node:os'
 import { join, resolve, isAbsolute, basename, extname } from 'node:path'
 import { folderFlagsFromLabels, GmailIndex, type GmailSyncStatus, type IndexedGmailMessage, type IndexStreamFlag } from './gmail-index.js'
+import { GmailHistorySync, type GmailHistoryTransport, object as gmailObject } from './gmail-history-sync.js'
+import { GmailOAuth, loadGmailOAuthConfig, type GmailDirectSyncStatus } from './gmail-oauth.js'
 import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MailboxCounts, MessageProjection, MessageSummary } from './model.js'
 import { decodeRawMessage, decodeText, findPart, isUnicodeCharset, mimeCharset, parseMime, partAt, UnsupportedCharsetError } from './mime-part.js'
 
@@ -19,6 +21,22 @@ export interface GmailAccountProjection {
   readonly connectorId: string
   readonly name: string
   readonly email: string
+}
+
+/** Normalize Google's REST casing at the adapter boundary; mail projections stay unchanged. */
+export function projectGmailApiMessage(value: unknown, account: GmailAccountProjection): IndexedGmailMessage {
+  const message = gmailObject(value)
+  // Google omits empty repeated fields; a label-free message is valid archived mail.
+  const labels = message.labelIds === undefined ? [] : message.labelIds
+  if (!Array.isArray(labels) || !labels.every(label => typeof label === 'string')) throw new Error('Gmail API message has invalid labels')
+  const payload = gmailObject(message.payload)
+  const projection = projectGmailMessage({ structuredContent: { id: message.id, thread_id: message.threadId, label_ids: labels, internal_date: message.internalDate, snippet: message.snippet, payload } }, false, account)
+  const files = (part: UnknownRecord): boolean => {
+    if (typeof part.filename === 'string' && part.filename) return true
+    if (part.parts !== undefined && !Array.isArray(part.parts)) throw new Error('Invalid Gmail API MIME parts')
+    return Array.isArray(part.parts) && part.parts.some(child => files(gmailObject(child)))
+  }
+  return { ...projection, hasAttachment: files(payload), ...folderFlagsFromLabels(labels) }
 }
 
 type UnknownRecord = Record<string, unknown>
@@ -445,6 +463,8 @@ export class GmailConnectorProvider {
   readonly #agentBase: string
   readonly #index: GmailIndex | undefined
   readonly #local: LocalMailStore
+  readonly #oauth: GmailOAuth
+  readonly #history: GmailHistorySync | undefined
   readonly #draftQueue: DraftSaveQueue
   #draftQueueTimer: ReturnType<typeof setInterval> | undefined
   readonly #sendFlights = new Map<string, Promise<unknown>>()
@@ -454,6 +474,11 @@ export class GmailConnectorProvider {
   #syncPromise: Promise<void> | undefined
   readonly #syncContext = new AsyncLocalStorage<AbortSignal>()
   #syncController: AbortController | undefined
+  readonly #syncTimeouts = new Map<AbortSignal, ReturnType<typeof setTimeout>>()
+  #inventoryError: string | undefined
+  #inventorySnapshot: readonly GmailAccountProjection[] | undefined
+  #inventoryRefresh: Promise<void> | undefined
+  #inventoryCheckedAt = 0
   #syncKind: 'heads' | 'full' | undefined
   #syncStarted = 0
   #lastWakeRefresh = Number.NEGATIVE_INFINITY
@@ -502,7 +527,7 @@ export class GmailConnectorProvider {
 
   constructor(
     agentBase = process.env.DISPATCH_AGENT_URL ?? 'http://127.0.0.1:8412',
-    options: { localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number; draftListLagMs?: number; launchSyncDelayMs?: number } = {},
+    options: { historyTransport?: GmailHistoryTransport | false; localPath?: string; indexPath?: string | false; syncIntervalMs?: number; refreshIntervalMs?: number; draftListLagMs?: number; launchSyncDelayMs?: number } = {},
   ) {
     this.#agentBase = agentBase
     const indexPath = options.indexPath === false
@@ -511,6 +536,21 @@ export class GmailConnectorProvider {
     this.#index = indexPath ? new GmailIndex(indexPath) : undefined
     this.#draftListLagMs = options.draftListLagMs ?? 1_500
     this.#local = new LocalMailStore(options.localPath ?? (indexPath && indexPath !== ':memory:' ? `${indexPath}.local` : ':memory:'))
+    let configuration: ReturnType<typeof loadGmailOAuthConfig>
+    let configurationError: string | undefined
+    try { configuration = loadGmailOAuthConfig() } catch (error) { configurationError = error instanceof Error ? error.message : String(error) }
+    this.#oauth = new GmailOAuth(configuration, undefined, {
+      configurationError, onConnected: accountId => { this.#index?.setDirectSyncEnabled(accountId, true); this.requestRefresh('manual') },
+      retryAfter: accountId => this.#local.retryAfter(accountId),
+      pauseUntil: (accountId, timestamp) => this.#local.putRetryAfter(accountId, timestamp),
+    })
+    this.#history = this.#index && options.historyTransport !== false ? new GmailHistorySync(this.#index, options.historyTransport ?? this.#oauth, projectGmailApiMessage, 1_000, signal => {
+      if (this.#syncController?.signal !== signal) return
+      this.#syncKind = 'full'
+      clearTimeout(this.#syncTimeouts.get(signal))
+      const timeout = setTimeout(() => this.#syncController?.signal === signal && this.#syncController.abort(new Error('Gmail baseline synchronization timed out; retrying.')), 900_000)
+      timeout.unref(); this.#syncTimeouts.set(signal, timeout)
+    }, kind => { if (kind === 'page') this.#syncProgress.pagesFetched++; else this.#syncProgress.fetchedMessages++ }) : undefined
     this.#draftQueue = new DraftSaveQueue(this.#local, {
       create: job => this.createGmailDraft(job.accountId, job.messageId, job.fields.to ?? '', job.fields.cc ?? '', job.fields.bcc ?? '', job.fields.subject ?? '', job.fields.bodyMarkdown ?? '', appendMissingFiles(job.fields.attachments ?? [], pendingAttachmentAppendFiles(job)), job.id),
       read: (accountId, id) => this.readGmailDraft(accountId, id, true),
@@ -584,6 +624,7 @@ export class GmailConnectorProvider {
     this.#actionsPaused = true
     this.#wakeActionBatch()
     this.#draftQueue.stop()
+    this.#oauth.stop()
     if (this.#draftQueueTimer) clearInterval(this.#draftQueueTimer)
     this.#syncController?.abort()
     if (this.#wakeTimer) clearInterval(this.#wakeTimer)
@@ -647,11 +688,13 @@ export class GmailConnectorProvider {
     this.#syncController = controller; this.#syncKind = kind; this.#syncStarted = Date.now()
     const timeout = setTimeout(() => controller.abort(new Error('Gmail synchronization timed out; retrying.')), kind === 'heads' ? 180_000 : 900_000)
     timeout.unref()
+    this.#syncTimeouts.set(controller.signal, timeout)
     const flight = this.#syncContext.run(controller.signal, () => work(controller.signal)).catch(error => {
       if (!this.#stopped && this.#syncController === controller && error?.name !== 'AbortError') this.#index?.failSync(String(error))
       throw error
     }).finally(() => {
       clearTimeout(timeout)
+      clearTimeout(this.#syncTimeouts.get(controller.signal)); this.#syncTimeouts.delete(controller.signal)
       if (this.#syncPromise === flight) { this.#syncPromise = undefined; this.#syncController = undefined; this.#syncKind = undefined }
     })
     this.#syncPromise = flight
@@ -669,12 +712,18 @@ export class GmailConnectorProvider {
       const startedAt = new Date().toISOString()
       const runId = `${startedAt}:${randomUUID()}`
       this.#index!.beginSync(startedAt)
-      const accounts = await this.accounts()
+      const accounts = await this.#accountsForSync()
       signal.throwIfAborted()
       if (accounts.length === 0) throw new Error('Cannot refresh Gmail: no connector accounts are available')
       this.#index!.replaceAccounts(accounts, startedAt)
       this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
       const results = await Promise.allSettled(accounts.map(async (account) => {
+        if (await this.#history?.synchronize(account, signal)) {
+          signal.throwIfAborted()
+          this.#mailRevision++; this.#syncProgress.accountsCompleted++
+          return
+        }
+        if (this.#inventoryError) throw new Error(this.#inventoryError)
         const fresh = options.details === true || this.#index!.count(account.id) === 0
         // Every message read in this pass, merged: each folder's page adds to it and none undoes another.
         const readThisPass: IndexedGmailMessage[] = []
@@ -745,7 +794,22 @@ export class GmailConnectorProvider {
   }
 
   cachedAccounts(): readonly GmailAccountProjection[] { return this.#index?.accounts() ?? [] }
-  runtimeStatus(): { activeOperations: number } { return { activeOperations: this.#sendFlights.size + this.#draftCreates.size + this.#actionWorkers.size + Number(this.#draftQueue.active) } }
+  async directSyncStatus(): Promise<GmailDirectSyncStatus> {
+    const status = await this.#oauth.status(this.cachedAccounts())
+    return { ...status, accounts: status.accounts.map(account => this.#index?.directSyncDisabled(account.accountId) ? { ...account, state: 'connector', error: undefined } : account) }
+  }
+  useConnectorSync(accountId: string): void {
+    if (!this.cachedAccounts().some(account => account.id === accountId)) throw new Error('Select a connected Gmail account')
+    if (this.#oauth.activeOperations) throw new Error('Finish Google sign-in or token renewal before changing the sync connection')
+    this.#index?.setDirectSyncEnabled(accountId, false)
+    this.requestRefresh('manual')
+  }
+  async connectDirectSync(accountId: string): Promise<{ authUrl: string } | { connected: true }> {
+    const account = this.cachedAccounts().find(account => account.id === accountId)
+    if (!account?.email) throw new Error('Select a connected Gmail account before authorizing direct sync')
+    return this.#oauth.beginConnect(account)
+  }
+  runtimeStatus(): { activeOperations: number } { return { activeOperations: this.#sendFlights.size + this.#draftCreates.size + this.#actionWorkers.size + Number(this.#draftQueue.active) + this.#oauth.activeOperations } }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
     try {
@@ -754,19 +818,39 @@ export class GmailConnectorProvider {
       const value = await response.json() as unknown
       if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
       const inventory = record(value)
-      return array(inventory?.accounts).map((account) => {
+      this.#inventoryError = undefined
+      const accounts = array(inventory?.accounts).map((account) => {
         const item = record(account)
         const id = text(item?.linkId)
         if (!id) throw new Error('Gmail inventory contains an account without linkId')
         return { id, connectorId: text(item?.connectorId), name: text(item?.name) || 'Gmail', email: text(item?.email) }
       })
+      this.#inventorySnapshot = accounts
+      return accounts
     } catch (error) {
       this.#syncContext.getStore()?.throwIfAborted()
       const indexed = this.#index?.accounts() ?? []
       if (indexed.length === 0) throw error
-      this.#index?.failSync(`Gmail account refresh failed: ${error instanceof Error ? error.message : String(error)}`)
+      this.#inventoryError = `Gmail account refresh failed: ${error instanceof Error ? error.message : String(error)}`
+      const direct = this.#history ? await Promise.allSettled(indexed.map(account => this.#index?.directSyncDisabled(account.id) ? false : this.#history!.transport.connected(account))) : []
+      if (!direct.length || direct.some(result => result.status !== 'fulfilled' || !result.value)) this.#index?.failSync(this.#inventoryError)
       return indexed
     }
+  }
+
+  async #accountsForSync(): Promise<readonly GmailAccountProjection[]> {
+    const known = this.#inventorySnapshot ?? this.cachedAccounts()
+    const direct = this.#history && known.length ? await Promise.allSettled(known.map(account => this.#index?.directSyncDisabled(account.id) ? false : this.#history!.transport.connected(account))) : []
+    if (direct.length && direct.every(result => result.status === 'fulfilled' && result.value)) {
+      // Google authorization is already bound to each durable account. Mail history need not
+      // wait for App Server to restart; connector discovery continues independently.
+      if (!this.#inventoryRefresh && Date.now() - this.#inventoryCheckedAt >= 60_000) {
+        this.#inventoryCheckedAt = Date.now()
+        this.#inventoryRefresh = this.accounts().then(() => undefined).catch(() => undefined).finally(() => { this.#inventoryRefresh = undefined })
+      }
+      return known
+    }
+    return this.accounts()
   }
 
   async listMessages(accountId: string, maxResults = 10): Promise<readonly MessageSummary[]> {
@@ -1064,14 +1148,21 @@ export class GmailConnectorProvider {
       const runId = `${startedAt}:${randomUUID()}`
       this.#index!.beginSync(startedAt)
       try {
-        const accounts = await this.accounts()
+        const accounts = await this.#accountsForSync()
         signal.throwIfAborted()
         if (accounts.length === 0) throw new Error('Cannot synchronize Gmail: no connector accounts are available')
         this.#index!.replaceAccounts(accounts, startedAt)
         this.#syncProgress = { accountCount: accounts.length, accountsCompleted: 0, pagesFetched: 0, fetchedMessages: 0, currentAccount: null }
         const completion: boolean[] = []
-        for (const account of accounts) {
+        const results = await Promise.allSettled(accounts.map(async account => {
           this.#syncProgress.currentAccount = account.name
+          // Authorized accounts catch every off-head change through history. The six-hour scan
+          // is unnecessary for them; only an expired checkpoint triggers a fresh baseline.
+          if (await this.#history?.synchronize(account, signal)) {
+            this.#mailRevision++; completion.push(true); this.#syncProgress.accountsCompleted++
+            return
+          }
+          if (this.#inventoryError) throw new Error(this.#inventoryError)
           // An account the index has never seen is read in full. Otherwise every folder is listed by
           // ID and only messages the index lacks, or does not show in that folder, are read.
           const fresh = this.#index!.count(account.id) === 0
@@ -1126,7 +1217,10 @@ export class GmailConnectorProvider {
           if (complete) this.#index!.removeFolderless(account.id)
           completion.push(complete)
           this.#syncProgress.accountsCompleted += 1
-        }
+        }))
+        signal.throwIfAborted()
+        const failed = results.flatMap((result, position) => result.status === 'rejected' ? [`${accounts[position]!.email || accounts[position]!.name}: ${String(result.reason)}`] : [])
+        if (failed.length) throw new Error(failed.join('; '))
         this.#syncProgress.currentAccount = null
         this.#index!.pruneAccounts(accounts.map((account) => account.id))
         this.#local.pruneAccounts(accounts.map((account) => account.id))

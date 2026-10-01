@@ -39,7 +39,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'setRuntimeDraining' | 'enqueueDraftSave' | 'attachDraftFiles' | 'resolveDraftConflict' | 'conflictCopies' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'directSyncStatus' | 'connectDirectSync' | 'useConnectorSync' | 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'setRuntimeDraining' | 'enqueueDraftSave' | 'attachDraftFiles' | 'resolveDraftConflict' | 'conflictCopies' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -184,6 +184,32 @@ export function createMailServer(
       response.once('finish', finish); response.once('close', finish)
     }
 
+    if (url.pathname === '/v1/gmail-sync') {
+      if (request.method === 'GET') {
+        try { return writeJson(response, 200, { directSync: await gmail.directSyncStatus?.() ?? { configured: false, accounts: [] } }) }
+        catch { return writeJson(response, 503, { error: 'gmail_sync_configuration_unavailable' }) }
+      }
+      if (request.method === 'POST') {
+        if (request.headers.origin && request.headers.origin !== allowedOrigin) return writeJson(response, 403, { error: 'untrusted_origin' })
+        if (draining) return writeJson(response, 503, { error: 'runtime_updating' })
+        try {
+          const body = draftObject(await readJson(request))
+          if (!body || typeof body.accountId !== 'string' || !body.accountId) return writeJson(response, 400, { error: 'accountId_required' })
+          if (!gmail.connectDirectSync) return writeJson(response, 501, { error: 'gmail_direct_sync_unavailable' })
+          return writeJson(response, 200, await gmail.connectDirectSync!(body.accountId))
+        } catch (error) { return writeJson(response, 400, { error: 'gmail_authorization_failed', detail: error instanceof Error ? error.message : 'Could not start Google sign-in' }) }
+      }
+      if (request.method === 'DELETE') {
+        if (request.headers.origin && request.headers.origin !== allowedOrigin) return writeJson(response, 403, { error: 'untrusted_origin' })
+        try {
+          const accountId = url.searchParams.get('account')
+          if (!accountId) return writeJson(response, 400, { error: 'accountId_required' })
+          if (!gmail.useConnectorSync) return writeJson(response, 501, { error: 'gmail_direct_sync_unavailable' })
+          gmail.useConnectorSync!(accountId)
+          return writeJson(response, 200, { accepted: true })
+        } catch (error) { return writeJson(response, 400, { error: 'gmail_sync_connection_failed', detail: error instanceof Error ? error.message : 'Could not change the sync connection' }) }
+      }
+    }
     if (request.method === 'GET' && url.pathname === '/health') {
       return writeJson(response, 200, { service: 'dispatch-mail', status: 'healthy', runtimeId: process.env.DISPATCH_RUNTIME_ID ?? null })
     }

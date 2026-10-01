@@ -124,7 +124,8 @@ fn focus_mail(app: &AppHandle) {
 pub fn return_to_mail(app: &AppHandle) { if let Some(window) = app.get_window(WINDOW) { let _ = window.close(); } focus_mail(app); }
 
 fn is_sign_in_url(url: &Url) -> bool {
-    url.scheme() == "https" && url.host_str() == Some("auth.openai.com") && url.path() == "/oauth/authorize"
+    url.scheme() == "https" && ((url.host_str() == Some("auth.openai.com") && url.path() == "/oauth/authorize")
+        || (url.host_str() == Some("accounts.google.com") && url.path() == "/o/oauth2/v2/auth"))
 }
 
 #[tauri::command]
@@ -189,6 +190,10 @@ mod tests {
     #[test]
     fn only_official_oauth_authorize_opens_external_sign_in() {
         assert!(is_sign_in_url(&Url::parse("https://auth.openai.com/oauth/authorize?state=test").unwrap()));
+        assert!(is_sign_in_url(&Url::parse("https://accounts.google.com/o/oauth2/v2/auth?state=test").unwrap()));
+        for value in ["https://accounts.google.com.example.com/o/oauth2/v2/auth", "http://accounts.google.com/o/oauth2/v2/auth", "https://accounts.google.com/other"] {
+            assert!(!is_sign_in_url(&Url::parse(value).unwrap()));
+        }
         for value in ["http://auth.openai.com/oauth/authorize", "https://auth.openai.com.example.com/oauth/authorize", "https://auth.openai.com/other", "https://example.com/oauth/authorize"] {
             assert!(!is_sign_in_url(&Url::parse(value).unwrap()));
         }

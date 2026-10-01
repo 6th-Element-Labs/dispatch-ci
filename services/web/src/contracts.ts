@@ -151,3 +151,8 @@ export interface OfflineDownload { id: string; state: 'running' | 'complete' | '
 
 
 export interface OfflineStatus { conversations: number; bytes: number; download?: OfflineDownload }
+export interface GmailDirectSyncStatus {
+  configured: boolean
+  error?: string
+  accounts: Array<{ accountId: string; email: string; state: 'connector' | 'connecting' | 'connected' | 'reconnect'; error?: string }>
+}
