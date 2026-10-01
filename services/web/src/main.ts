@@ -40,6 +40,7 @@ import { waitingForGmailLabel } from './sync-label.js'
 import { threadContextMenuItems } from './thread-context-menu.js'
 import { canOpenMessageWindow, MESSAGE_WINDOW_CHANNEL, messageWindowQuery, parseMessageWindow, readMovedInMessageWindow, type MessageWindowTarget, type MovedInMessageWindow } from './message-window.js'
 import { DraftEditLocks, type LockManagerLike } from './draft-edit-locks.js'
+import { installRichDraftEditor } from './rich-draft-editor.js'
 
 const appElement = document.querySelector<HTMLDivElement>('#app')
 if (!appElement) throw new Error('Dispatch app root is missing')
@@ -133,7 +134,7 @@ app.innerHTML = `
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
           <section class="card-body dispatch-draft" data-draft hidden>
-            <div class="card"><div class="card-header"><div class="dispatch-draft-title"><strong>Unsent draft</strong><span class="text-secondary small" data-recovery-status role="status"></span></div><div class="dispatch-draft-header-actions"><button type="button" class="btn btn-sm btn-ghost-secondary" data-toggle-preview aria-pressed="false" aria-controls="dispatch-draft-preview"><i class="ti ti-eye me-1" aria-hidden="true"></i>Preview</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-collapse-draft aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-chevron-down me-1" aria-hidden="true"></i>Collapse draft</button></div></div><div id="dispatch-draft-content" data-draft-content><div class="card-body">
+            <div class="card"><div class="card-header"><div class="dispatch-draft-title"><strong>Unsent draft</strong><span class="text-secondary small" data-recovery-status role="status"></span></div><div class="dispatch-draft-header-actions"><button type="button" class="btn btn-sm btn-ghost-secondary" data-pop-out-draft aria-label="Open draft in new window" title="Open draft in new window"><i class="ti ti-external-link" aria-hidden="true"></i></button><button type="button" class="btn btn-sm btn-ghost-secondary" data-toggle-preview aria-pressed="false" aria-controls="dispatch-draft-preview"><i class="ti ti-eye me-1" aria-hidden="true"></i>Preview</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-collapse-draft aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-chevron-down me-1" aria-hidden="true"></i>Collapse draft</button></div></div><div id="dispatch-draft-content" data-draft-content><div class="card-body">
             <div class="dispatch-draft-fields">
               <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-to">To</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-to" data-draft-to aria-label="Draft recipient" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Recipient suggestions"></ul></div><span class="dispatch-draft-copy-toggles"><button type="button" class="btn btn-sm btn-ghost-secondary" data-show-copy="cc" aria-label="Add Cc" aria-controls="dispatch-draft-cc-row">Cc</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-show-copy="bcc" aria-label="Add Bcc" aria-controls="dispatch-draft-bcc-row">Bcc</button></span></div>
               <div class="dispatch-draft-field" id="dispatch-draft-cc-row" data-copy-row="cc" hidden><label class="dispatch-draft-label" for="dispatch-draft-cc">Cc</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-cc" data-draft-cc aria-label="Draft Cc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Cc suggestions"></ul></div></div>
@@ -141,7 +142,17 @@ app.innerHTML = `
               <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-subject">Subject</label><input class="form-control" id="dispatch-draft-subject" data-draft-subject aria-label="Draft subject"></div>
               <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-account">From</label><select class="form-select" id="dispatch-draft-account" data-draft-account aria-label="Draft account"></select></div>
             </div>
-            <textarea class="form-control dispatch-draft-text" data-draft-body aria-label="Draft body" placeholder="Write your message"></textarea>
+            <div class="dispatch-draft-formatting" role="toolbar" aria-label="Message formatting">
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="bold" aria-label="Bold" title="Bold (⌘B)"><i class="ti ti-bold" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="italic" aria-label="Italic" title="Italic (⌘I)"><i class="ti ti-italic" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="underline" aria-label="Underline" title="Underline (⌘U)"><i class="ti ti-underline" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="insertUnorderedList" aria-label="Bulleted list"><i class="ti ti-list" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="insertOrderedList" aria-label="Numbered list"><i class="ti ti-list-numbers" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-link aria-label="Insert link"><i class="ti ti-link" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="removeFormat" aria-label="Clear formatting"><i class="ti ti-clear-formatting" aria-hidden="true"></i></button>
+            </div>
+            <div class="dispatch-draft-link-form" data-draft-link-form hidden><input class="form-control form-control-sm" type="url" data-draft-link-url aria-label="Link URL" placeholder="https://"><button class="btn btn-sm" type="button" data-draft-link-apply>Apply link</button><button class="btn btn-sm" type="button" data-draft-link-cancel>Cancel link</button></div>
+            <div class="form-control dispatch-draft-text" data-draft-body role="textbox" aria-multiline="true" contenteditable="true" aria-label="Draft body" data-placeholder="Write your message"></div>
             <section class="dispatch-draft-conflict" data-draft-conflict hidden role="group" aria-label="Gmail draft conflict">
               <div class="dispatch-draft-conflict-heading"><strong>Gmail changed this draft</strong><span data-draft-conflict-summary></span></div>
               <pre class="dispatch-draft-conflict-remote" data-draft-conflict-remote aria-label="Gmail version"></pre>
@@ -263,7 +274,7 @@ const elements = {
   draftBcc: app.querySelector<HTMLInputElement>('[data-draft-bcc]')!,
   draftAccount: app.querySelector<HTMLSelectElement>('[data-draft-account]')!,
   draftSubject: app.querySelector<HTMLInputElement>('[data-draft-subject]')!,
-  draftBody: app.querySelector<HTMLTextAreaElement>('[data-draft-body]')!,
+  draftBody: installRichDraftEditor(app),
   draftPreview: app.querySelector<HTMLElement>('[data-draft-preview]')!,
   draftError: app.querySelector<HTMLElement>('[data-draft-error]')!,
   draftConflict: app.querySelector<HTMLElement>('[data-draft-conflict]')!,
@@ -383,6 +394,7 @@ let sendConfirmationRevision: number | undefined
 let draftDiscarding = false
 const recovery = new DraftRecovery()
 const draftEditLocks = new DraftEditLocks((navigator as Navigator & { locks?: unknown }).locks as LockManagerLike | undefined)
+const draftWindowTransfers = new Set<string>()
 /** Hold the cross-window claim on whatever this window is editing (see draft-edit-locks.ts). */
 function syncDraftEditLock(): void {
   draftEditLocks.hold(activeDraft ? { localKey: recoveryKey, accountId: activeDraft.accountId, gmailDraftId: activeDraft.id || undefined } : undefined)
@@ -424,7 +436,7 @@ async function syncPendingDrafts(): Promise<void> {
       continue
     }
     // Another window is editing this draft and saves it itself. Try again after that window lets go.
-    if (editedElsewhere.has(record.key)) { pending = true; continue }
+    if (editedElsewhere.has(record.key) || draftWindowTransfers.has(record.key)) { pending = true; continue }
     // Only the main window saves drafts that no window is editing.
     if (inMessageWindow) continue
     if ([record.to, record.cc, record.bcc].flatMap(parseRecipientList).some(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))) continue
@@ -699,8 +711,8 @@ function renderPanels(): void {
   elements.messagesPanel.hidden = !panels.messages
   elements.readerPanel.hidden = !panels.reader
   elements.agentPanel.hidden = !panels.agent
-  elements.messagesDivider.hidden = !(panels.messages && panels.reader)
-  elements.agentDivider.hidden = !(panels.agent && (panels.reader || panels.messages))
+  elements.messagesDivider.hidden = !(panels.messages && (panels.reader || panels.agent))
+  elements.agentDivider.hidden = !(panels.agent && panels.reader)
 
   let messagesWidth = panels.messagesWidth
   let agentWidth = panels.agentWidth
@@ -720,10 +732,10 @@ function renderPanels(): void {
   if (!elements.messagesDivider.hidden) columns.push('9px')
   if (panels.reader) columns.push(`minmax(${minimumReaderWidth}px, 1fr)`)
   if (!elements.agentDivider.hidden) columns.push('9px')
-  if (panels.agent) columns.push(visible.length === 1 ? 'minmax(0, 1fr)' : `${agentWidth}px`)
+  if (panels.agent) columns.push(!panels.reader ? 'minmax(0, 1fr)' : `${agentWidth}px`)
   elements.workspace.style.gridTemplateColumns = columns.join(' ')
   const messagesCluster = panels.messages && visible.length > 1
-  const agentCluster = panels.agent && visible.length > 1
+  const agentCluster = panels.agent && panels.reader && visible.length > 1
   elements.toolbarMessages.style.width = messagesCluster ? `${railWidth + messagesWidth + 9}px` : ''
   elements.toolbarAgent.style.width = agentCluster ? `${agentWidth + 9}px` : ''
   elements.toolbarMessages.classList.toggle('dispatch-toolbar-cluster-auto', !messagesCluster)
@@ -826,6 +838,26 @@ function renderList(emptyMessage = defaultEmptyListMessage()): void {
   elements.list.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(focusId ?? focusedId)}"]`)?.focus()
 }
 
+async function openLocalDraftWindow(key: string): Promise<void> {
+  if (recoveryKey !== key || !activeDraft) await restoreLocalDraft(key)
+  if (activeDraft && recoveryKey === key) await popOutDraft()
+}
+
+// Checkpoint updates replace local draft rows. Track clicks at their stable parent
+// so a first-click refresh cannot swallow the second click of a double-click.
+let lastDraftRowClick: { key: string; at: number } | undefined
+elements.list.addEventListener('click', event => {
+  const row = (event.target as Element).closest<HTMLElement>('[data-local-draft-key]')
+  const key = row?.dataset.localDraftKey
+  if (!key || event.button !== 0 || event.detail === 0 || event.shiftKey || event.metaKey || event.ctrlKey) { lastDraftRowClick = undefined; return }
+  const at = performance.now()
+  if (lastDraftRowClick?.key === key && at - lastDraftRowClick.at < 500) {
+    lastDraftRowClick = undefined
+    event.preventDefault(); event.stopImmediatePropagation()
+    void openLocalDraftWindow(key).catch(draftError)
+  } else lastDraftRowClick = { key, at }
+}, true)
+
 function renderListRows(emptyMessage: string): void {
   elements.list.innerHTML = ''
   let localDrafts: RecoveryDraft[] = []
@@ -855,7 +887,13 @@ function renderListRows(emptyMessage: string): void {
         content.append(top, title, detail)
         row.setAttribute('aria-label', `Draft to ${record.to || 'no recipient'}, ${record.subject || 'New message'}, ${detail.textContent.toLowerCase()}`)
         row.append(avatar, content)
-        row.onclick = () => { void restoreLocalDraft(record.key).catch(draftError) }
+        row.onclick = (event) => { if (event.detail < 2) void restoreLocalDraft(record.key).catch(draftError) }
+        row.ondblclick = () => { void openLocalDraftWindow(record.key).catch(draftError) }
+        row.oncontextmenu = event => {
+          event.preventDefault()
+          void popupContextMenu([{ kind: 'command', id: 'openWindow', label: 'Open in New Window', enabled: true }], { clientX: event.clientX, clientY: event.clientY })
+            .then(chosen => { if (chosen === 'openWindow') return openLocalDraftWindow(record.key) }).catch(draftError)
+        }
         elements.list.append(row)
       }
     } catch (error) { const notice = document.createElement('p'); notice.textContent = `Local drafts could not be read: ${String(error)}`; elements.list.append(notice) }
@@ -1468,6 +1506,11 @@ function askCodex(): void {
 async function openInMessageWindow(id: string): Promise<void> {
   const from = mailbox
   if (inMessageWindow || !canOpenMessageWindow(from)) return
+  if (from === 'drafts') {
+    if (!activeDraft || selectedConversationId !== id) await selectConversation(id)
+    if (activeDraft) await popOutDraft()
+    return
+  }
   // The open conversation may have left the list (moved elsewhere, or a refresh dropped it) and still opens.
   const summary = listedConversations().find((item) => item.id === id) ?? (selectedSummary?.id === id ? selectedSummary : undefined)
   if (!summary) {
@@ -1490,6 +1533,49 @@ async function openInMessageWindow(id: string): Promise<void> {
     elements.mailError.hidden = false
     elements.mailError.textContent = error instanceof Error ? error.message : String(error)
   }
+}
+
+let poppingOutDraft = false
+async function popOutDraft(): Promise<void> {
+  if (inMessageWindow || !activeDraft || draftSendFlight || draftDiscarding || poppingOutDraft) return
+  poppingOutDraft = true
+  const session = draftEditSession
+  let key: string | undefined
+  try {
+    if (!draftEditLocks.available) throw new Error('This browser cannot keep drafts safe across windows.')
+    // An existing save must settle before transferring its identity to the other window.
+    if (draftSaveFlight) await draftSaveFlight
+    if (!activeDraft || session !== draftEditSession) return
+    await recovery.cacheFiles(activeDraft.attachments)
+    if (!activeDraft || session !== draftEditSession) return
+    // Even an untouched Compose needs a checkpoint to open without a Gmail request.
+    draftSeed = undefined
+    draftEditRevision += 1
+    if (!checkpointDraft() || !recoveryKey) return
+    key = recoveryKey
+    const target: MessageWindowTarget = { conversationId: `draft:${key}`, threadId: activeDraft.gmailThreadId || key, mailbox: 'drafts', draftKey: key, ...(activeDraft.accountId ? { accountId: activeDraft.accountId } : {}) }
+    const title = elements.draftSubject.value || 'New message'
+    draftWindowTransfers.add(key)
+    hideDraftEditor()
+    await draftEditLocks.release()
+    if (isNativeShell(window as { isTauri?: unknown })) {
+      const invoke = nativeTauri?.core?.invoke
+      if (!invoke) throw new Error('Message windows are unavailable.')
+      await invoke('open_message_window', { ...target, title })
+    } else if (!window.open(`${location.pathname}?${messageWindowQuery(target)}`, `dispatch-message-${target.conversationId}`, 'popup,width=960,height=780')) {
+      throw new Error('The browser blocked the draft window. Allow pop-ups for Dispatch.')
+    }
+    window.setTimeout(() => {
+      if (!key || !draftWindowTransfers.delete(key)) return
+      // Failed window startup leaves the checkpoint in Drafts, with a visible retry path.
+      elements.mailError.hidden = false
+      elements.mailError.textContent = 'The draft window could not open. Your draft is saved in Drafts.'
+      scheduleDraftSync(0)
+    }, 15_000)
+  } catch (error) {
+    if (key) { draftWindowTransfers.delete(key); await restoreLocalDraft(key) }
+    draftError(error)
+  } finally { poppingOutDraft = false }
 }
 
 async function openThreadContextMenu(event: MouseEvent, conversationId: string): Promise<void> {
@@ -2035,6 +2121,7 @@ async function restoreLocalDraft(key: string): Promise<void> {
   if (!offlineMode) void bindAndShowCodex(codexKey, { sequence })
 }
 function freezeDraft(disabled: boolean): void {
+  elements.draftBody.disabled = disabled
   elements.draft.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input,textarea,select,button').forEach(control => { control.disabled = disabled })
   if (!disabled) elements.draftAccount.disabled = Boolean(activeDraft?.id)
   if (!disabled) elements.sendDraft.disabled = Boolean(activeDraft?.cachedAt || activeDraft?.syncState)
@@ -3619,6 +3706,13 @@ async function searchWithCodex(): Promise<void> {
 async function openMessageWindowConversation(target: MessageWindowTarget): Promise<void> {
   mailbox = target.mailbox
   renderMailbox()
+  if (target.draftKey) {
+    await restoreLocalDraft(target.draftKey)
+    if (!activeDraft) throw new Error('This draft is already open in another window.')
+    document.title = elements.draftSubject.value || 'New message'
+    messageWindowChannel?.postMessage({ type: 'draft-opened', key: target.draftKey })
+    return
+  }
   const conversation = await api.readConversation(target.threadId, target.accountId, offlineMode, target.mailbox)
   showMessageWindowConversation(conversation)
   await selectConversation(conversation.id, { startReadDwell: true })
@@ -3632,6 +3726,7 @@ function showMessageWindowConversation(conversation: ConversationProjection): vo
 
 /** Checks the local mailbox index, and rereads the conversation only when a message arrived or left. */
 async function refreshMessageWindowConversation(target: MessageWindowTarget): Promise<void> {
+  if (target.draftKey) return
   const current = conversations[0]
   if (!current) return
   try {
@@ -4059,7 +4154,7 @@ app.querySelectorAll<HTMLButtonElement>('[data-sidebar-style]').forEach(button =
 const nativeTauri = (window as { __TAURI__?: { core?: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> }; event?: { listen: (name: string, handler: (event: { payload: unknown }) => void) => Promise<() => void> } } }).__TAURI__
 // File → Open in New Window (⌘O) in the native menu opens the selected conversation.
 if (isNativeShell(window as { isTauri?: unknown }) && !inMessageWindow) {
-  void nativeTauri?.event?.listen('dispatch://open-message-window', () => { if (selectedConversationId) void openInMessageWindow(selectedConversationId) })
+  void nativeTauri?.event?.listen('dispatch://open-message-window', () => { if (activeDraft) void popOutDraft(); else if (selectedConversationId) void openInMessageWindow(selectedConversationId) })
 }
 if (isNativeShell(window as { isTauri?: unknown })) {
   const reportAppearance = () => { nativeTauri?.core?.invoke('set_appearance', { preference: theme.preference }).catch(() => {}) }
@@ -4179,6 +4274,7 @@ if (inMessageWindow) {
   document.title = 'Message'
   window.addEventListener('pagehide', () => { messageWindowChannel?.postMessage({ type: 'closed' }) })
 } else messageWindowChannel?.addEventListener('message', (event) => {
+  if (event.data?.type === 'draft-opened' && typeof event.data.key === 'string') { draftWindowTransfers.delete(event.data.key); return }
   // A closed message window may leave a local draft for this window to save.
   if ((event.data as { type?: unknown } | null)?.type === 'closed') { scheduleDraftSync(0); return }
   const moved = readMovedInMessageWindow(event.data)
@@ -4274,6 +4370,7 @@ elements.trash.addEventListener('click', () => { void mutateSelected('trash') })
 elements.moveInbox.addEventListener('click', () => { void mutateSelected('inbox') })
 app.querySelector('[data-ask]')?.addEventListener('click', askCodex)
 app.querySelector('[data-save-draft]')?.addEventListener('click', () => { void saveDraft().catch(draftError) })
+app.querySelector('[data-pop-out-draft]')?.addEventListener('click', () => { void popOutDraft() })
 elements.useGmailVersion.addEventListener('click', () => { void resolveDraftConflict('use-remote') })
 elements.keepLocalEdits.addEventListener('click', () => { void resolveDraftConflict('keep-local') })
 app.querySelector('[data-send-draft]')?.addEventListener('click', sendDraft)
@@ -4647,7 +4744,7 @@ window.addEventListener('keydown', (event) => {
     case 'previous': moveSelection(-1, false); return
     case 'compose': if (!inMessageWindow) openCompose(); return
     case 'ask': if (selected) askCodex(); return
-    case 'openWindow': if (selectedConversationId) void openInMessageWindow(selectedConversationId); return
+    case 'openWindow': if (activeDraft) void popOutDraft(); else if (selectedConversationId) void openInMessageWindow(selectedConversationId); return
     case 'help': shortcutsDialog.showModal(); return
   }
 })

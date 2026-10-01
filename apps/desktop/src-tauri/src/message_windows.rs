@@ -32,25 +32,30 @@ fn window_title(subject: &str) -> String {
     if clean.is_empty() { "Message".into() } else { clean.to_string() }
 }
 /// The local page for one conversation, with every value encoded as a query parameter.
-fn page(conversation_id: &str, thread_id: &str, account_id: Option<&str>, mailbox: &str) -> Result<String, String> {
+fn page(conversation_id: &str, thread_id: &str, account_id: Option<&str>, mailbox: &str, draft_key: Option<&str>) -> Result<String, String> {
     identifier("conversation", conversation_id)?;
     identifier("thread", thread_id)?;
     identifier("mailbox", mailbox)?;
     if let Some(account) = account_id { identifier("account", account)?; }
+    if let Some(key) = draft_key {
+        identifier("draft", key)?;
+        if mailbox != "drafts" { return Err("Draft windows must use Drafts".into()); }
+    }
     let mut url = Url::parse("tauri://localhost/index.html").map_err(|e| e.to_string())?;
     {
         let mut query = url.query_pairs_mut();
-        query.append_pair("window", "message").append_pair("conversation", conversation_id).append_pair("thread", thread_id).append_pair("mailbox", mailbox);
+        query.append_pair("window", if draft_key.is_some() { "draft" } else { "message" }).append_pair("conversation", conversation_id).append_pair("thread", thread_id).append_pair("mailbox", mailbox);
         if let Some(account) = account_id { query.append_pair("account", account); }
+        if let Some(key) = draft_key { query.append_pair("draftKey", key); }
     }
     Ok(format!("index.html?{}", url.query().unwrap_or_default()))
 }
 
 #[tauri::command]
-pub async fn open_message_window(app: AppHandle, webview: Webview, conversation_id: String, thread_id: String, account_id: Option<String>, mailbox: String, title: String) -> Result<(), String> {
+pub async fn open_message_window(app: AppHandle, webview: Webview, conversation_id: String, thread_id: String, account_id: Option<String>, mailbox: String, title: String, draft_key: Option<String>) -> Result<(), String> {
     // Only the main window lists conversations.
     web_links::trusted_main(&app, &webview)?;
-    let path = page(&conversation_id, &thread_id, account_id.as_deref(), &mailbox)?;
+    let path = page(&conversation_id, &thread_id, account_id.as_deref(), &mailbox, draft_key.as_deref())?;
     let state = app.state::<MessageWindows>();
     // Reserve the conversation before building, without holding the lock while
     // the window is created (window events take the same lock on the main thread).
@@ -104,18 +109,25 @@ mod tests {
     use super::*;
     #[test]
     fn encodes_every_value_into_the_local_page_query() {
-        let path = page("gmail:acct:thread&x=1", "thread#1", Some("acct/one"), "inbox").unwrap();
+        let path = page("gmail:acct:thread&x=1", "thread#1", Some("acct/one"), "inbox", None).unwrap();
         assert_eq!(path, "index.html?window=message&conversation=gmail%3Aacct%3Athread%26x%3D1&thread=thread%231&mailbox=inbox&account=acct%2Fone");
-        assert_eq!(page("demo:t1", "t1", None, "archive").unwrap(), "index.html?window=message&conversation=demo%3At1&thread=t1&mailbox=archive");
+        assert_eq!(page("demo:t1", "t1", None, "archive", None).unwrap(), "index.html?window=message&conversation=demo%3At1&thread=t1&mailbox=archive");
     }
     #[test]
     fn rejects_missing_oversized_or_control_character_values() {
-        assert!(page("", "t1", None, "inbox").is_err());
-        assert!(page("c1", "", None, "inbox").is_err());
-        assert!(page("c1", "t1", None, "").is_err());
-        assert!(page("c1", "t1", Some(""), "inbox").is_err());
-        assert!(page(&"x".repeat(MAX_IDENTIFIER + 1), "t1", None, "inbox").is_err());
-        assert!(page("c1\n", "t1", None, "inbox").is_err());
+        assert!(page("", "t1", None, "inbox", None).is_err());
+        assert!(page("c1", "", None, "inbox", None).is_err());
+        assert!(page("c1", "t1", None, "", None).is_err());
+        assert!(page("c1", "t1", Some(""), "inbox", None).is_err());
+        assert!(page(&"x".repeat(MAX_IDENTIFIER + 1), "t1", None, "inbox", None).is_err());
+        assert!(page("c1\n", "t1", None, "inbox", None).is_err());
+    }
+    #[test]
+    fn draft_windows_encode_the_checkpoint_and_require_drafts() {
+        assert_eq!(page("draft:key&1", "key&1", Some("one"), "drafts", Some("key&1")).unwrap(),
+            "index.html?window=draft&conversation=draft%3Akey%261&thread=key%261&mailbox=drafts&account=one&draftKey=key%261");
+        assert!(page("draft:key", "key", Some("one"), "drafts", Some("")).is_err());
+        assert!(page("draft:key", "key", Some("one"), "inbox", Some("key")).is_err());
     }
     #[test]
     fn titles_are_single_line_and_bounded() {
