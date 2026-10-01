@@ -44,6 +44,8 @@ test('chimes once when a live refresh brings an unread conversation', async ({ p
   await page.route('http://127.0.0.1:8412/**', (route) => route.abort())
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Berth' })).toBeVisible()
+  // The initial status check starts after the reader; establish its baseline before changing the fixture.
+  await expect(page.locator('[data-mail-source]')).toHaveText(/^Gmail synced/)
   expect(await toneStarts(page)).toBe(0)
   list = [second, first]
   completedAt = '2026-09-04T09:06:00+12:00'
