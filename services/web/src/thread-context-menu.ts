@@ -22,7 +22,7 @@ export function threadContextMenuItems(input: {
   readonly unread: boolean
   readonly hasAccountId: boolean
   readonly count?: number
-  /** Offer Open in New Window (single conversation, outside Drafts, from the main window). */
+  /** Offer Open in New Window for a single conversation or draft, from the main window. */
   readonly openWindow?: boolean
 }): ContextMenuItem[] {
   const writes = input.hasAccountId

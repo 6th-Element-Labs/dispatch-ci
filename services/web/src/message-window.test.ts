@@ -8,6 +8,12 @@ describe('message window address', () => {
     expect(parseMessageWindow(`?${messageWindowQuery({ conversationId: 'demo:t1', threadId: 't1', mailbox: 'inbox' })}`)).toEqual({ conversationId: 'demo:t1', threadId: 't1', mailbox: 'inbox' })
   })
 
+  it('round-trips a local draft window and rejects incomplete draft targets', () => {
+    const target = { conversationId: 'draft:local-one', threadId: 'local-one', accountId: 'one', mailbox: 'drafts' as const, draftKey: 'local-one' }
+    expect(parseMessageWindow(`?${messageWindowQuery(target)}`)).toEqual(target)
+    expect(() => parseMessageWindow('?window=draft&conversation=d&thread=d&mailbox=drafts')).toThrow('does not name a draft')
+  })
+
   it('is the main window without window=message', () => {
     expect(parseMessageWindow('')).toBeUndefined()
     expect(parseMessageWindow('?conversation=c1&thread=t1&mailbox=inbox')).toBeUndefined()
@@ -16,12 +22,12 @@ describe('message window address', () => {
   it('rejects an incomplete message window address instead of guessing', () => {
     expect(() => parseMessageWindow('?window=message&thread=t1&mailbox=inbox')).toThrow('does not name a conversation')
     expect(() => parseMessageWindow('?window=message&conversation=c1&mailbox=inbox')).toThrow('does not name a conversation')
-    expect(() => parseMessageWindow('?window=message&conversation=c1&thread=t1&mailbox=drafts')).toThrow('unknown mailbox: drafts')
+    expect(() => parseMessageWindow('?window=message&conversation=c1&thread=t1&mailbox=unknown')).toThrow('unknown mailbox: unknown')
     expect(() => parseMessageWindow('?window=message&conversation=c1&thread=t1')).toThrow('unknown mailbox: none')
   })
 
-  it('never opens drafts in a message window', () => {
-    expect(canOpenMessageWindow('drafts')).toBe(false)
+  it('opens drafts and messages in their own windows', () => {
+    expect(canOpenMessageWindow('drafts')).toBe(true)
     for (const mailbox of ['inbox', 'sent', 'archive', 'spam', 'trash'] as const) expect(canOpenMessageWindow(mailbox)).toBe(true)
   })
 })

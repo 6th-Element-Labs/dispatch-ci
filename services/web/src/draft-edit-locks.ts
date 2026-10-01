@@ -37,6 +37,7 @@ export class DraftEditLocks {
   readonly #requested = new Map<string, () => void>()
   // Which request holds each granted lock, so a late settlement of a released request cannot drop a newer grant.
   readonly #granted = new Map<string, symbol>()
+  readonly #flights = new Set<Promise<unknown>>()
 
   constructor(locks: LockManagerLike | undefined) { this.#locks = locks }
 
@@ -57,10 +58,18 @@ export class DraftEditLocks {
       const released = new Promise<void>((resolve) => { release = resolve })
       const token = Symbol(name)
       this.#requested.set(name, release)
-      void this.#locks.request(name, { mode: 'exclusive' }, () => { this.#granted.set(name, token); return released })
+      const flight = this.#locks.request(name, { mode: 'exclusive' }, () => { this.#granted.set(name, token); return released })
         .catch((error: unknown) => console.error(`Draft edit lock ${name} failed:`, error))
-        .finally(() => { if (this.#granted.get(name) === token) this.#granted.delete(name) })
+        .finally(() => { if (this.#granted.get(name) === token) this.#granted.delete(name); this.#flights.delete(flight) })
+      this.#flights.add(flight)
     }
+  }
+
+  /** Wait for the browser to release claims before another window restores this editor. */
+  async release(): Promise<void> {
+    const flights = [...this.#flights]
+    this.hold(undefined)
+    await Promise.all(flights)
   }
 
   /** Whether another window is editing this draft. */

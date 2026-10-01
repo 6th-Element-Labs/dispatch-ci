@@ -32,7 +32,7 @@ A right-click on a thread row selects that conversation and does not start the d
 
 Unread rows show a blue avatar mark, bold sender and subject, and a light blue background. Read rows use normal weight and dimmer text.
 
-The user can keep one, two, or three panels open. Each panel has an explicit visibility control. At least one panel remains visible. The messages and Codex panel widths are adjustable and persist locally.
+The user can keep one, two, or three panels open. Each panel has an explicit visibility control. At least one panel remains visible. The messages and Codex panel widths are adjustable and persist locally. When Email is hidden, Codex fills the remaining workspace. Restoring Email restores the saved Codex width.
 
 ## Version-one acceptance
 
@@ -49,7 +49,7 @@ The first useful version lets a user:
 7. Review and edit the draft in the middle panel.
 8. Confirm recipients and subject, then send from the Send button, or ask Codex to send that draft through the installed Gmail connector.
 
-The middle panel owns the visible Gmail draft. Recipient, subject, and Markdown body remain editable. Codex creates and revises that same Gmail draft through the installed connector, including attachments. A draft that Codex creates through MCP opens in the middle panel. The user can send from the Send button, or ask Codex to call `gmail.send_draft` or `gmail.send_email`. Autonomous send without a user request remains out of scope.
+The middle panel owns the visible Gmail draft. Recipient, subject, and message body remain editable. The body uses a rich editor with bold, italic, underline, links, lists, and formatted paste. Mail still owns the saved Markdown and rendered email. New and saved drafts can open in their own window. Use the draft header button, double-click its Drafts row, choose Open in New Window from the row menu, or use File > Open in New Window (Command-O). Pop-out transfers the current local editor, including recipients, text, and attachments, without requiring a Gmail save. One window edits each draft at a time. Codex creates and revises that same Gmail draft through the installed connector, including attachments. A draft that Codex creates through MCP opens in the middle panel. The user can send from the Send button, or ask Codex to call `gmail.send_draft` or `gmail.send_email`. Autonomous send without a user request remains out of scope.
 
 The Codex picker shows the user's Codex config model and effort until the user picks a different pair in Dispatch. A Dispatch pick stays in this browser only and does not write `config.toml`. Codex restores stored thread turns after reload, shows plans and tool activity, accepts same-turn steering, and exposes interruption. Gmail attachments use their exact parent message and attachment identities. A click on the desktop client asks mail to write the file and open it with the default native app for that extension. The same identities stay in Codex citation context. Inline CID images still load through the existing attachment GET.
 
