@@ -225,7 +225,10 @@ button { cursor: pointer; }
 /* Pane children are grid items: without an explicit min-width they refuse to shrink below their nowrap text and the pane overflows the divider. */
 .dispatch-messages > *, .dispatch-reader > [data-reader] > *, .dispatch-agent > * { min-width: 0; }
 .dispatch-prompt { position: relative; }
-.dispatch-prompt-status { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; }
+.dispatch-prompt-status { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .45rem; min-width: 0; }
+.dispatch-prompt-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: .25rem; margin-left: .3rem; }
+.dispatch-permissions { display: inline-flex; }
+.dispatch-permissions-menu .dropdown-item { row-gap: .15rem; padding-top: .5rem; padding-bottom: .5rem; }
 .dispatch-status-dot { width: .5rem; height: .5rem; border-radius: 50%; flex: none; background: var(--tblr-red); }
 .dispatch-status-dot[data-ready="true"],
 .dispatch-status-dot[data-status="Connected"],

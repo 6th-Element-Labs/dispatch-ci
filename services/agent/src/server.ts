@@ -1,5 +1,6 @@
 import { watchParent } from './parent-watch.js'
 import { TaskActivity } from './task-activity.js'
+import { parseExecutionPreferences, readExecutionPreferences, saveExecutionPreferences, threadExecutionParams, turnExecutionParams } from './execution-preferences.js'
 import { completedGmailSend } from './send-receipt-observer.js'
 import { dispatchMailConfig, handleDispatchMailMcp } from './dispatch-mail-mcp.js'
 import { mkdirSync } from 'node:fs'
@@ -32,7 +33,7 @@ function headers(contentType = 'application/json; charset=utf-8') {
     'content-type': contentType,
     'access-control-allow-origin': allowedOrigin,
     'access-control-allow-headers': 'content-type',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
   }
 }
 
@@ -152,6 +153,7 @@ function startThreadParams() {
   mkdirSync(cwd, { recursive: true })
   return {
     cwd,
+    ...threadExecutionParams(),
     config: dispatchMailConfig(),
     developerInstructions: dispatchInstructions,
     serviceName: 'dispatch-agent',
@@ -164,6 +166,7 @@ function resumeThreadParams(threadId: string) {
   return {
     threadId,
     cwd,
+    ...threadExecutionParams(),
     config: dispatchMailConfig(),
     developerInstructions: dispatchInstructions,
   }
@@ -315,6 +318,17 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     }
     if (request.method === 'GET' && url.pathname === '/v1/runtime') {
       return json(response, 200, { service: 'dispatch-agent', runtimeId: process.env.DISPATCH_RUNTIME_ID ?? null, activeOperations: activeOperations(), draining })
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/execution-preferences') {
+      try { return json(response, 200, { preferences: readExecutionPreferences() }) }
+      catch (error) { return json(response, 500, { error: 'codex_execution_preference_invalid', detail: errorMessage(error) }) }
+    }
+    if (request.method === 'PUT' && url.pathname === '/v1/execution-preferences') {
+      let preferences
+      try { preferences = parseExecutionPreferences(await body(request)) }
+      catch (error) { return json(response, 400, { error: 'codex_execution_preference_invalid', detail: errorMessage(error) }) }
+      try { return json(response, 200, { preferences: await saveExecutionPreferences(preferences) }) }
+      catch (error) { return json(response, 500, { error: 'codex_execution_preference_save_failed', detail: errorMessage(error) }) }
     }
     if (request.method === 'GET' && url.pathname === '/ready') {
       try {
@@ -693,6 +707,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
           threadId: decodeURIComponent(turnMatch[1]),
           input,
           ...turnSelection(payload),
+          ...turnExecutionParams(),
         }))
       } catch (error) {
         return json(response, 502, { error: 'app_server_request_failed', detail: errorMessage(error) })

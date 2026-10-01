@@ -26,7 +26,7 @@ const theme = createThemeController({
     }
   },
 })
-import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, ExecutionPreferences, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
@@ -176,7 +176,7 @@ app.innerHTML = `
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
           <p class="dispatch-agent-state-text" data-agent-state-text role="status" hidden></p><div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
-          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-setup-open>Setup</button><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span></span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
+          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-setup-open>Setup</button><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span><span class="dispatch-permissions"><button class="badge bg-secondary-lt text-secondary border-0 dispatch-model-button" type="button" data-permissions-toggle aria-label="Codex permissions" aria-haspopup="menu" aria-expanded="false" title="Choose Codex permissions"><i class="ti ti-shield-check" aria-hidden="true"></i><span data-permissions-label>Permissions</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu dispatch-permissions-menu" data-permissions-menu role="menu" aria-label="Codex permissions" hidden><div class="dropdown-header">Codex permissions</div><div data-permissions-list></div><div class="dropdown-divider"></div><div class="dropdown-header" data-permissions-status role="status" aria-live="polite">Loading saved setting…</div></div></span></span><span class="dispatch-prompt-actions"><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
         </footer>
       </aside>
     </div>
@@ -307,6 +307,11 @@ const elements = {
   modelSummary: app.querySelector<HTMLElement>('[data-model-summary]')!,
   modelList: app.querySelector<HTMLElement>('[data-model-list]')!,
   modelEfforts: app.querySelector<HTMLElement>('[data-model-efforts]')!,
+  permissionsToggle: app.querySelector<HTMLButtonElement>('[data-permissions-toggle]')!,
+  permissionsLabel: app.querySelector<HTMLElement>('[data-permissions-label]')!,
+  permissionsMenu: app.querySelector<HTMLElement>('[data-permissions-menu]')!,
+  permissionsList: app.querySelector<HTMLElement>('[data-permissions-list]')!,
+  permissionsStatus: app.querySelector<HTMLElement>('[data-permissions-status]')!,
   sync: app.querySelector<HTMLElement>('.dispatch-sync')!,
   stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
@@ -609,6 +614,10 @@ function conversationBindingKey(conversation: { accountId?: string; threadId: st
   return { kind: 'conversation', accountId, gmailThreadId: conversation.threadId }
 }
 let apps: AppSummary[] = []
+let executionPreferences: ExecutionPreferences | undefined
+let executionPreferenceError: string | undefined
+let executionPreferenceSaving = false
+let executionPreferenceRequest: Promise<void> | undefined
 let modelCatalog: DispatchModelCatalog | undefined
 let modelCatalogError: string | undefined
 let selectedModelId = localStorage.getItem('dispatch.codex.model') || ''
@@ -3596,6 +3605,7 @@ async function connectAgent(): Promise<void> {
     await bindAndShowCodex(key, { sequence: selectionSequence,
       adoptThreadId: key.kind === 'unbound' ? readBindingCache().unbound : undefined })
     void refreshModelCatalog()
+    void refreshExecutionPreferences()
   } catch (error) {
     setAgentStatus('Reconnecting', error instanceof Error ? error.message : String(error))
     scheduleAgentReconnect()
@@ -4565,7 +4575,7 @@ function setModelMenu(open: boolean): void {
   elements.modelMenu.hidden = !open
   elements.modelMenu.classList.toggle('show', open)
   elements.modelToggle.setAttribute('aria-expanded', String(open))
-  if (open) void refreshModelCatalog()
+  if (open) { setPermissionsMenu(false); void refreshModelCatalog() }
 }
 elements.modelToggle.addEventListener('click', (event) => {
   event.stopPropagation()
@@ -4573,6 +4583,108 @@ elements.modelToggle.addEventListener('click', (event) => {
 })
 renderModelPicker()
 void refreshModelCatalog()
+const EXECUTION_MODES: readonly { mode: ExecutionPreferences['mode']; label: string; description: string }[] = [
+  { mode: 'full-access', label: 'Full access', description: 'Default. Run commands and use tools without command approval prompts.' },
+  { mode: 'workspace', label: 'Workspace', description: 'Limit commands to the Dispatch workspace. Ask for access outside it.' },
+]
+
+function renderExecutionPreferences(): void {
+  const choice = EXECUTION_MODES.find(candidate => candidate.mode === executionPreferences?.mode)
+  elements.permissionsLabel.textContent = choice?.label ?? 'Permissions'
+  elements.permissionsToggle.title = choice ? `Codex permissions: ${choice.label}. Changes apply to the next turn.` : 'Choose Codex permissions'
+  elements.permissionsStatus.textContent = executionPreferenceSaving ? 'Saving…' : executionPreferenceError
+    ?? (executionPreferences ? 'Saved for all Dispatch chats. Changes apply to the next turn.' : 'Loading saved setting…')
+  elements.permissionsStatus.classList.toggle('text-danger', Boolean(executionPreferenceError))
+  elements.permissionsList.replaceChildren()
+  for (const candidate of EXECUTION_MODES) {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'dropdown-item dispatch-model-option'
+    row.dataset.executionMode = candidate.mode
+    row.setAttribute('role', 'menuitemradio')
+    row.setAttribute('aria-checked', String(candidate.mode === executionPreferences?.mode))
+    row.disabled = executionPreferenceSaving
+    const name = document.createElement('span')
+    name.textContent = candidate.label
+    row.append(name)
+    if (candidate.mode === executionPreferences?.mode) {
+      const check = document.createElement('i')
+      check.className = 'ti ti-check ms-auto'
+      check.setAttribute('aria-hidden', 'true')
+      row.append(check)
+    }
+    const description = document.createElement('span')
+    description.className = 'text-secondary small dispatch-model-note'
+    description.textContent = candidate.description
+    row.append(description)
+    row.addEventListener('click', event => {
+      event.stopPropagation()
+      void selectExecutionMode(candidate.mode)
+    })
+    elements.permissionsList.append(row)
+  }
+}
+
+async function refreshExecutionPreferences(): Promise<void> {
+  if (executionPreferenceSaving) return
+  if (executionPreferenceRequest) return executionPreferenceRequest
+  executionPreferenceRequest = (async () => {
+    try {
+      executionPreferences = await api.executionPreferences()
+      executionPreferenceError = undefined
+    } catch (error) {
+      executionPreferenceError = error instanceof Error ? error.message : String(error)
+    } finally {
+      executionPreferenceRequest = undefined
+      renderExecutionPreferences()
+    }
+  })()
+  return executionPreferenceRequest
+}
+
+async function selectExecutionMode(mode: ExecutionPreferences['mode']): Promise<void> {
+  if (executionPreferenceSaving) return
+  // Finish an older read before saving, so it cannot overwrite the confirmed choice.
+  executionPreferenceSaving = true
+  if (executionPreferenceRequest) await executionPreferenceRequest
+  executionPreferenceError = undefined
+  renderExecutionPreferences()
+  try {
+    executionPreferences = await api.saveExecutionPreferences(mode)
+  } catch (error) {
+    executionPreferenceError = error instanceof Error ? error.message : String(error)
+  } finally {
+    executionPreferenceSaving = false
+    const restoreFocus = elements.permissionsMenu.contains(document.activeElement) || document.activeElement === document.body
+    renderExecutionPreferences()
+    if (!elements.permissionsMenu.hidden && restoreFocus) elements.permissionsMenu.querySelector<HTMLButtonElement>(`[data-execution-mode="${mode}"]`)?.focus()
+  }
+}
+
+function setPermissionsMenu(open: boolean): void {
+  elements.permissionsMenu.hidden = !open
+  elements.permissionsMenu.classList.toggle('show', open)
+  elements.permissionsToggle.setAttribute('aria-expanded', String(open))
+  if (open) { setModelMenu(false); void refreshExecutionPreferences() }
+}
+
+elements.permissionsToggle.addEventListener('click', event => {
+  event.stopPropagation()
+  setPermissionsMenu(elements.permissionsMenu.hidden)
+})
+elements.permissionsMenu.addEventListener('keydown', event => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const options = [...elements.permissionsList.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+    : event.key === 'ArrowDown' ? (current + 1) % options.length : (current + options.length - 1) % options.length
+  options[index]?.focus()
+})
+renderExecutionPreferences()
+void refreshExecutionPreferences()
+window.addEventListener('focus', () => { void refreshExecutionPreferences() })
+
 let setupReturnFocus: HTMLElement | null = null
 
 function hideSetup(): void {
@@ -4624,6 +4736,7 @@ document.addEventListener('click', (event) => {
   if (!elements.folderMenu.hidden && !elements.folderMenu.contains(event.target as Node)) setFolderMenu(false)
   if (!elements.readerMenu.hidden && !elements.readerMenu.contains(event.target as Node)) setReaderMenu(false)
   if (!elements.modelMenu.hidden && !elements.modelMenu.contains(event.target as Node)) setModelMenu(false)
+  if (!elements.permissionsMenu.hidden && !elements.permissionsMenu.contains(event.target as Node)) setPermissionsMenu(false)
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
@@ -4633,6 +4746,7 @@ document.addEventListener('keydown', (event) => {
   setFolderMenu(false)
   setReaderMenu(false)
   setModelMenu(false)
+  if (!elements.permissionsMenu.hidden) { setPermissionsMenu(false); elements.permissionsToggle.focus() }
 })
 window.addEventListener('resize', renderPanels)
 window.addEventListener('keydown', (event) => {

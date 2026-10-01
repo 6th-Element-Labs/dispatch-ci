@@ -44,7 +44,7 @@ The agent renews a rejected first-party connector login through Codex's supporte
 
 Installed builds enable agent-owned Codex runtime updates. The native shell locates the current desktop binary for immediate startup. Agent checks the official `@openai/codex` npm stable release at startup and every six hours, verifies the platform package's SHA-512 integrity, and stages the complete runtime under `Library/Application Support/Dispatch/codex-runtime/<version>`. Downloads have bounded lifetimes and cannot change the active executable. Only an idle agent (no active chat, approval, service request, or pending RPC) replaces App Server. New requests wait for initialization; failed startup restores the previous executable and records the rejected version. The active pointer changes atomically after successful initialization. Existing thread bindings survive, connector caches are invalidated, and the UI reconnects and refreshes its model list. Update failures appear in agent health and logs and retry after fifteen minutes. `DISPATCH_CODEX_AUTO_UPDATE=0` disables downloads; explicit native `DISPATCH_CODEX_COMMAND` overrides and development builds stay pinned by default. Auth, user configuration, and Codex history remain owned by Codex.
 
-The agent adapter also exposes the installed Gmail draft, label, and attachment tools. `dispatch-mail` owns their application commands and projections; the browser remains presentation-only. Chat threads inherit the user's Codex config (model, approval, sandbox, and installed Gmail MCP). `GET /v1/models` reads that same effective config through App Server `config/read` from the Dispatch Codex workspace and uses it as the picker default. The browser does not parse `config.toml` and does not write it. Their working directory is `Library/Application Support/Dispatch/codex-workspace`, not the Dispatch repository, so repository-level agent instructions do not bind the email assistant. Codex thread history, steering, and interruption map directly to App Server `thread/read`, `turn/steer`, and `turn/interrupt`.
+The agent adapter also exposes the installed Gmail draft, label, and attachment tools. `dispatch-mail` owns their application commands and projections; the browser remains presentation-only. Chat threads inherit the user's Codex model and installed Gmail MCP settings, with execution permissions selected in Dispatch. `GET /v1/models` reads that same effective config through App Server `config/read` from the Dispatch Codex workspace and uses it as the picker default. The browser does not parse `config.toml` and does not write it. Their working directory is `Library/Application Support/Dispatch/codex-workspace`, not the Dispatch repository, so repository-level agent instructions do not bind the email assistant. Codex thread history, steering, and interruption map directly to App Server `thread/read`, `turn/steer`, and `turn/interrupt`.
 
 `dispatch-agent` owns a durable map from an unbound key or `accountId` plus Gmail `threadId` to a Codex App Server thread id. The map is stored under `Library/Application Support/Dispatch/codex-bindings.json`. `DISPATCH_CODEX_BINDINGS` can set an explicit path. The browser caches that map and persists the current pane thread id. After an agent-service restart, the browser asks agent for the current key, then resumes that App Server thread before reopening the event stream. If App Server is temporarily unavailable, the browser shows `Reconnecting` and retries. It does not report a disconnected stream as connected.
 
@@ -97,6 +97,19 @@ their current paths. See [Gmail sync setup and release gates](GMAIL_SYNC.md).
 
 
 ### Internal mail controls
+
+Agent owns the per-installation `Library/Application Support/Dispatch/codex-execution.json`
+preference (`{"version":1,"mode":"full-access"}` or `"workspace"`). Missing preferences use full
+access, the product default. Full access supplies `approvalPolicy: never` and the full-access sandbox
+on every user-facing thread start, resume and turn. Workspace supplies `on-request` and a workspace
+sandbox, including the turn-level policy so switching an already loaded chat actually changes its
+permissions. It never changes global Codex configuration or blindly accepts pending approval requests.
+Reapplying the preference prevents runtime upgrades and restored threads from silently returning to
+read-only defaults. Malformed preferences fail visibly before work starts; managed runtime restrictions
+remain authoritative. `GET /v1/execution-preferences` reports the saved choice;
+`PUT /v1/execution-preferences` validates and atomically saves it with owner-only permissions.
+Writes are serialized; the web control displays only the confirmed result. Internal connector operation
+threads keep their independent read-only policy. Changes take effect at the next user turn.
 
 The agent service exposes a stateless local MCP endpoint at `/mcp/dispatch-mail` using the MCP TypeScript SDK. It is a transport adapter over the mail service’s existing HTTP commands; it owns no mail records and does not call a second model loop. Codex receives the endpoint as a per-thread configuration override on start and resume, alongside the user’s existing MCP servers. Header-only draft corrections use a partial mail command so omitted recipients, the MIME body, and attachments are preserved. Tool errors are returned as failures; a send reports success only with Gmail’s message ID.
 

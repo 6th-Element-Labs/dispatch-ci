@@ -47,6 +47,11 @@ async function routeMailFixtures(page: Page) {
   await page.addInitScript(() => { localStorage.setItem('dispatch.setup.seen', '1') })
   await page.route(/8411\/v1\/mailboxes\/counts/, (route) => route.fulfill({ json: { source: 'demo', counts: { inbox: 0, drafts: 0, spam: 0 } } }))
   await page.route('http://127.0.0.1:8412/v1/activity', route => route.fulfill({ contentType: 'text/event-stream', body: 'data: []\n\n' }))
+  let executionMode = 'full-access'
+  await page.route('http://127.0.0.1:8412/v1/execution-preferences', async route => {
+    if (route.request().method() === 'PUT') executionMode = (await route.request().postDataJSON()).mode
+    await route.fulfill({ json: { preferences: { version: 1, mode: executionMode } } })
+  })
   await page.route(/8411\/v1\/send-receipts/, route => route.fulfill({ json: { receipts: [] } }))
   await page.route(/8411\/v1\/offline/, route => route.fulfill({ json: { offline: { conversations: 0, bytes: 0 } } }))
   await page.route('http://127.0.0.1:8411/v1/accounts', (route) => route.fulfill({ json: { accounts: [] } }))
@@ -4077,4 +4082,30 @@ for (const action of ['double-click', 'context-menu'] as const) test(`a local dr
   }
   await expect.poll(() => page.evaluate(() => (window as unknown as { __draftUrl: string }).__draftUrl)).toContain('window=draft')
   await expect(page.getByRole('textbox', { name: 'Draft body' })).toBeHidden()
+})
+
+test('Codex permissions stay visible, save across reload and leave failed changes unselected', async ({ page }) => {
+  await page.goto('/')
+  const toggle = page.getByRole('button', { name: 'Codex permissions', exact: true })
+  await expect(toggle).toContainText('Full access')
+  await toggle.click()
+  const menu = page.getByRole('menu', { name: 'Codex permissions', exact: true })
+  await expect(menu).toBeVisible()
+  await menu.locator('[data-execution-mode="workspace"]').click()
+  await expect(toggle).toContainText('Workspace')
+  await expect(menu.locator('[data-execution-mode="workspace"]')).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+  await expect(toggle).toBeFocused()
+  await page.reload()
+  await expect(toggle).toContainText('Workspace')
+  await page.route('http://127.0.0.1:8412/v1/execution-preferences', async route => {
+    if (route.request().method() !== 'PUT') return route.fallback()
+    await route.fulfill({ status: 500, json: { error: 'codex_execution_preference_save_failed', detail: 'Disk is full' } })
+  })
+  await toggle.click()
+  await menu.locator('[data-execution-mode="full-access"]').click()
+  await expect(menu.locator('[data-permissions-status]')).toContainText('Disk is full')
+  await expect(toggle).toContainText('Workspace')
+  await expect(menu.locator('[data-execution-mode="full-access"]')).toHaveAttribute('aria-checked', 'false')
 })
