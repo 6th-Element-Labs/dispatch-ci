@@ -8,5 +8,5 @@ trap 'rm -rf "$WORK"' EXIT
 node "$ROOT/scripts/export-public-release.mjs" \
   --destination "$WORK/public" \
   --ref HEAD \
-  --version 0.1.6 \
+  --version 0.1.7 \
   --verify

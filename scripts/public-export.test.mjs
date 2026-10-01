@@ -66,7 +66,7 @@ describe('public export', () => {
       '--destination',
       '.',
       '--version',
-      '0.1.6',
+      '0.1.7',
     ], { cwd: root, encoding: 'utf8' })
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /absolute path/)
@@ -86,7 +86,7 @@ describe('public export', () => {
         'commit', '-q', '-m', 'keep',
       ], { cwd: destination })
       await assert.rejects(
-        exportPublicTree({ root, ref: 'HEAD', destination, version: '0.1.6' }),
+        exportPublicTree({ root, ref: 'HEAD', destination, version: '0.1.7' }),
         /existing Git checkout/,
       )
       assert.equal(await readFile(resolve(destination, 'keep.txt'), 'utf8'), 'keep\n')
@@ -99,7 +99,7 @@ describe('public export', () => {
     const temporary = await mkdtemp(resolve(tmpdir(), 'dispatch-export-test-'))
     const destination = resolve(temporary, 'public')
     try {
-      await exportPublicTree({ root, ref: 'HEAD', destination, version: '0.1.6' })
+      await exportPublicTree({ root, ref: 'HEAD', destination, version: '0.1.7' })
       assert.equal(
         await readFile(resolve(destination, 'README.md'), 'utf8'),
         await readFile(resolve(root, 'deploy/public/README.md'), 'utf8'),
@@ -162,7 +162,7 @@ describe('public export', () => {
 
   it('finds one release version across the product', async () => {
     const versions = await versionsFromTree(root)
-    assert.deepEqual([...new Set(versions.map(item => item.version))], ['0.1.6'])
+    assert.deepEqual([...new Set(versions.map(item => item.version))], ['0.1.7'])
     assert.equal(versions.length, 6)
   })
 })
