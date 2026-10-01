@@ -198,7 +198,7 @@ test('renders the three-panel mail surface and sanitizes provider HTML', async (
   await expect(page.locator('[data-model-toggle]')).toHaveText('Model')
   await expect(page.getByText('GPT-5.6 Sol · Medium')).toHaveCount(0)
   await expect(page.locator('[data-context]')).toHaveCount(0)
-  await expect(page.locator('.dispatch-agent > header')).toHaveCount(0)
+  await expect(page.locator('.dispatch-agent > header').getByRole('button', { name: 'Codex settings' })).toBeVisible()
   await expect(page.locator('.dispatch-agent > footer [data-model-toggle]')).toBeVisible()
   await expect(page.locator('[data-conversation-id="demo:t1"] time')).toHaveText('Sep 4, 9:42 AM')
   await expect(page.locator('[data-body] script')).toHaveCount(0)
@@ -815,7 +815,7 @@ test('picks Luna Reserve when Sol has hit its usage limit and sends it with the 
   await expect(page.locator('[data-connector]')).toHaveAttribute('data-ready', 'false')
   const toggle = page.locator('[data-model-toggle]')
   await expect(toggle).toHaveText('GPT-5.6 Sol · Medium')
-  await expect(toggle).toHaveClass(/bg-yellow-lt/)
+  await expect(toggle).toHaveAttribute('data-exhausted', 'true')
   await expect(page.locator('[data-model-menu]')).toBeHidden()
 
   await toggle.click()
@@ -833,7 +833,7 @@ test('picks Luna Reserve when Sol has hit its usage limit and sends it with the 
   await expect(menu.locator('[data-effort="ultra"]')).toHaveCount(0)
   await menu.locator('[data-effort="max"]').click()
   await expect(toggle).toHaveText('Luna Reserve · Max')
-  await expect(toggle).toHaveClass(/bg-blue-lt/)
+  await expect(toggle).toHaveAttribute('data-exhausted', 'false')
   await page.keyboard.press('Escape')
   await expect(menu).toBeHidden()
 
@@ -4108,4 +4108,123 @@ test('Codex permissions stay visible, save across reload and leave failed change
   await expect(menu.locator('[data-permissions-status]')).toContainText('Disk is full')
   await expect(toggle).toContainText('Workspace')
   await expect(menu.locator('[data-execution-mode="full-access"]')).toHaveAttribute('aria-checked', 'false')
+})
+
+async function stubComposerEvents(page: Page) {
+  await page.addInitScript(() => {
+    const sources: Record<string, unknown> = {}
+    class FakeEvents {
+      static CLOSED = 2
+      readyState = 1
+      onopen?: () => void
+      onmessage?: (event: { data: string }) => void
+      onerror?: () => void
+      constructor(url: string) { sources[url] = this; setTimeout(() => this.onopen?.(), 0) }
+      close() { this.readyState = 2 }
+    }
+    Object.assign(window, { EventSource: FakeEvents, composerEvents: sources })
+  })
+  await stubAgent(page, { 'conversation:demo:t1': { threadId: 'composer-A' }, 'conversation:demo:t2': { threadId: 'composer-B' } })
+  await page.route(/8412\/v1\/threads\/composer-[AB]$/, route => {
+    const id = route.request().url().split('/').pop()!
+    return route.fulfill({ json: { thread: { turns: [{ id: `${id}-turn`, status: 'inProgress', items: [{ type: 'agentMessage', text: `Working on ${id}` }] }] } } })
+  })
+}
+
+async function composerEvent(page: Page, threadId: string, method: string, turn: Record<string, unknown>) {
+  await page.evaluate(({ threadId, method, turn }) => {
+    const sources = (window as unknown as { composerEvents: Record<string, { onmessage?: (event: { data: string }) => void }> }).composerEvents
+    sources[`http://127.0.0.1:8412/v1/events?threadId=${threadId}`]?.onmessage?.({ data: JSON.stringify({ method, params: { threadId, turn } }) })
+  }, { threadId, method, turn })
+}
+
+test('Codex Stop waits for completion, preserves typing and never sends while stopping', async ({ page }) => {
+  await stubComposerEvents(page)
+  let interruptions = 0
+  let steering = 0
+  await page.route(/8412\/v1\/threads\/composer-A\/interrupt/, async route => {
+    expect(route.request().postDataJSON()).toEqual({ turnId: 'composer-A-turn' })
+    interruptions++
+    await route.fulfill({ json: {} })
+  })
+  await page.route(/8412\/v1\/threads\/composer-A\/steer/, route => { steering++; return route.fulfill({ json: {} }) })
+  await page.goto('/')
+  await expect(page.getByText('Working on composer-A')).toBeVisible()
+  const prompt = page.getByRole('textbox', { name: 'Ask Codex' })
+  const stop = page.locator('[data-stop]')
+  const original = await stop.boundingBox()
+  await prompt.fill('Keep this unsent follow-up')
+  await expect(page.getByRole('button', { name: 'Update Codex direction' })).toBeVisible()
+  expect((await stop.boundingBox())?.x).toBe(original?.x)
+  await stop.click()
+  await expect.poll(() => interruptions).toBe(1)
+  await expect(stop).toBeDisabled()
+  await expect(page.locator('[data-agent-state-text]')).toHaveText('Stopping…')
+  await prompt.press('Enter')
+  expect(steering).toBe(0)
+  await composerEvent(page, 'composer-A', 'turn/started', { id: 'composer-A-turn' })
+  await expect(stop).toBeDisabled()
+  await composerEvent(page, 'composer-A', 'turn/completed', { id: 'composer-A-turn', status: 'interrupted' })
+  await expect(stop).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await expect(prompt).toHaveValue('Keep this unsent follow-up')
+  await expect(page.locator('[data-agent-state-text]')).toHaveText('Stopped')
+})
+
+test('a late Stop failure remains with its own email and can be retried', async ({ page }) => {
+  await stubComposerEvents(page)
+  let release!: () => void
+  const delayed = new Promise<void>(resolve => { release = resolve })
+  let attempts = 0
+  await page.route(/8412\/v1\/threads\/composer-A\/interrupt/, async route => {
+    attempts++
+    if (attempts === 1) { await delayed; await route.fulfill({ status: 502, json: { error: 'interrupt_failed', detail: 'Codex temporarily unavailable' } }) }
+    else await route.fulfill({ json: {} })
+  })
+  await page.goto('/')
+  await expect(page.getByText('Working on composer-A')).toBeVisible()
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('A follow-up')
+  await page.getByRole('button', { name: 'Stop', exact: true }).click()
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.getByText('Working on composer-B')).toBeVisible()
+  release()
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled()
+  await expect(page.locator('[data-agent-state-text]')).toHaveText('Working…')
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await expect(page.getByText('Working on composer-A')).toBeVisible()
+  await expect(page.locator('[data-agent-state-text]')).toContainText('Couldn’t stop:')
+  await expect(page.getByRole('textbox', { name: 'Ask Codex' })).toHaveValue('A follow-up')
+  await page.getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect.poll(() => attempts).toBe(2)
+  await expect(page.locator('[data-agent-state-text]')).toHaveText('Stopping…')
+})
+
+test('Codex single-row footer keeps permissions and Stop visible in a narrow panel', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('dispatch.panels.v1', JSON.stringify({ messages: true, reader: true, agent: true, messagesWidth: 300, agentWidth: 280 })))
+  await stubComposerEvents(page)
+  await page.route('http://127.0.0.1:8412/v1/models', route => route.fulfill({ json: {
+    defaults: { model: 'gpt-6.1-sol', effort: 'xhigh' }, rateLimitsError: null,
+    models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['medium', 'xhigh'], exhausted: false, resetsAt: null }],
+  } }))
+  await page.goto('/')
+  await expect(page.getByText('Working on composer-A')).toBeVisible()
+  await page.getByRole('textbox', { name: 'Ask Codex' }).fill('Use the newest proposal')
+  const bounds = await page.locator('.dispatch-prompt-toolbar').evaluate(element => {
+    const toolbar = element.getBoundingClientRect()
+    const controls = [...element.querySelectorAll<HTMLElement>('[data-model-toggle],[data-permissions-toggle],[data-send],[data-stop]')].map(control => {
+      const rect = control.getBoundingClientRect()
+      return { x: rect.x, right: rect.right, y: rect.y, height: rect.height }
+    })
+    return { width: toolbar.width, left: toolbar.left, right: toolbar.right, controls }
+  })
+  expect(bounds.width).toBeLessThan(300)
+  for (const control of bounds.controls) {
+    expect(control.x).toBeGreaterThanOrEqual(bounds.left)
+    expect(control.right).toBeLessThanOrEqual(bounds.right + 1)
+  }
+  expect(Math.max(...bounds.controls.map(control => control.y + control.height / 2)) - Math.min(...bounds.controls.map(control => control.y + control.height / 2))).toBeLessThan(2)
+  await expect(page.getByRole('button', { name: 'Codex permissions', exact: true })).toContainText('Full access')
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
+  await expect(page.locator('[data-stop-icon]')).toHaveClass('ti ti-player-stop')
+  await expect(page.locator('.dispatch-agent-header').getByRole('button', { name: 'Codex settings' })).toBeVisible()
 })

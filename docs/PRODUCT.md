@@ -92,6 +92,12 @@ The control reports save failures and only displays the confirmed saved mode. Di
 that mode on new chats, resumed chats and later turns, including after runtime updates. Managed
 Codex requirements still apply.
 
+The Codex composer keeps the model, permissions and primary action on one row. Setup is in
+the Codex header gear. Send and Stop occupy the same fixed position; typing during work exposes
+a separate follow-up Send immediately beside Stop. Stop uses a neutral Tabler button and shows
+Stopping until Codex confirms turn completion. It preserves typed text, reports interruption
+failures with a retry, and remains scoped to its original chat when the user changes email.
+
 ## Search with Codex
 
 Installed Dispatch keeps its Codex runtime current automatically using stable OpenAI releases. Checks run at launch and every six hours while the background agent is running; failed checks retry after fifteen minutes. Downloads are verified before use, activation waits for all Codex work to finish, and failed startup restores the working runtime. Models come from that runtime's account catalog, so new releases need no Dispatch rebuild or separate login. Explicit runtime overrides remain available for pinned installations.
