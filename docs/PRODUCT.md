@@ -80,8 +80,23 @@ Transient task-resume failures keep the existing history binding and retry. A ne
 Gmail draft recipient fields accept the connector's string arrays as well as legacy strings. To, Cc, and Bcc survive opening and refreshing a draft. The Send button requires at least one To, Cc, or Bcc recipient and does not save an unchanged Gmail draft first; this preserves the provider's original recipients, formatting, and attachments. A changed draft or account invalidates its pending send confirmation.
 
 
-Dispatch embeds the full installed Codex experience, not an email-only agent. It adds no model, sandbox, capability allowlist, or send-button-only policy. The user’s normal Codex configuration and permissions remain authoritative. The internal `dispatch_mail` tools provide an optional path to list accounts, read/create/update drafts, and send the saved draft through Dispatch’s mail service. Header-only updates preserve original MIME content and attachments. These tools are configured for new and resumed conversations, and their confirmed results update the visible editor. The visible draft ID, account, recipients, and unsaved state are supplied as context.
+Dispatch embeds the full installed Codex experience, not an email-only agent. It adds no model or capability allowlist, or send-button-only policy. The user selects execution permissions in Dispatch; normal Codex model, tools and managed requirements remain authoritative. The internal `dispatch_mail` tools provide an optional path to list accounts, read/create/update drafts, and send the saved draft through Dispatch’s mail service. Header-only updates preserve original MIME content and attachments. These tools are configured for new and resumed conversations, and their confirmed results update the visible editor. The visible draft ID, account, recipients, and unsaved state are supplied as context.
 
+
+The Codex composer shows a permissions button beside the model picker. **Full access** is the default:
+Codex can run commands without command approval prompts. **Workspace** is optional: shell commands
+use the Dispatch workspace sandbox and request approval for access beyond it. The choice is saved
+by the agent service and applies to all Dispatch chats on the next turn. A running turn keeps its
+existing permissions; changing the setting does not interrupt it or replace email chat history.
+The control reports save failures and only displays the confirmed saved mode. Dispatch reapplies
+that mode on new chats, resumed chats and later turns, including after runtime updates. Managed
+Codex requirements still apply.
+
+The Codex composer keeps the model, permissions and primary action on one row. Setup is in
+the Codex header gear. Send and Stop occupy the same fixed position; typing during work exposes
+a separate follow-up Send immediately beside Stop. Stop uses a neutral Tabler button and shows
+Stopping until Codex confirms turn completion. It preserves typed text, reports interruption
+failures with a retry, and remains scoped to its original chat when the user changes email.
 
 ## Search with Codex
 

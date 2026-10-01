@@ -60,6 +60,11 @@ export interface DraftProjection {
   readonly accountId?: string
 }
 
+export interface ExecutionPreferences {
+  readonly version: 1
+  readonly mode: 'full-access' | 'workspace'
+}
+
 export interface DispatchModel {
   readonly id: string
   readonly label: string

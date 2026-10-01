@@ -59,6 +59,25 @@
         }
       },
       "additionalProperties": true
+    },
+    "executionPreferences": {
+      "type": "object",
+      "required": [
+        "version",
+        "mode"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "mode": {
+          "enum": [
+            "full-access",
+            "workspace"
+          ]
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

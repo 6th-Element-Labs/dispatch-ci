@@ -1,4 +1,4 @@
-import type { SendReceipt, OfflineStatus, AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary, MailboxCounts } from './contracts.js'
+import type { ExecutionPreferences, SendReceipt, OfflineStatus, AppSummary, ConversationProjection, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, GmailSyncStatus, MailAddress, MailStateFilter, MessageProjection, MessageSummary, MailboxCounts } from './contracts.js'
 
 declare const __DISPATCH_LOCAL_PROXY__: boolean
 const MAIL = __DISPATCH_LOCAL_PROXY__ ? `${location.origin}/mail` : 'http://127.0.0.1:8411'
@@ -233,6 +233,16 @@ export const api = {
     return new EventSource(`${AGENT}/v1/events?threadId=${encodeURIComponent(threadId)}`)
   },
   activity(): EventSource { return new EventSource(`${AGENT}/v1/activity`) },
+  async executionPreferences(): Promise<ExecutionPreferences> {
+    const result = await request<{ preferences: ExecutionPreferences }>(`${AGENT}/v1/execution-preferences`)
+    return result.preferences
+  },
+  async saveExecutionPreferences(mode: ExecutionPreferences['mode']): Promise<ExecutionPreferences> {
+    const result = await request<{ preferences: ExecutionPreferences }>(`${AGENT}/v1/execution-preferences`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: 1, mode }),
+    })
+    return result.preferences
+  },
   async respondToServerRequest(id: number | string, result: unknown): Promise<void> {
     await request(`${AGENT}/v1/server-requests/respond`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, result }),

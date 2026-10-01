@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CodexBindingStore, defaultCodexWorkspace } from '../src/codex-bindings.js'
@@ -24,9 +24,19 @@ it('keeps append markers as normal attachments while preserving images reference
 })
 
 const servers: ReturnType<typeof createAgentServer>[] = []
+let executionDirectory: string
+let executionPath: string
+
+beforeEach(async () => {
+  executionDirectory = await mkdtemp(join(tmpdir(), 'dispatch-agent-execution-'))
+  executionPath = join(executionDirectory, 'codex-execution.json')
+  vi.stubEnv('DISPATCH_CODEX_EXECUTION_PREFERENCES', executionPath)
+})
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+  vi.unstubAllEnvs()
+  await rm(executionDirectory, { recursive: true, force: true })
 })
 
 function runtime() {
@@ -71,6 +81,80 @@ async function startWithBindings() {
 }
 
 describe('dispatch-agent', () => {
+  it('reapplies the saved no-approval mode on new chats, resumed chats and subsequent turns', async () => {
+    await writeFile(executionPath, JSON.stringify({ version: 1, mode: 'full-access' }))
+    const { base, fake } = await start()
+    expect((await fetch(`${base}/v1/threads`, { method: 'POST' })).status).toBe(201)
+    expect(rpcParams(fake, 'thread/start')).toMatchObject({ approvalPolicy: 'never', sandbox: 'danger-full-access' })
+    expect((await fetch(`${base}/v1/threads/thread-1/resume`, { method: 'POST' })).status).toBe(200)
+    expect(rpcParams(fake, 'thread/resume')).toMatchObject({ threadId: 'thread-1', approvalPolicy: 'never', sandbox: 'danger-full-access' })
+    expect((await fetch(`${base}/v1/threads/thread-1/turns`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Review this attachment.' }),
+    })).status).toBe(202)
+    expect(rpcParams(fake, 'turn/start')).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } })
+    expect(await (await fetch(`${base}/v1/execution-preferences`)).json()).toEqual({ preferences: { version: 1, mode: 'full-access' } })
+  })
+
+  it('saves a setting across agent restarts and changes the next turn of an existing chat', async () => {
+    const { base, fake } = await start()
+    const setting = { version: 1, mode: 'workspace' }
+    const result = await fetch(`${base}/v1/execution-preferences`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(setting),
+    })
+    expect(result.status).toBe(200)
+    expect(await result.json()).toEqual({ preferences: setting })
+    const restarted = await start()
+    expect(await (await fetch(`${restarted.base}/v1/execution-preferences`)).json()).toEqual({ preferences: setting })
+    expect((await fetch(`${base}/v1/threads/thread-1/turns`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Test workspace mode.' }),
+    })).status).toBe(202)
+    expect(rpcParams(fake, 'turn/start')).toMatchObject({ approvalPolicy: 'on-request', sandboxPolicy: {
+      type: 'workspaceWrite', writableRoots: [defaultCodexWorkspace()], networkAccess: false,
+    } })
+    expect((await fetch(`${base}/v1/execution-preferences`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: 1, mode: 'full-access' }),
+    })).status).toBe(200)
+    fake.request.mockClear()
+    await fetch(`${base}/v1/threads/thread-1/turns`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Test full access again.' }),
+    })
+    expect(rpcParams(fake, 'turn/start')).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } })
+    expect(fake.request).not.toHaveBeenCalledWith('thread/start', expect.anything())
+  })
+
+  it('rejects invalid settings without changing the saved choice and supports browser preflight', async () => {
+    const { base } = await start()
+    const response = await fetch(`${base}/v1/execution-preferences`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: 1, mode: 'typo' }),
+    })
+    expect(response.status).toBe(400)
+    expect(await (await fetch(`${base}/v1/execution-preferences`)).json()).toEqual({ preferences: { version: 1, mode: 'full-access' } })
+    const preflight = await fetch(`${base}/v1/execution-preferences`, { method: 'OPTIONS' })
+    expect(preflight.headers.get('access-control-allow-methods')).toContain('PUT')
+  })
+
+  it('keeps a saved email chat identity when applying the full-access preference', async () => {
+    await writeFile(executionPath, JSON.stringify({ version: 1, mode: 'full-access' }))
+    const { base, fake, bindings } = await startWithBindings()
+    const key = { kind: 'conversation' as const, accountId: 'one', gmailThreadId: 'mail-thread' }
+    await bindings.put(key, 'existing-chat')
+    const response = await fetch(`${base}/v1/threads/bindings`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(key),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('thread/resume', expect.objectContaining({ threadId: 'existing-chat', approvalPolicy: 'never', sandbox: 'danger-full-access' }))
+    expect(fake.request).not.toHaveBeenCalledWith('thread/start', expect.anything())
+    expect(bindings.get(key)).toBe('existing-chat')
+  })
+
+  it('refuses to start work when a saved execution preference is corrupt', async () => {
+    await writeFile(executionPath, '{')
+    const { base, fake } = await start()
+    expect((await fetch(`${base}/v1/threads`, { method: 'POST' })).status).toBe(502)
+    expect(fake.request).not.toHaveBeenCalled()
+    expect((await fetch(`${base}/v1/execution-preferences`)).status).toBe(500)
+  })
+
   it('refuses an update while Codex works and stops admitting work once idle drain succeeds', async () => {
     const { base, fake } = await start()
     const emit = fake.subscribe.mock.calls[0]![0]
@@ -103,7 +187,7 @@ describe('dispatch-agent', () => {
     await expect(response.json()).resolves.toMatchObject({ harness: 'codex-app-server' })
   })
 
-  it('starts a Codex thread that inherits the user Codex config and allows Gmail MCP', async () => {
+  it('starts a full-access Codex thread with the user model config and Gmail MCP', async () => {
     const { base, fake } = await start()
     const response = await fetch(`${base}/v1/threads`, { method: 'POST' })
     expect(response.status).toBe(201)
@@ -114,9 +198,9 @@ describe('dispatch-agent', () => {
       serviceName: 'dispatch-agent',
     })
     expect(params).not.toHaveProperty('model')
-    expect(params).not.toHaveProperty('approvalPolicy')
+    expect(params).toHaveProperty('approvalPolicy', 'never')
     expect(params).not.toHaveProperty('sandboxPolicy')
-    expect(params).not.toHaveProperty('sandbox')
+    expect(params).toHaveProperty('sandbox', 'danger-full-access')
     expect(String(params.developerInstructions)).not.toMatch(/Never call gmail\.send/)
     expect(String(params.developerInstructions)).toContain('send mail')
     expect(String(params.developerInstructions)).toMatch(/attachment/i)
@@ -134,7 +218,7 @@ describe('dispatch-agent', () => {
       developerInstructions: expect.stringMatching(/send_draft|send_email/),
     })
     expect(params).not.toHaveProperty('model')
-    expect(params).not.toHaveProperty('approvalPolicy')
+    expect(params).toHaveProperty('approvalPolicy', 'never')
     expect(String(params.developerInstructions)).not.toMatch(/Never call gmail\.send/)
   })
 
@@ -146,7 +230,7 @@ describe('dispatch-agent', () => {
     expect(params).toMatchObject({ threadId: 'thread-1' })
     expect(params).not.toHaveProperty('model')
     expect(params).not.toHaveProperty('effort')
-    expect(params).not.toHaveProperty('approvalPolicy')
+    expect(params).toHaveProperty('approvalPolicy', 'never')
   })
 
   it('forwards the model and effort the client chose for a turn', async () => {

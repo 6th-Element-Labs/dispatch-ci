@@ -26,7 +26,7 @@ const theme = createThemeController({
     }
   },
 })
-import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
+import type { MailboxCounts, OfflineStatus, SearchResults, SearchResult, ExecutionPreferences, AppSummary, ConversationProjection, DispatchModel, DispatchModelCatalog, ConversationSummary, DraftProjection, GmailAccount, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MessageProjection } from './contracts.js'
 import { createContextMenuPopup } from './context-menu-popup.js'
 import { createMarkReadDwell } from './mark-read-dwell.js'
 import { gmailAppId, isNativeShell } from './model.js'
@@ -173,10 +173,19 @@ app.innerHTML = `
       </main>
       <div class="dispatch-divider" data-divider="agent" role="separator" tabindex="0" aria-label="Resize Codex panel" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900"><i class="ti ti-grip-vertical" aria-hidden="true"></i></div>
       <aside class="card rounded-0 border-0 dispatch-agent" aria-label="Codex">
+        <header class="dispatch-agent-header"><span class="dispatch-agent-heading"><i class="ti ti-sparkles" aria-hidden="true"></i>Codex <span class="dispatch-agent-context" data-codex-context>· This email</span></span><span class="dispatch-agent-connections"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting"></span></span><button class="btn btn-sm btn-icon btn-ghost-secondary" type="button" data-setup-open aria-label="Codex settings" title="Codex settings and connection"><i class="ti ti-settings" aria-hidden="true"></i></button></header>
         <div class="dispatch-agent-stream" data-agent-stream><p class="dispatch-agent-intro">Use the installed Codex harness with your selected email in view.</p></div>
         <footer class="card-footer">
-          <p class="dispatch-agent-state-text" data-agent-state-text role="status" hidden></p><div class="dispatch-suggestions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Catch me up on this email.">Catch me up</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Draft a reply to this email.">Draft a reply</button><button class="btn btn-sm btn-ghost-secondary" type="button" data-suggestion="Find related messages in Gmail.">Find related</button></div>
-          <div class="card card-sm dispatch-prompt"><div class="card-body p-2"><textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea><div class="progress progress-sm mt-2" data-agent-activity aria-label="Codex is working" hidden><div class="progress-bar progress-bar-indeterminate bg-blue"></div></div><div class="d-flex align-items-center justify-content-between mt-2"><span class="dispatch-prompt-status"><span class="dispatch-status-dot" data-connector data-ready="false" title="Checking connectors" aria-label="Checking connectors"></span><span class="dispatch-status-dot" data-agent-status data-status="Connecting" title="Connecting" aria-label="Connecting" aria-live="polite"></span><button class="btn btn-sm btn-ghost-secondary" type="button" data-setup-open>Setup</button><span class="dispatch-model"><button class="badge bg-blue-lt text-blue border-0 dispatch-model-button" type="button" data-model-toggle aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>GPT-5.6 Sol · Medium</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span></span><span><button class="btn btn-icon btn-sm btn-outline-danger" type="button" data-stop aria-label="Stop" hidden><i class="ti ti-player-stop-filled" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send"><i class="ti ti-arrow-up" aria-hidden="true"></i></button></span></div></div></div>
+          <div class="dispatch-agent-state" role="status" aria-live="polite"><span class="spinner-border spinner-border-sm" data-agent-activity aria-hidden="true" hidden></span><span class="dispatch-agent-state-text" data-agent-state-text hidden></span></div>
+          <div class="card card-sm dispatch-prompt"><div class="card-body p-2">
+            <textarea class="form-control border-0 shadow-none" data-prompt aria-label="Ask Codex" placeholder="Ask Codex about this email…"></textarea>
+            <div class="dispatch-prompt-toolbar">
+              <span class="dispatch-model"><button class="dispatch-model-button" type="button" data-model-toggle aria-label="Codex model and reasoning" aria-haspopup="menu" aria-expanded="false" title="Choose the Codex model and reasoning effort"><span data-model-label>Loading models</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu" data-model-menu role="menu" hidden><div class="dropdown-header" data-model-summary>Loading models</div><div data-model-list></div><div class="dropdown-divider"></div><div class="dropdown-header">Reasoning effort</div><div class="dispatch-model-efforts" role="group" aria-label="Reasoning effort" data-model-efforts></div></div></span>
+              <span class="dispatch-permissions"><button class="dispatch-model-button" type="button" data-permissions-toggle aria-label="Codex permissions" aria-haspopup="menu" aria-expanded="false" title="Choose Codex permissions"><i class="ti ti-shield-check dispatch-permissions-shield" aria-hidden="true"></i><span data-permissions-label>Permissions</span><i class="ti ti-chevron-down" aria-hidden="true"></i></button><div class="dropdown-menu dispatch-model-menu dispatch-permissions-menu" data-permissions-menu role="menu" aria-label="Codex permissions" hidden><div class="dropdown-header">Codex permissions</div><div data-permissions-list></div><div class="dropdown-divider"></div><div class="dropdown-header" data-permissions-status role="status" aria-live="polite">Loading saved setting…</div></div></span>
+              <span class="dispatch-prompt-actions"><button class="btn btn-icon btn-sm btn-primary" type="button" data-send aria-label="Send" title="Send to Codex" disabled><i class="ti ti-arrow-up" aria-hidden="true"></i></button><button class="btn btn-icon btn-sm btn-ghost-secondary" type="button" data-stop aria-label="Stop" title="Stop Codex in this email" hidden><i class="ti ti-player-stop" data-stop-icon aria-hidden="true"></i></button></span>
+            </div>
+          </div></div>
+          <div class="dispatch-prompt-helper" data-prompt-helper></div>
         </footer>
       </aside>
     </div>
@@ -294,6 +303,8 @@ const elements = {
   connector: app.querySelector<HTMLElement>('[data-connector]')!,
   stream: app.querySelector<HTMLElement>('[data-agent-stream]')!,
   prompt: app.querySelector<HTMLTextAreaElement>('[data-prompt]')!,
+  send: app.querySelector<HTMLButtonElement>('[data-send]')!,
+  promptHelper: app.querySelector<HTMLElement>('[data-prompt-helper]')!,
   searchStatus: app.querySelector<HTMLElement>('[data-search-status]')!,
   searchSummary: app.querySelector<HTMLElement>('[data-search-summary]')!,
   search: app.querySelector<HTMLInputElement>('[data-search]')!,
@@ -307,6 +318,11 @@ const elements = {
   modelSummary: app.querySelector<HTMLElement>('[data-model-summary]')!,
   modelList: app.querySelector<HTMLElement>('[data-model-list]')!,
   modelEfforts: app.querySelector<HTMLElement>('[data-model-efforts]')!,
+  permissionsToggle: app.querySelector<HTMLButtonElement>('[data-permissions-toggle]')!,
+  permissionsLabel: app.querySelector<HTMLElement>('[data-permissions-label]')!,
+  permissionsMenu: app.querySelector<HTMLElement>('[data-permissions-menu]')!,
+  permissionsList: app.querySelector<HTMLElement>('[data-permissions-list]')!,
+  permissionsStatus: app.querySelector<HTMLElement>('[data-permissions-status]')!,
   sync: app.querySelector<HTMLElement>('.dispatch-sync')!,
   stop: app.querySelector<HTMLButtonElement>('[data-stop]')!,
   readState: app.querySelector<HTMLButtonElement>('[data-read-state]')!,
@@ -338,14 +354,46 @@ installWebLinks(app, window as { isTauri?: unknown }, error => {
   elements.mailError.textContent = `Could not open link: ${error instanceof Error ? error.message : String(error)}`
 })
 
+let threadId: string | undefined
+let activeTurnId: string | undefined
+const promptSubmissions = new Set<string>()
+const interruptRequests = new Map<string, { turnId: string; error?: string }>()
+
+function renderAgentComposer(): void {
+  const request = threadId ? interruptRequests.get(threadId) : undefined
+  const stopping = request?.turnId === activeTurnId && request !== undefined && !request.error
+  const stopError = request?.turnId === activeTurnId ? request?.error : undefined
+  const active = Boolean(activeTurnId)
+  const submitting = Boolean(threadId && promptSubmissions.has(threadId))
+  const typed = Boolean(elements.prompt.value.trim())
+  elements.stop.hidden = !active
+  elements.stop.disabled = stopping
+  elements.stop.setAttribute('aria-busy', String(stopping))
+  elements.stop.setAttribute('aria-label', stopping ? 'Stopping Codex' : 'Stop')
+  elements.stop.title = stopping ? 'Stopping Codex' : 'Stop Codex in this email'
+  const stopIcon = elements.stop.querySelector<HTMLElement>('[data-stop-icon]')!
+  stopIcon.className = stopping ? 'spinner-border spinner-border-sm' : 'ti ti-player-stop'
+  elements.send.hidden = active && (!typed || stopping)
+  elements.send.disabled = !typed || stopping || submitting
+  elements.send.dataset.steering = String(active)
+  elements.send.setAttribute('aria-label', active ? 'Update Codex direction' : 'Send')
+  elements.send.title = active ? 'Update Codex direction while it works' : 'Send to Codex'
+  elements.promptHelper.textContent = typed ? (active ? 'Enter to update direction · Shift+Enter for a new line' : 'Enter to send · Shift+Enter for a new line') : ''
+  const status = elements.agentStatus.dataset.status ?? ''
+  const label = elements.agentStatus.getAttribute('aria-label') ?? status
+  const stateText = app.querySelector<HTMLElement>('[data-agent-state-text]')!
+  stateText.hidden = status === 'Connected' && !stopping && !stopError && !submitting
+  stateText.textContent = stopping ? 'Stopping…' : stopError ? `Couldn’t stop: ${stopError}` : submitting && !active ? 'Sending…' : status === 'Working' ? 'Working…' : status === 'Interrupted' ? 'Stopped' : label
+  stateText.parentElement!.dataset.error = String(Boolean(stopError) || status === 'Failed')
+  elements.agentActivity.hidden = !stopping && status !== 'Working' && !submitting
+}
+
 function setAgentStatus(status: string, label = status): void {
   elements.agentStatus.dataset.status = status
   elements.agentStatus.title = label
   elements.agentStatus.setAttribute('aria-label', label)
   const stateText = app.querySelector<HTMLElement>('[data-agent-state-text]')!
   stateText.dataset.state = status
-  stateText.hidden = status === 'Connected'
-  stateText.textContent = label
   elements.setupAgent.dataset.state = status
   elements.setupAgentLabel.textContent = status === 'Connected' ? 'Codex connected' : label
   renderServiceStatus()
@@ -360,8 +408,7 @@ function setConnectorStatus(label: string, ready: boolean): void {
 }
 
 function renderServiceStatus(): void {
-  const status = elements.agentStatus.dataset.status ?? ''
-  elements.agentActivity.hidden = status !== 'Working'
+  renderAgentComposer()
   const source = elements.mailSource.textContent?.trim() ?? ''
   elements.sync.dataset.syncState = /FAILED|Unavailable/.test(source) ? 'failed' : /^(Syncing|Refreshing)/.test(source) ? 'syncing' : /^(STALE|Partial)/.test(source) ? 'stale' : 'ready'
 }
@@ -515,7 +562,6 @@ type CodexPaneKey = { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | 
 const acceptedReadState = new Map<string, boolean>()
 // Explicit Mark as Unread stays unread until the user leaves and selects it again.
 const suppressReadDwell = new Set<string>()
-let threadId: string | undefined
 let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
 let bindingSequence = 0
 const pendingCodexPrompts = new Map<string, string>()
@@ -552,11 +598,13 @@ function connectTaskActivity(): void {
   if (activityEvents && activityEvents.readyState !== EventSource.CLOSED) return
   activityEvents = api.activity()
   activityEvents.onmessage = event => {
-    for (const task of JSON.parse(event.data) as TaskStatus[]) taskStatuses.set(task.threadId, task)
+    for (const task of JSON.parse(event.data) as TaskStatus[]) {
+      taskStatuses.set(task.threadId, task)
+      if (interruptRequests.get(task.threadId)?.turnId !== task.turnId) interruptRequests.delete(task.threadId)
+    }
     const current = threadId && taskStatuses.get(threadId)
     if (current && codexContextReady) {
       activeTurnId = current.turnId
-      elements.stop.hidden = !activeTurnId
       setAgentStatus(current.status === 'Complete' ? 'Connected' : current.status)
     }
     renderBackgroundTasks()
@@ -571,6 +619,7 @@ function bindingCacheKey(key: CodexPaneKey): string {
 function selectCodexContext(key: CodexPaneKey): void {
   pendingCodexPrompts.set(bindingCacheKey(desiredCodexKey), elements.prompt.value)
   desiredCodexKey = key
+  app.querySelector<HTMLElement>('[data-codex-context]')!.textContent = key.kind === 'conversation' ? '· This email' : key.kind === 'draft' ? '· This draft' : '· General'
   bindingSequence += 1
   paneSequence += 1
   codexContextReady = false
@@ -582,7 +631,6 @@ function selectCodexContext(key: CodexPaneKey): void {
   activeAgentMessage = undefined
   activeAgentText = ''
   activeTurnId = undefined
-  elements.stop.hidden = true
   setAgentStatus('Connecting')
   renderBackgroundTasks()
 }
@@ -609,6 +657,10 @@ function conversationBindingKey(conversation: { accountId?: string; threadId: st
   return { kind: 'conversation', accountId, gmailThreadId: conversation.threadId }
 }
 let apps: AppSummary[] = []
+let executionPreferences: ExecutionPreferences | undefined
+let executionPreferenceError: string | undefined
+let executionPreferenceSaving = false
+let executionPreferenceRequest: Promise<void> | undefined
 let modelCatalog: DispatchModelCatalog | undefined
 let modelCatalogError: string | undefined
 let selectedModelId = localStorage.getItem('dispatch.codex.model') || ''
@@ -638,7 +690,6 @@ let searchQuery = ''
 let acceptChatSearchResults = true
 let searchView: (SearchResults & { phase: 'pending' | 'ready' | 'failed'; error?: string }) | undefined
 let searchTimer: number | undefined
-let activeTurnId: string | undefined
 let codexContextReady = false
 let selectedAttachmentContext: { accountId?: string; threadId: string; messageId: string; attachmentId: string; filename: string } | undefined
 let mobilePanel: PanelName = 'messages'
@@ -3308,12 +3359,15 @@ function handleAgentEvent(message: AgentEvent): void {
   if (message.method === 'turn/started') {
     const turn = params?.turn as Record<string, unknown> | undefined
     activeTurnId = typeof turn?.id === 'string' ? turn.id : undefined
-    elements.stop.hidden = !activeTurnId
+    if (threadId && interruptRequests.get(threadId)?.turnId !== activeTurnId) interruptRequests.delete(threadId)
     setAgentStatus('Working')
   }
   if (message.method === 'turn/completed') {
     const turn = params?.turn as Record<string, unknown> | undefined
+    if (typeof turn?.id === 'string' && activeTurnId && turn.id !== activeTurnId) return
     const status = String(turn?.status ?? 'completed')
+    activeTurnId = undefined
+    if (threadId) interruptRequests.delete(threadId)
     if (searchView?.phase === 'pending') {
       searchView = { ...searchView, phase: 'failed', error: status === 'interrupted' ? 'Search stopped.' : 'Codex did not publish verified results. Refine the request or try again.' }
       renderList()
@@ -3330,8 +3384,6 @@ function handleAgentEvent(message: AgentEvent): void {
     }
     activeAgentMessage = undefined
     activeAgentText = ''
-    activeTurnId = undefined
-    elements.stop.hidden = true
     const draftToRefresh = activeDraft
     if (draftToRefresh?.id && draftToRefresh.accountId && codexDraftFlights === 0) {
       void refreshCodexDraft(draftToRefresh.id, draftToRefresh.accountId, false)
@@ -3459,7 +3511,7 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
   activeAgentMessage = undefined
   activeAgentText = ''
   activeTurnId = undefined
-  elements.stop.hidden = true
+  renderAgentComposer()
   if (replaced) console.info(detail ? `Codex thread replaced · ${detail}` : 'Codex thread replaced')
   if (!created) {
     try {
@@ -3475,7 +3527,8 @@ async function showCodexThread(nextThreadId: string, created: boolean, replaced:
       const state = history.dispatchActivity ?? { threadId: nextThreadId, status: running ? 'Working' : 'Connected', turnId: running?.id, requests: [] }
       taskStatuses.set(nextThreadId, state)
       activeTurnId = state.turnId
-      elements.stop.hidden = !activeTurnId
+      if (interruptRequests.get(nextThreadId)?.turnId !== activeTurnId) interruptRequests.delete(nextThreadId)
+      renderAgentComposer()
       const lastItem = restored.at(-1)
       if (activeTurnId && lastItem?.type === 'agentMessage') {
         activeAgentMessage = [...elements.stream.querySelectorAll<HTMLElement>('.dispatch-agent-agent')].at(-1)
@@ -3596,6 +3649,7 @@ async function connectAgent(): Promise<void> {
     await bindAndShowCodex(key, { sequence: selectionSequence,
       adoptThreadId: key.kind === 'unbound' ? readBindingCache().unbound : undefined })
     void refreshModelCatalog()
+    void refreshExecutionPreferences()
   } catch (error) {
     setAgentStatus('Reconnecting', error instanceof Error ? error.message : String(error))
     scheduleAgentReconnect()
@@ -3607,8 +3661,12 @@ async function connectAgent(): Promise<void> {
 async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
   if (!text || !threadId) return
+  const targetThreadId = threadId
+  const interrupt = interruptRequests.get(targetThreadId)
+  if (promptSubmissions.has(targetThreadId) || (interrupt && interrupt.turnId === activeTurnId && !interrupt.error)) return
   if (!codexContextReady) { addAgentMessage('error', 'Codex is still connecting to the selected conversation. Please try again.'); return }
   const selection = selectionSequence
+  promptSubmissions.add(targetThreadId)
   acceptChatSearchResults = true
   addAgentMessage('user', text)
   setAgentStatus('Working')
@@ -3639,8 +3697,33 @@ async function sendPrompt(): Promise<void> {
       } : undefined,
     })
   } catch (error) {
-    if (selection !== selectionSequence) return
+    if (selection !== selectionSequence || threadId !== targetThreadId) return
+    if (!elements.prompt.value) elements.prompt.value = text
+    if (!activeTurnId) setAgentStatus('Failed')
     addAgentMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    promptSubmissions.delete(targetThreadId)
+    renderAgentComposer()
+  }
+}
+
+async function stopCodexTurn(): Promise<void> {
+  if (!threadId || !activeTurnId) return
+  const targetThreadId = threadId
+  const targetTurnId = activeTurnId
+  const previous = interruptRequests.get(targetThreadId)
+  if (previous?.turnId === targetTurnId && !previous.error) return
+  const request = { turnId: targetTurnId } as { turnId: string; error?: string }
+  interruptRequests.set(targetThreadId, request)
+  renderAgentComposer()
+  try {
+    await api.interruptTurn(targetThreadId, targetTurnId)
+    // Acceptance does not mean the turn has stopped. Its completion event or
+    // authoritative activity snapshot restores Send, including after navigation.
+  } catch (error) {
+    if (interruptRequests.get(targetThreadId) !== request) return
+    request.error = error instanceof Error ? error.message : String(error)
+    renderAgentComposer()
   }
 }
 
@@ -4426,14 +4509,9 @@ elements.draftSubject.addEventListener('input', () => {
 elements.draftAccount.addEventListener('input', () => { markDraftDirty(); elements.sendConfirm.hidden = true })
 app.querySelector('[data-revise-draft]')?.addEventListener('click', () => { void reviseDraft().catch(draftError) })
 elements.readState.addEventListener('click', () => { void toggleReadState() })
-app.querySelector('[data-send]')?.addEventListener('click', () => { void sendPrompt() })
-elements.stop.addEventListener('click', () => {
-  if (threadId && activeTurnId) void api.interruptTurn(threadId, activeTurnId)
-})
-app.querySelectorAll<HTMLElement>('[data-suggestion]').forEach((button) => button.addEventListener('click', () => {
-  elements.prompt.value = button.dataset.suggestion ?? ''
-  elements.prompt.focus()
-}))
+elements.send.addEventListener('click', () => { void sendPrompt() })
+elements.stop.addEventListener('click', () => { void stopCodexTurn() })
+elements.prompt.addEventListener('input', renderAgentComposer)
 elements.prompt.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
@@ -4471,11 +4549,22 @@ function resetLabel(resetsAt: number | null): string {
 }
 function renderModelPicker(): void {
   const model = currentModel()
-  elements.modelLabel.textContent = modelToggleText(model)
-  elements.modelToggle.classList.toggle('bg-blue-lt', model.exhausted !== true)
-  elements.modelToggle.classList.toggle('text-blue', model.exhausted !== true)
-  elements.modelToggle.classList.toggle('bg-yellow-lt', model.exhausted === true)
-  elements.modelToggle.classList.toggle('text-yellow', model.exhausted === true)
+  const long = document.createElement('span')
+  long.className = 'dispatch-model-long'
+  long.textContent = model.label
+  const effort = selectedEffort || modelCatalog?.defaults.effort || ''
+  if (effort && model.id) {
+    const suffix = document.createElement('span')
+    suffix.className = 'dispatch-model-effort'
+    suffix.textContent = ` · ${effortLabel(effort)}`
+    long.append(suffix)
+  }
+  const short = document.createElement('span')
+  short.className = 'dispatch-model-short'
+  short.dataset.label = model.label.replace(/^GPT-(\S+)\s+(.+)$/i, '$2 $1')
+  elements.modelLabel.replaceChildren(long, short)
+  elements.modelToggle.title = modelToggleText(model)
+  elements.modelToggle.dataset.exhausted = String(model.exhausted === true)
   if (modelCatalogError) elements.modelSummary.textContent = modelCatalogError
   else if (!modelCatalog) elements.modelSummary.textContent = 'Loading models'
   else if (model.exhausted === true) elements.modelSummary.textContent = `${model.label} has reached its usage limit. Pick another model.`
@@ -4565,7 +4654,7 @@ function setModelMenu(open: boolean): void {
   elements.modelMenu.hidden = !open
   elements.modelMenu.classList.toggle('show', open)
   elements.modelToggle.setAttribute('aria-expanded', String(open))
-  if (open) void refreshModelCatalog()
+  if (open) { setPermissionsMenu(false); void refreshModelCatalog() }
 }
 elements.modelToggle.addEventListener('click', (event) => {
   event.stopPropagation()
@@ -4573,6 +4662,108 @@ elements.modelToggle.addEventListener('click', (event) => {
 })
 renderModelPicker()
 void refreshModelCatalog()
+const EXECUTION_MODES: readonly { mode: ExecutionPreferences['mode']; label: string; description: string }[] = [
+  { mode: 'full-access', label: 'Full access', description: 'Default. Run commands and use tools without command approval prompts.' },
+  { mode: 'workspace', label: 'Workspace', description: 'Limit commands to the Dispatch workspace. Ask for access outside it.' },
+]
+
+function renderExecutionPreferences(): void {
+  const choice = EXECUTION_MODES.find(candidate => candidate.mode === executionPreferences?.mode)
+  elements.permissionsLabel.textContent = choice?.label ?? 'Permissions'
+  elements.permissionsToggle.title = choice ? `Codex permissions: ${choice.label}. Changes apply to the next turn.` : 'Choose Codex permissions'
+  elements.permissionsStatus.textContent = executionPreferenceSaving ? 'Saving…' : executionPreferenceError
+    ?? (executionPreferences ? 'Saved for all Dispatch chats. Changes apply to the next turn.' : 'Loading saved setting…')
+  elements.permissionsStatus.classList.toggle('text-danger', Boolean(executionPreferenceError))
+  elements.permissionsList.replaceChildren()
+  for (const candidate of EXECUTION_MODES) {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'dropdown-item dispatch-model-option'
+    row.dataset.executionMode = candidate.mode
+    row.setAttribute('role', 'menuitemradio')
+    row.setAttribute('aria-checked', String(candidate.mode === executionPreferences?.mode))
+    row.disabled = executionPreferenceSaving
+    const name = document.createElement('span')
+    name.textContent = candidate.label
+    row.append(name)
+    if (candidate.mode === executionPreferences?.mode) {
+      const check = document.createElement('i')
+      check.className = 'ti ti-check ms-auto'
+      check.setAttribute('aria-hidden', 'true')
+      row.append(check)
+    }
+    const description = document.createElement('span')
+    description.className = 'text-secondary small dispatch-model-note'
+    description.textContent = candidate.description
+    row.append(description)
+    row.addEventListener('click', event => {
+      event.stopPropagation()
+      void selectExecutionMode(candidate.mode)
+    })
+    elements.permissionsList.append(row)
+  }
+}
+
+async function refreshExecutionPreferences(): Promise<void> {
+  if (executionPreferenceSaving) return
+  if (executionPreferenceRequest) return executionPreferenceRequest
+  executionPreferenceRequest = (async () => {
+    try {
+      executionPreferences = await api.executionPreferences()
+      executionPreferenceError = undefined
+    } catch (error) {
+      executionPreferenceError = error instanceof Error ? error.message : String(error)
+    } finally {
+      executionPreferenceRequest = undefined
+      renderExecutionPreferences()
+    }
+  })()
+  return executionPreferenceRequest
+}
+
+async function selectExecutionMode(mode: ExecutionPreferences['mode']): Promise<void> {
+  if (executionPreferenceSaving) return
+  // Finish an older read before saving, so it cannot overwrite the confirmed choice.
+  executionPreferenceSaving = true
+  if (executionPreferenceRequest) await executionPreferenceRequest
+  executionPreferenceError = undefined
+  renderExecutionPreferences()
+  try {
+    executionPreferences = await api.saveExecutionPreferences(mode)
+  } catch (error) {
+    executionPreferenceError = error instanceof Error ? error.message : String(error)
+  } finally {
+    executionPreferenceSaving = false
+    const restoreFocus = elements.permissionsMenu.contains(document.activeElement) || document.activeElement === document.body
+    renderExecutionPreferences()
+    if (!elements.permissionsMenu.hidden && restoreFocus) elements.permissionsMenu.querySelector<HTMLButtonElement>(`[data-execution-mode="${mode}"]`)?.focus()
+  }
+}
+
+function setPermissionsMenu(open: boolean): void {
+  elements.permissionsMenu.hidden = !open
+  elements.permissionsMenu.classList.toggle('show', open)
+  elements.permissionsToggle.setAttribute('aria-expanded', String(open))
+  if (open) { setModelMenu(false); void refreshExecutionPreferences() }
+}
+
+elements.permissionsToggle.addEventListener('click', event => {
+  event.stopPropagation()
+  setPermissionsMenu(elements.permissionsMenu.hidden)
+})
+elements.permissionsMenu.addEventListener('keydown', event => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const options = [...elements.permissionsList.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+    : event.key === 'ArrowDown' ? (current + 1) % options.length : (current + options.length - 1) % options.length
+  options[index]?.focus()
+})
+renderExecutionPreferences()
+void refreshExecutionPreferences()
+window.addEventListener('focus', () => { void refreshExecutionPreferences() })
+
 let setupReturnFocus: HTMLElement | null = null
 
 function hideSetup(): void {
@@ -4624,6 +4815,7 @@ document.addEventListener('click', (event) => {
   if (!elements.folderMenu.hidden && !elements.folderMenu.contains(event.target as Node)) setFolderMenu(false)
   if (!elements.readerMenu.hidden && !elements.readerMenu.contains(event.target as Node)) setReaderMenu(false)
   if (!elements.modelMenu.hidden && !elements.modelMenu.contains(event.target as Node)) setModelMenu(false)
+  if (!elements.permissionsMenu.hidden && !elements.permissionsMenu.contains(event.target as Node)) setPermissionsMenu(false)
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
@@ -4633,6 +4825,7 @@ document.addEventListener('keydown', (event) => {
   setFolderMenu(false)
   setReaderMenu(false)
   setModelMenu(false)
+  if (!elements.permissionsMenu.hidden) { setPermissionsMenu(false); elements.permissionsToggle.focus() }
 })
 window.addEventListener('resize', renderPanels)
 window.addEventListener('keydown', (event) => {
