@@ -2308,6 +2308,28 @@ test('marks unread from the thread context menu through the same read-state hand
   await expect.poll(() => command).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: true })
 })
 
+test('keeps a context-menu mark-unread row unread after a later click on that thread', async ({ page }) => {
+  await page.clock.install()
+  const commands: unknown[] = []
+  const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: false }
+  await stubGmailInbox(page, summary)
+  await page.route('http://127.0.0.1:8411/v1/conversations/t1/read-state', async (route) => {
+    const body = await route.request().postDataJSON()
+    commands.push(body)
+    await route.fulfill({ json: { accepted: true, result: { unread: body.unread } } })
+  })
+  await page.goto('/')
+  await chooseThreadMenu(page, 'Mark as Unread')
+  await expect.poll(() => commands.at(-1)).toEqual({ accountId: 'link-one', messageIds: ['m1'], unread: true })
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(5000)
+  expect(commands).toEqual([{ accountId: 'link-one', messageIds: ['m1'], unread: true }])
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible()
+})
+
 test('stale cached unread labels cannot reverse the toolbar or row styling', async ({ page }) => {
   const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: false }
   await stubGmailInbox(page, summary)
@@ -2383,6 +2405,7 @@ test('marks an explicitly unread thread read after reselecting it for 5 seconds'
   await page.locator('[data-conversation-id="demo:t1"]').click()
   await page.getByRole('button', { name: 'Mark unread' }).click()
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await page.locator('[data-conversation-id="demo:t1"]').click()
   await page.clock.fastForward(6_000)
   await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
   expect(writes).toEqual([{ accountId: 'link-one', messageIds: ['m1'], unread: true }])

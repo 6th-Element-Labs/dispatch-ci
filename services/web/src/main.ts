@@ -501,6 +501,8 @@ const conversationCache = new Map<string, Promise<ConversationProjection>>()
 const BINDING_CACHE = 'dispatch.codex.bindings.v1'
 type CodexPaneKey = { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
 const acceptedReadState = new Map<string, boolean>()
+// Explicit Mark as Unread stays unread until the user leaves and selects it again.
+const suppressReadDwell = new Set<string>()
 let threadId: string | undefined
 let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
 let bindingSequence = 0
@@ -1146,10 +1148,12 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
 }
 
 async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean; refresh?: boolean } = {}): Promise<void> {
+  const previousId = selectedConversationId
   markReadDwell.cancel()
   const matchResult = searchView?.results.find(result => result.conversation.id === id)
   const summary = matchResult?.conversation ?? conversations.find((conversation) => conversation.id === id)
   if (!summary) return
+  if (options.startReadDwell && previousId !== id) suppressReadDwell.delete(id)
   const preserveReader = Boolean(options.refresh && id === selectedConversationId && selected)
   const preserveDraftEditor = Boolean(preserveReader && activeDraft)
   if (!preserveReader) {
@@ -1214,7 +1218,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     elements.attachments.replaceChildren()
     elements.threadFilesToggle.hidden = true
   }
-  if (!offlineMode && options.startReadDwell && summary.unread && summary.accountId) {
+  if (!offlineMode && options.startReadDwell && summary.unread && summary.accountId && !suppressReadDwell.has(id)) {
     const conversationId = summary.id
     markReadDwell.schedule(conversationId, () => { void completeReadDwell(conversationId) })
   }
@@ -1367,14 +1371,14 @@ if (!offlineMode && !String(error).includes('not_downloaded')) window.setTimeout
 }
 
 async function completeReadDwell(conversationId: string): Promise<void> {
-  if (selectedConversationId !== conversationId) return
+  if (selectedConversationId !== conversationId || suppressReadDwell.has(conversationId)) return
   const summary = conversations.find((conversation) => conversation.id === conversationId)
   if (!summary?.accountId || !summary.unread) return
   const actionSequence = readStateActionSequence
   const messageIds = selectedConversationId === conversationId && selected ? selected.messages.map((message) => message.id) : []
   try {
     await api.setConversationUnread(summary.threadId, summary.accountId, false, messageIds)
-    if (selectedConversationId !== conversationId || actionSequence !== readStateActionSequence) return
+    if (selectedConversationId !== conversationId || actionSequence !== readStateActionSequence || suppressReadDwell.has(conversationId)) return
     applyLocalReadState(conversationId, false)
   } catch (error) {
     if (selectedConversationId !== conversationId) return
@@ -1385,6 +1389,8 @@ async function completeReadDwell(conversationId: string): Promise<void> {
 
 function applyLocalReadState(conversationId: string, unread: boolean): void {
   acceptedReadState.set(conversationId, unread)
+  if (unread) suppressReadDwell.add(conversationId)
+  else suppressReadDwell.delete(conversationId)
   dropConversationCache(conversationId)
   if (selectedConversationId === conversationId && selected) selected = { ...selected, unread }
   conversations = conversations
