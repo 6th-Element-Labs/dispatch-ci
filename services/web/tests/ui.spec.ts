@@ -43,7 +43,7 @@ test.beforeEach(async ({ page }) => { await routeMailFixtures(page) })
 
 async function routeMailFixtures(page: Page) {
   // Unrouted calls fail as they do in CI, so a run never reaches the mail or agent service installed on this Mac.
-  await page.route(/^http:\/\/127\.0\.0\.1:(8411|8412)\//, route => route.abort('connectionrefused'))
+  await page.route(/^http:\/\/127\.0\.0\.1:(8411|8412|8413)\//, route => route.abort('connectionrefused'))
   await page.addInitScript(() => { localStorage.setItem('dispatch.setup.seen', '1') })
   await page.route(/8411\/v1\/mailboxes\/counts/, (route) => route.fulfill({ json: { source: 'demo', counts: { inbox: 0, drafts: 0, spam: 0 } } }))
   await page.route('http://127.0.0.1:8412/v1/activity', route => route.fulfill({ contentType: 'text/event-stream', body: 'data: []\n\n' }))
@@ -4227,4 +4227,56 @@ test('Codex single-row footer keeps permissions and Stop visible in a narrow pan
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
   await expect(page.locator('[data-stop-icon]')).toHaveClass('ti ti-player-stop')
   await expect(page.locator('.dispatch-agent-header').getByRole('button', { name: 'Codex settings' })).toBeVisible()
+})
+
+test('EA carries work across threads, preserves edits, and keeps mail actions scoped', async ({page}) => {
+  await stubAgent(page)
+  const bindings:Record<string,unknown>[]=[]
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings',async route=>{const body=route.request().postDataJSON();bindings.push(body);await route.fulfill({json:{binding:{threadId:`work-${body.kind}-${body.contextId??body.gmailThreadId??'general'}`,created:false,replaced:false}}})})
+  const source={id:'source',kind:'email',accountId:'demo',threadId:'t1',messageId:'m1',title:'Weekly delivery review',at:'2026-10-01T10:00:00Z',author:'jacob@example.com',participants:['jacob@example.com','steve@example.com'],text:''}
+  const item={id:'abc123',accountId:'demo',kind:'task',title:'Confirm the revised delivery date',summary:'Jacob is checking the revised delivery date. This remains open from last week.',topic:'September delivery',topicId:'topic123',contacts:['jacob@example.com'],owner:'jacob@example.com',due:'2026-10-05',status:'waiting',certainty:'explicit',snoozedUntil:null,revision:1,reason:'Waiting for Jacob',evidence:[{source,quote:'I will confirm the revised delivery date.'},{source:{...source,id:'discussion',kind:'codex',codexThreadId:'older-chat'},quote:'Keep the agreed delivery window.'}]}
+  const decision={...item,id:'decision123',kind:'decision',title:'Keep the agreed delivery window',summary:'The delivery window carries forward into the next weekly review.'}
+  await page.route('http://127.0.0.1:8413/**',async route=>{
+    const url=new URL(route.request().url())
+    if(route.request().method()==='POST'&&url.pathname.endsWith('abc123')){Object.assign(item,route.request().postDataJSON(),{revision:item.revision+1});await route.fulfill({json:{item}});return}
+    const filter=url.searchParams.get('filter')??'all'
+    const visible=filter==='done'?item.status==='done':filter==='snoozed'?item.status==='snoozed':!['done','snoozed','dismissed'].includes(item.status)
+    await route.fulfill({json:{items:visible?[item]:[],decisions:[decision],people:['jacob@example.com'],topics:[{id:'topic123',name:'September delivery',accountId:'demo'}],scan:{enabled:true,running:false,scanned:30,total:30,depth:30,lastScan:'2026-10-02T10:00:00Z',error:null,failures:0}}})
+  })
+  let mailMutations=0
+  page.on('request',request=>{if(request.method()==='POST'&&/8411.*\/actions/.test(request.url()))mailMutations++})
+  await page.goto('/')
+  await page.locator('.dispatch-rail [data-work-nav="ea"]').click()
+  await expect(page.getByRole('heading',{name:'What needs you today'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:item.title,exact:true})).toBeVisible()
+  await expect(page.getByText('Source trail')).toBeVisible()
+  await expect.poll(()=>bindings.some(b=>b.kind==='topic'&&b.contextId==='topic123')).toBe(true)
+  await page.keyboard.press('Backspace');await page.keyboard.press('e')
+  expect(mailMutations).toBe(0)
+  await page.locator('[data-work="contact"]').click()
+  await expect.poll(()=>bindings.some(b=>b.kind==='contact'&&b.contextId==='jacob@example.com')).toBe(true)
+  await page.getByText('Edit details',{exact:true}).click()
+  await page.locator('[data-work-edit] input[name="title"]').fill('Confirm delivery with Jacob')
+  await page.getByRole('button',{name:'Save changes',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'Confirm delivery with Jacob',exact:true})).toBeVisible()
+  await page.locator('[data-work="status"][data-value="done"]').click()
+  await page.locator('[data-work="filter"][data-value="done"]').click()
+  await expect(page.getByRole('heading',{name:'Confirm delivery with Jacob',exact:true})).toBeVisible()
+  await page.reload()
+  await page.locator('.dispatch-rail [data-work-nav="todos"]').click()
+  await page.locator('[data-work="filter"][data-value="done"]').click()
+  await expect(page.getByRole('heading',{name:'Confirm delivery with Jacob',exact:true})).toBeVisible()
+  await page.locator('[data-work="status"][data-value="open"]').click()
+  await page.locator('[data-work="filter"][data-value="all"]').click()
+  await page.getByRole('button',{name:'Snooze',exact:true}).click()
+  await page.locator('[data-work="filter"][data-value="snoozed"]').click()
+  await expect(page.getByRole('heading',{name:'Confirm delivery with Jacob',exact:true})).toBeVisible()
+  await page.screenshot({path:resolve('test-results','ea-todos.png'),fullPage:true})
+  await page.locator('[data-work="source"]').first().click()
+  await expect(page.getByRole('button',{name:'← Back to work'})).toBeVisible()
+  await expect(page.locator('[data-reader]')).toBeVisible()
+  await page.getByRole('button',{name:'← Back to work'}).click()
+  await expect(page.getByRole('heading',{name:'Work that stays with you'})).toBeVisible()
+  await page.locator('.dispatch-rail [data-mailbox="inbox"]').click()
+  await expect(page.locator('.dispatch-work-detail')).toBeHidden()
 })

@@ -654,3 +654,11 @@ it('reports whether a Gmail attachment is already cached without downloading it'
   expect(await status.json()).toEqual({ cached: false })
   expect(readAttachment).not.toHaveBeenCalled()
 })
+
+it('exports bounded work evidence from the exact account and refuses incomplete threads',async()=>{
+  const message={id:'m',threadId:'t',accountId:'a',sender:{name:'Jacob',address:'jacob@example.com',initials:'J'},subject:'Weekly',receivedAt:'2026-10-01T12:00:00Z',receivedLabel:'Oct 1',receivedFullLabel:'October 1',preview:'Proposal',unread:false,body:{kind:'sanitized-html' as const,content:'<p>I will send the proposal.</p>'},attachments:[],to:[{name:'Boss',address:'boss@example.com',initials:'B'}],source:'gmail' as const}
+  let complete=true
+  const base=await start({}, {accounts:async()=>[{id:'a',connectorId:'connector',name:'Gmail',email:'boss@example.com'}],readConversation:async()=>({...message,latestMessageId:'m',messageCount:1,messages:[message],completeness:{complete,knownCount:2,loadedCount:1}})})
+  const response=await fetch(base+'/v1/work/sources?account=a&thread=t');expect(response.status).toBe(200);expect(await response.json()).toMatchObject({sources:[{kind:'email',accountId:'a',messageId:'m',text:'I will send the proposal.',accountEmail:'boss@example.com'}]})
+  complete=false;expect((await fetch(base+'/v1/work/sources?account=a&thread=t')).status).toBe(409)
+})

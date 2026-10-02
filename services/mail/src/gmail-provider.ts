@@ -1310,6 +1310,13 @@ export class GmailConnectorProvider {
     }
   }
 
+  async readWorkConversation(accountId: string, threadId: string): Promise<ConversationProjection> {
+    const cached=this.#local.conversation(accountId,threadId)
+    const ids=this.#index?.threadMessageIds(accountId,threadId) ?? []
+    if(cached?.conversation.completeness?.complete && ids.length && ids.every(id=>cached.conversation.messages.some(m=>m.id===id))) return this.readConversation(accountId,threadId,true)
+    return this.readConversation(accountId,threadId)
+  }
+
   offlineStatus() { return { ...this.#local.stats(), download: this.#download } }
   downloadedConversations(mailbox: GmailMailbox, state: MailStateFilter, accountId?: string, query = ''): readonly ConversationSummary[] {
     if (!this.#index) return []

@@ -890,3 +890,12 @@ it('starts managed Codex reconnection without replaying email writes or logging 
   expect(fake.request).toHaveBeenCalledWith('account/login/start', { type: 'chatgpt' })
   expect(fake.request.mock.calls.some(call => call[0] === 'account/logout' || call[0] === 'mcpServer/tool/call')).toBe(false)
 })
+
+it('persists separate Codex bindings for a contact, topic and email',async()=>{
+  const {base,fake,bindings}=await startWithBindings()
+  let sequence=0
+  fake.request.mockImplementation(async(method:string)=>method==='thread/start'?{thread:{id:`scoped-${++sequence}`}}:method==='thread/resume'?{thread:{id:'existing'}}:{})
+  const keys=[{kind:'contact',accountId:'a',contextId:'jacob@example.com'},{kind:'topic',accountId:'a',contextId:'proposal'},{kind:'conversation',accountId:'a',gmailThreadId:'week1'}] as const
+  for(const key of keys){const response=await fetch(base+'/v1/threads/bindings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(key)});expect(response.status).toBe(200)}
+  expect(new Set(keys.map(key=>bindings.get(key))).size).toBe(3)
+})

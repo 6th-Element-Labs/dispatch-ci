@@ -153,3 +153,10 @@ The thread reader applies the selected mailbox context to raw Gmail thread resul
 ## Sending feedback
 
 Sent Items is the normal confirmation that an email was sent. Do not show a receipt window, receipt controls, or automatic success messages in Codex chat. Keep send failures and uncertain outcomes visible. Internal durable send records support recovery and duplicate prevention; they are not a separate user workflow.
+
+## EA and work continuity
+
+The approved EA and To-dos views make commitments, unanswered questions and decisions
+usable across email threads. Tasks keep source evidence, contact email identities
+and topic context. User edits and completion survive scans and app restarts. Coverage
+and suggestions are explicit. Full specification: [EA and To-dos](EA_TODOS.md).

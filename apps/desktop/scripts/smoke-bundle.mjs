@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 const app = resolve(process.argv[2] ?? 'src-tauri/target/release/bundle/macos/Dispatch.app')
 const node = join(app, 'Contents', 'MacOS', 'node')
 const services = [
+  { name: 'work', script: join(app, 'Contents', 'Resources', 'services', 'work', 'server.js'), port: 18413, env: 'DISPATCH_WORK_PORT' },
   { name: 'mail', script: join(app, 'Contents', 'Resources', 'services', 'mail', 'server.js'), port: 18411, env: 'DISPATCH_MAIL_PORT' },
   { name: 'agent', script: join(app, 'Contents', 'Resources', 'services', 'agent', 'server.js'), port: 18412, env: 'DISPATCH_AGENT_PORT' },
 ]
@@ -16,7 +17,7 @@ for (const path of [node, ...services.map((s) => s.script)]) {
 }
 
 const children = services.map((service) => {
-  const child = spawn(node, [service.script], { env: { ...process.env, [service.env]: String(service.port) }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(node, [service.script], { env: { ...process.env, [service.env]: String(service.port), DISPATCH_WORK_DB: ':memory:', DISPATCH_MAIL_BASE:'http://127.0.0.1:18411', DISPATCH_AGENT_BASE:'http://127.0.0.1:18412' }, stdio: ['ignore', 'pipe', 'pipe'] })
   child.output = ''
   child.stdout.on('data', (chunk) => { child.output += chunk })
   child.stderr.on('data', (chunk) => { child.output += chunk })

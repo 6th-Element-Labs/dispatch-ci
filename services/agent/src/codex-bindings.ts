@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export type CodexBindingKey =
+  | { readonly kind: 'contact' | 'topic'; readonly accountId: string; readonly contextId: string }
   | { readonly kind: 'unbound' }
   | { readonly kind: 'draft'; readonly draftKey: string }
   | { readonly kind: 'conversation'; readonly accountId: string; readonly gmailThreadId: string }
@@ -10,7 +11,8 @@ export type CodexBindingKey =
 export function bindingRecordKey(key: CodexBindingKey): string {
   if (key.kind === 'unbound') return 'unbound'
   if (key.kind === 'draft') return `draft:${key.draftKey}`
-  return `conversation:${key.accountId}:${key.gmailThreadId}`
+  if (key.kind === 'conversation') return `conversation:${key.accountId}:${key.gmailThreadId}`
+  return `${key.kind}:${JSON.stringify([key.accountId,key.contextId])}`
 }
 
 export function defaultBindingsPath(): string {
