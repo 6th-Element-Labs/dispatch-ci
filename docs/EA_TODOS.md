@@ -51,6 +51,9 @@ New email chats receive saved work for the sender, including completed work and
 decisions. A work-service outage leaves normal email chat usable and explicitly
 marks that earlier context unavailable. Email, Contact and Topic controls select
 separate chats; source-history links are read-only until a scope is selected.
+The agent reads each chat's history contract: paginated Codex threads use
+`thread/turns/list` with full items; older threads retain legacy hydration. Resume
+requests exclude history, so a deprecated history path cannot break the binding.
 
 ## API contract
 

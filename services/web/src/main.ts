@@ -5001,7 +5001,7 @@ const workList=document.createElement('div');workList.className='dispatch-work-l
 const workDetail=document.createElement('div');workDetail.className='dispatch-work-detail';elements.readerPanel.append(workDetail)
 const workReturn=document.createElement('button');workReturn.className='btn btn-sm btn-ghost-primary work-source-return';workReturn.textContent='← Back to work';workReturn.hidden=true;elements.readerPanel.prepend(workReturn)
 workReturn.onclick=()=>{void openWork(workPage?.mode??'todos')}
-const relatedWork=document.createElement('div');relatedWork.className='work-related';relatedWork.hidden=true;elements.body.before(relatedWork)
+const relatedWork=document.createElement('div');relatedWork.className='work-related';relatedWork.hidden=true;elements.subject.closest('header')!.append(relatedWork)
 workPage=new WorkPage(workList,workDetail,{
   account:()=>({id:selectedAccountId,email:accounts.find(a=>a.id===selectedAccountId)?.email}),
   context:context=>{selectCodexContext(context);void bindAndShowCodex(context)},
@@ -5059,10 +5059,11 @@ async function openWorkSource(source:WorkSource):Promise<void>{
   workReturn.hidden=false
 }
 function renderRelatedWork():void{
+  renderCodexScopes()
   relatedWork.replaceChildren();relatedWork.hidden=!selected?.accountId
   if(!selected?.accountId)return
   const account=selected.accountId,thread=selected.threadId,self=accounts.find(a=>a.id===selected!.accountId)?.email,contact=(selected.sender.address!==self?selected.sender.address:selected.messages.flatMap(m=>m.to??[]).find(a=>a.address!==self)?.address??selected.sender.address).toLowerCase()
-  const button=document.createElement('button');button.className='btn btn-sm btn-ghost-primary';button.innerHTML='<i class="ti ti-list-check me-1"></i>Work across threads';button.title=`Open work involving ${contact}`;button.onclick=()=>{void openWork('todos',contact,account)}
+  const button=document.createElement('button');button.className='btn btn-sm btn-ghost-primary';button.innerHTML='<i class="ti ti-list-check me-1" aria-hidden="true"></i>Work across threads';button.title=`Open work involving ${contact}`;button.onclick=()=>{void openWork('todos',contact,account)}
   const analyze=document.createElement('button');analyze.className='btn btn-sm btn-ghost-secondary';analyze.textContent='Find to-dos in this thread';analyze.onclick=async()=>{analyze.disabled=true;analyze.textContent='Reviewing…';try{await workApi.analyze(account,thread);if(selected?.threadId===thread&&selected.accountId===account)await openWork('todos',contact,account)}catch(e){analyze.textContent='Retry review';analyze.title=String(e)}finally{analyze.disabled=false}}
   relatedWork.append(button,analyze)
 }

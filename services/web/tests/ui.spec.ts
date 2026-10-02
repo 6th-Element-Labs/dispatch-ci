@@ -4291,3 +4291,27 @@ test('EA carries work across threads, preserves edits, and keeps mail actions sc
   await page.locator('.dispatch-rail [data-mailbox="inbox"]').click()
   await expect(page.locator('.dispatch-work-detail')).toBeHidden()
 })
+
+test('work controls stay visible above a long email and Contact follows the latest selection', async ({page}) => {
+  await stubAgent(page)
+  const bindings: Record<string,unknown>[]=[]
+  await page.route('http://127.0.0.1:8412/v1/threads/bindings',async route=>{const body=route.request().postDataJSON();bindings.push(body);await route.fulfill({json:{binding:{threadId:'scoped-chat',created:false,replaced:false}}})})
+  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/conversations\/(.+)/,route=>{
+    const thread=new URL(route.request().url()).pathname.split('/').pop()
+    const summary=conversations.find(c=>c.threadId===thread)!
+    const message={...messages.find(m=>m.threadId===thread)!,accountId:'demo',source:'demo',body:{kind:'sanitized-html',content:'<p>Long email paragraph.</p>'.repeat(80)},attachments:[]}
+    return route.fulfill({json:{conversation:{...summary,accountId:'demo',source:'demo',messages:[message]}}})
+  })
+  await page.goto('/')
+  const review=page.getByRole('button',{name:'Find to-dos in this thread',exact:true})
+  await expect(review).toBeVisible()
+  await expect(review).toBeInViewport()
+  expect(await page.locator('.dispatch-reader-header').getByRole('button',{name:'Find to-dos in this thread'}).count()).toBe(1)
+  await page.getByRole('button',{name:'Contact context',exact:true}).click()
+  await expect.poll(()=>bindings.some(b=>b.kind==='contact'&&b.contextId==='ana@example.com')).toBe(true)
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  await expect(page.locator('.dispatch-reader-subject')).toHaveText('Services agreement')
+  await page.getByRole('button',{name:'Contact context',exact:true}).click()
+  await expect.poll(()=>bindings.some(b=>b.kind==='contact'&&b.contextId==='james@example.com')).toBe(true)
+  await expect(review).toBeInViewport()
+})

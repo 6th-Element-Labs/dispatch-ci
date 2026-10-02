@@ -13,3 +13,4 @@
 [data-work-mode] .dispatch-search,[data-work-mode] [data-ai-search]{display:none!important}
 
 .work-codex-scopes{display:flex;gap:4px;padding:6px 16px;border-bottom:1px solid var(--tblr-border-color)}.work-codex-scopes[hidden]{display:none}.work-codex-scopes .btn{font-size:11px;padding:3px 10px}.work-codex-scopes [aria-pressed=true]{background:rgba(0,113,227,.08);color:#0071e3}
+.dispatch-reader-header .work-related{padding:2px 0 0;border:0;display:flex;flex-wrap:wrap;gap:4px}

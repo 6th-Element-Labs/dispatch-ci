@@ -1,4 +1,5 @@
 import { extractWork, discussionSources } from './work-extraction.js'
+import { readThreadHistory } from './thread-history.js'
 import { watchParent } from './parent-watch.js'
 import { TaskActivity } from './task-activity.js'
 import { parseExecutionPreferences, readExecutionPreferences, saveExecutionPreferences, threadExecutionParams, turnExecutionParams } from './execution-preferences.js'
@@ -166,6 +167,7 @@ function resumeThreadParams(threadId: string) {
   mkdirSync(cwd, { recursive: true })
   return {
     threadId,
+    excludeTurns: true,
     cwd,
     ...threadExecutionParams(),
     config: dispatchMailConfig(),
@@ -631,7 +633,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
           for(const contextId of contexts){const id=bindings.get({kind,accountId,contextId});if(id)ids.add(id)}
         }
         const sources=[]
-        for(const id of ids){const history=await runtime.request('thread/read',{threadId:id,includeTurns:true});sources.push(...discussionSources(history,accountId,gmailThreadId,id))}
+        for(const id of ids){const history=await readThreadHistory(runtime,id);sources.push(...discussionSources(history,accountId,gmailThreadId,id))}
         return json(response,200,{sources})
       }catch(error){return json(response,502,{error:'discussion_unavailable',detail:errorMessage(error)})}
     }
@@ -692,7 +694,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     if (request.method === 'GET' && threadReadMatch?.[1]) {
       try {
         const threadId = decodeURIComponent(threadReadMatch[1])
-        const result = await runtime.request('thread/read', { threadId, includeTurns: true })
+        const result = await readThreadHistory(runtime, threadId)
         return json(response, 200, { ...(result as object), dispatchActivity: activity.tasks.get(threadId) })
       } catch (error) {
         return json(response, 502, { error: 'thread_read_failed', detail: errorMessage(error) })
