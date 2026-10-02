@@ -15,6 +15,7 @@ export class WorkStore {
         this.#db = new DatabaseSync(path);
         this.#db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, account_id TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(account_id,fingerprint));
+      CREATE TABLE IF NOT EXISTS undo(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS scans(key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, payload TEXT NOT NULL);`);
     }
@@ -26,7 +27,11 @@ export class WorkStore {
         const rows = account ? this.#db.prepare('SELECT payload FROM items WHERE account_id=?').all(account) : this.#db.prepare('SELECT payload FROM items').all();
         return rows.map(r => JSON.parse(String(r.payload)) as WorkItem).map(item => item.status === 'snoozed' && item.snoozedUntil && item.snoozedUntil <= new Date().toISOString() ? { ...item, status: 'open', snoozedUntil: null } : item);
     }
-    get(id: string) { return this.all().find(i => i.id === id); }
+    get(id: string): WorkItem|undefined {
+        const row=this.#db.prepare('SELECT payload FROM items WHERE id=?').get(id);if(!row)return undefined;
+        const item=JSON.parse(String(row.payload)) as WorkItem;
+        return item.status==='snoozed'&&item.snoozedUntil&&item.snoozedUntil<=new Date().toISOString()?{...item,status:'open',snoozedUntil:null}:item;
+    }
     #put(item: WorkItem, fp?: string) {
         if (fp)
             this.#db.prepare('INSERT INTO items VALUES(?,?,?,?)').run(item.id, item.accountId, fp, JSON.stringify(item));
@@ -43,9 +48,21 @@ export class WorkStore {
             throw new Error('Choose a future snooze time.');
         if (patch.due && (Number.isNaN(Date.parse(patch.due)) || new Date(patch.due).toISOString().slice(0, 10) !== patch.due))
             throw new Error('Choose a valid due date.');
-        const next = { ...item, ...patch, revision: item.revision + 1, userEdited: true, updatedAt: new Date().toISOString(), snoozedUntil: patch.status === 'snoozed' ? patch.snoozedUntil! : patch.status ? null : item.snoozedUntil };
-        this.#put(next);
+        const next = { ...item, ...patch, revision: item.revision + 1, userEdited: true, overrides: [...new Set([...(item.overrides ?? []), ...Object.keys(patch).filter(k=>k!=='revision'), ...(patch.status ? ['snoozedUntil'] : [])])], updatedAt: new Date().toISOString(), snoozedUntil: patch.status === 'snoozed' ? patch.snoozedUntil! : patch.status ? null : item.snoozedUntil };
+        this.#db.exec('BEGIN IMMEDIATE');
+        try {this.#db.prepare('INSERT OR REPLACE INTO undo VALUES(?,?,?)').run(id,next.revision,JSON.stringify(item));this.#put(next);this.#db.exec('COMMIT')}
+        catch(error){this.#db.exec('ROLLBACK');throw error}
         return next;
+    }
+    undo(id:string,revision:unknown):WorkItem {
+        if(typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1)throw new Error('A valid revision is required.');
+        const current=this.get(id),snapshot=this.#db.prepare('SELECT revision,payload FROM undo WHERE id=?').get(id);
+        if(!current||current.revision!==revision||snapshot?.revision!==revision)throw Object.assign(new Error('This to-do changed. Undo is no longer available.'),{status:409});
+        const restored={...JSON.parse(String(snapshot.payload)) as WorkItem,revision:revision+1,updatedAt:new Date().toISOString()};
+        this.#db.exec('BEGIN IMMEDIATE');
+        try{this.#put(restored);this.#db.prepare('DELETE FROM undo WHERE id=?').run(id);this.#db.exec('COMMIT')}
+        catch(error){this.#db.exec('ROLLBACK');throw error}
+        return restored;
     }
     /** Validate the complete proposal before a transaction: no partial writes or invented evidence. */
     reconcile(accountId: string, scanKey: string, sources: Source[], raw: unknown): number {
@@ -77,14 +94,17 @@ export class WorkStore {
                 const old = (previous ? this.get(previous.id) : undefined) ?? (row ? JSON.parse(String(row.payload)) as WorkItem : undefined);
                 const item: WorkItem = { id: old?.id ?? digest(`${accountId}:${fp}`), accountId, accountEmail: sources.find(s => s.accountEmail)?.accountEmail, kind: c.kind, title: c.title, summary: c.summary,
                     topic: c.topic, topicId: digest(`${accountId}:${key(c.topic)}`), contacts: [...new Set([...(old?.contacts ?? []), ...c.contacts])], owner: c.owner, due: c.due,
-                    status: c.status, certainty: c.certainty, snoozedUntil: null, userEdited: false, revision: (old?.revision ?? 0) + 1, updatedAt: new Date().toISOString(),
+                    status: c.kind === 'task' && c.status === 'open' && c.owner && self && c.owner !== self ? 'waiting' : c.status, certainty: c.certainty, snoozedUntil: null, userEdited: false, revision: (old?.revision ?? 0) + 1, updatedAt: new Date().toISOString(),
                     evidence: [...new Map([...(old?.evidence ?? []), ...evidence].map(e => [`${e.source.id}:${e.quote}`, e])).values()].slice(-50) };
                 const latest = (list: typeof evidence) => list.reduce((date, e) => e.source.at > date ? e.source.at : date, '');
                 if (old && latest(evidence) < latest(old.evidence))
                     Object.assign(item, { title: old.title, summary: old.summary, topic: old.topic, topicId: old.topicId, owner: old.owner, due: old.due, status: old.status, certainty: old.certainty });
                 // User decisions take precedence forever; AI can add evidence without undoing them.
-                if (old?.userEdited)
-                    Object.assign(item, { title: old.title, owner: old.owner, due: old.due, status: old.status, certainty: old.certainty, snoozedUntil: old.snoozedUntil, userEdited: true });
+                if (old?.userEdited) {
+                    const fields=old.overrides ?? ['title','owner','due','status','certainty','snoozedUntil'];
+                    for(const field of fields)if(['title','owner','due','status','certainty','snoozedUntil'].includes(field))Object.assign(item,{[field]:old[field as keyof WorkItem]});
+                    item.userEdited=true;item.overrides=fields;
+                }
                 this.#put(item, old ? undefined : fp);
             }
             this.#db.prepare('INSERT OR REPLACE INTO scans VALUES(?,?)').run(scanKey, fingerprint(sources));
@@ -95,6 +115,11 @@ export class WorkStore {
             this.#db.exec('ROLLBACK');
             throw e;
         }
+    }
+    context(query:URLSearchParams) {
+        const items=this.all(query.get('account')||undefined).filter(i=>(!query.get('contact')||i.contacts.includes(query.get('contact')!.toLowerCase()))&&(!query.get('topic')||i.topicId===query.get('topic')))
+            .sort((a,b)=>Number(['done','dismissed'].includes(a.status))-Number(['done','dismissed'].includes(b.status))||b.updatedAt.localeCompare(a.updatedAt));
+        return {total:items.length,returned:Math.min(items.length,80),limited:items.length>80,items:items.slice(0,80).map(i=>({...i,summary:i.summary.slice(0,800),evidence:i.evidence.slice(-2).map(e=>({...e,quote:e.quote.slice(0,500)}))}))};
     }
     view(query: URLSearchParams, now = new Date()) {
         let items = this.all(query.get('account') || undefined);

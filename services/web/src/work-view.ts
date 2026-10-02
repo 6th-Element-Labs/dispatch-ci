@@ -11,6 +11,7 @@ interface Hooks {
     source: (value: WorkSource) => Promise<void>;
     draft: (item: WorkItem) => Promise<void>;
     showDetail: () => void;
+    scopesChanged: () => void;
 }
 /** Presentation only. Work service owns ranking, filters, evidence and mutations. */
 export class WorkPage {
@@ -31,6 +32,13 @@ export class WorkPage {
         item: WorkItem;
         before: WorkItem;
     } | undefined;
+    get scopes(): {email?:WorkSource; contact?:WorkContext; topic?:WorkContext} {
+        const item=this.#selected;
+        if(!item)return {};
+        const email=[...item.evidence].reverse().find(e=>e.source.kind==='email')?.source;
+        const contact=item.contacts.find(c=>c!==(item.accountEmail ?? this.hooks.account().email)) ?? item.contacts[0];
+        return {email,contact:contact?{kind:'contact',accountId:item.accountId,contextId:contact}:undefined,topic:{kind:'topic',accountId:item.accountId,contextId:item.topicId}};
+    }
     constructor(readonly list: HTMLElement, readonly detail: HTMLElement, readonly hooks: Hooks) {
         list.addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLElement>('[data-work]'); if (button)
             void this.#click(button).catch(e => this.#fail(e)); });
@@ -49,7 +57,7 @@ export class WorkPage {
         detail.addEventListener('submit', event => { event.preventDefault(); const form = event.target as HTMLFormElement; if (form.dataset.workEdit !== undefined)
             void this.#edit(form).catch(e => this.#fail(e)); });
     }
-    async open(mode: 'ea' | 'todos', contact?: string, account?: string) { this.active = true; this.context = undefined; this.mode = mode; this.#contact = contact ?? ''; this.#account = account ?? ''; this.#topic = ''; this.#filter = 'all'; this.#selected = undefined; this.render(); await this.refresh(); clearInterval(this.#poll); this.#poll = window.setInterval(() => { if (this.active && !this.#busy)
+    async open(mode: 'ea' | 'todos', contact?: string, account?: string) { this.active = true; this.context = undefined; this.mode = mode; this.#contact = contact ?? ''; this.#account = account ?? ''; this.#topic = ''; this.#filter = 'all'; this.#selected = undefined; this.#data = undefined; this.#undo = undefined; this.#error = ''; this.render(); await this.refresh(); clearInterval(this.#poll); this.#poll = window.setInterval(() => { if (this.active && !this.#busy)
         void this.refresh(false); }, 5000); }
     close() { this.active = false; this.context = undefined; this.#sequence++; clearInterval(this.#poll); }
     async refresh(select = true) { const sequence = ++this.#sequence; const a = this.hooks.account(); const params = new URLSearchParams({ filter: this.#filter, ...(this.#account || a.id ? { account: this.#account || a.id! } : {}), ...(a.email ? { self: a.email } : {}), ...(this.#contact ? { contact: this.#contact } : {}), ...(this.#topic ? { topic: this.#topic } : {}) }); try {
@@ -64,7 +72,8 @@ export class WorkPage {
         this.#error = '';
         this.#selected = [...data.items, ...data.decisions].find(i => i.id === this.#selected?.id) ?? (select ? data.items[0] ?? data.decisions[0] : undefined);
         this.render();
-        this.#setContext();
+        // A polling refresh updates records, but must not change a chosen chat scope.
+        if (select || !this.context) this.#setContext();
     }
     catch (e) {
         if (sequence === this.#sequence && this.active)
@@ -87,6 +96,7 @@ export class WorkPage {
       ${this.#contact || this.#topic ? `<header class="work-context-header"><span class="work-eyebrow">${this.#contact ? 'Contact' : 'Topic'} · across threads</span><h2>${escape(this.#contact || data?.topics.find(t => t.id === this.#topic)?.name)}</h2><button class="btn btn-sm btn-ghost-secondary" data-work="clear">All work</button></header>` : ''}
       ${item ? this.#item(item) : '<div class="work-welcome"><i class="ti ti-sparkles" aria-hidden="true"></i><h2>A clear view of what comes next.</h2><p>Select a to-do to see its history, sources and next step.</p></div>'}
       ${data?.decisions.length ? `<section class="work-decisions"><h3>Decisions carried forward</h3>${data.decisions.map(d => `<button data-work="select" data-id="${d.id}" class="work-decision"><i class="ti ti-bookmark" aria-hidden="true"></i><span><strong>${escape(d.title)}</strong><small>${escape(d.summary)}</small></span></button>`).join('')}</section>` : ''}</div>`;
+        this.hooks.scopesChanged();
     }
     #item(item: WorkItem) {
         return `<article aria-label="Selected to-do"><div class="work-detail-kicker"><span class="work-status">${escape(item.certainty === 'suggested' ? 'Suggestion' : item.kind === 'decision' ? 'Decision' : item.status)}</span><span>${escape(item.reason)}</span></div><h1>${escape(item.title)}</h1><p class="work-summary">${escape(item.summary)}</p><div class="work-properties"><span><small>Owner</small>${escape(item.owner ?? 'Not set')}</span><span><small>Due</small>${date(item.due)}</span><span><small>Topic</small><button data-work="topic" data-value="${item.topicId}" class="work-link">${escape(item.topic)}</button></span></div>
@@ -166,7 +176,7 @@ export class WorkPage {
         }
         else if (action === 'undo' && this.#undo) {
             const { item, before } = this.#undo;
-            await workApi.action(item, { status: before.status, snoozedUntil: before.snoozedUntil, title: before.title, owner: before.owner, due: before.due, certainty: before.certainty });
+            await workApi.undo(item);
             this.#undo = undefined;
             await this.refresh();
         }

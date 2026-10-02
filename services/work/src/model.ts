@@ -37,6 +37,7 @@ export interface WorkItem {
     certainty: 'explicit' | 'suggested';
     snoozedUntil: string | null;
     userEdited: boolean;
+    overrides?: string[];
     revision: number;
     updatedAt: string;
     evidence: Evidence[];

@@ -47,3 +47,26 @@ describe('work continuity', () => {
     it('groups identical titles by account and participants without merging unrelated owners', () => { const store = new WorkStore(':memory:'); store.reconcile('account', 'a', [source()], { items: [proposal()] }); store.reconcile('other', 'b', [{ ...source(), accountId: 'other' }], { items: [proposal()] }); expect(store.all()).toHaveLength(2); store.close(); });
     it('ranks due commitments before suggestions and returns durable decisions separately', () => { const store = new WorkStore(':memory:'); store.reconcile('account', 'a', [source()], { items: [proposal(), proposal({ title: 'Ask about proposal', due: null, certainty: 'suggested' }), proposal({ kind: 'decision', title: 'Approved budget', due: null })] }); const view = store.view(new URLSearchParams(), new Date('2026-09-06')); expect(view.items[0]?.reason).toBe('Past due'); expect(view.items[1]?.certainty).toBe('suggested'); expect(view.decisions).toHaveLength(1); store.close(); });
 });
+
+it('preserves an edited title while still accepting later completion evidence',()=>{
+ const store=new WorkStore(':memory:');store.reconcile('account','a',[source()],{items:[proposal()]});const item=store.all()[0]!;store.action(item.id,{revision:item.revision,title:'My title'});store.reconcile('account','b',[source()],{items:[proposal({existingId:item.id,status:'done'})]});expect(store.all()[0]).toMatchObject({title:'My title',status:'done'});store.close()
+})
+
+it('undo restores the prior user override state instead of freezing untouched fields',()=>{
+ const store=new WorkStore(':memory:');store.reconcile('account','a',[source()],{items:[proposal()]});const item=store.all()[0]!;const changed=store.action(item.id,{revision:item.revision,status:'done'});const restored=store.undo(item.id,changed.revision);expect(restored).toMatchObject({status:'waiting',userEdited:false});store.reconcile('account','b',[source()],{items:[proposal({existingId:item.id,status:'done'})]});expect(store.get(item.id)?.status).toBe('done');expect(()=>store.undo(item.id,restored.revision)).toThrow(/Undo/);store.close()
+})
+
+it('carries completed work and decisions into contact context without leaking other accounts',()=>{
+ const store=new WorkStore(':memory:');
+ store.reconcile('account','a',[source()],{items:[proposal(),proposal({kind:'decision',title:'Use approved budget'})]});
+ store.reconcile('other','b',[{...source(),accountId:'other'}],{items:[proposal({title:'Other account proposal'})]});
+ const item=store.all('account').find(i=>i.kind==='task')!;
+ store.action(item.id,{revision:item.revision,status:'done'});
+ const context=store.context(new URLSearchParams({account:'account',contact:'jacob@example.com'}));
+ expect(context).toMatchObject({total:2,returned:2,limited:false});
+ expect(context.items.some(i=>i.status==='done')).toBe(true);
+ expect(context.items.some(i=>i.kind==='decision')).toBe(true);
+ expect(context.items.every(i=>i.accountId==='account')).toBe(true);
+ expect(store.context(new URLSearchParams({account:'account',contact:'unrelated@example.com'})).items).toEqual([]);
+ store.close();
+})

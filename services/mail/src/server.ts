@@ -274,7 +274,8 @@ export function createMailServer(
         const candidates = []
         for (const account of await gmail.accounts()) {
           const rows = (await Promise.all((['inbox', 'sent', 'archive'] as const).map(folder => gmail.listMailboxConversations!(folder, 'all', account.id)))).flat()
-          candidates.push(...[...new Map(rows.map(row => [row.threadId, row])).values()].sort((a,b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0,limit))
+          // A thread can appear in several folders; retain its newest projection.
+          candidates.push(...[...new Map(rows.sort((a,b) => a.receivedAt.localeCompare(b.receivedAt)).map(row => [row.threadId, row])).values()].sort((a,b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0,limit))
         }
         return writeJson(response, 200, { candidates })
       } catch (error) { return writeJson(response, 502, { error: 'work_sources_unavailable', detail: String(error) }) }

@@ -32,10 +32,11 @@ export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
                 await scanner.pause();
                 return reply(200, { service: 'dispatch-work', draining, activeOperations: 0 });
             }
+            if (req.method === 'GET' && url.pathname === '/v1/work/context')return reply(200,store.context(url.searchParams));
             if (req.method === 'GET' && url.pathname === '/v1/work')
                 return reply(200, store.view(url.searchParams));
-            const match = /^\/v1\/work\/items\/([a-z0-9]+)$/.exec(url.pathname);
-            if (req.method === 'GET' && match) {
+            const match = /^\/v1\/work\/items\/([a-z0-9]+)(\/undo)?$/.exec(url.pathname);
+            if (req.method === 'GET' && match && !match[2]) {
                 const item = store.get(match[1]!);
                 return reply(item ? 200 : 404, item ? { item } : { error: 'not_found' });
             }
@@ -55,7 +56,7 @@ export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
             if (!body || typeof body !== 'object' || Array.isArray(body))
                 return reply(400, { error: 'invalid_body' });
             if (match)
-                return reply(200, { item: store.action(match[1]!, body) });
+                return reply(200, { item: match[2] ? store.undo(match[1]!,body.revision) : store.action(match[1]!, body) });
             if (url.pathname === '/v1/work/pause') {
                 store.setState({ enabled: false });
                 await scanner.pause();
@@ -91,7 +92,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const scanner = new WorkScanner(store, process.env.DISPATCH_MAIL_BASE ?? 'http://127.0.0.1:8411', process.env.DISPATCH_AGENT_BASE ?? 'http://127.0.0.1:8412');
     const server = createWorkServer(store, scanner);
     server.listen(Number(process.env.DISPATCH_WORK_PORT ?? 8413), '127.0.0.1', () => scanner.start());
-    const stop = () => { scanner.stop(); server.close(() => { store.close(); process.exit(0); }); };
+    const stop = () => { const stopping=scanner.pause(); server.close(()=>{void stopping.finally(()=>{store.close();process.exit(0)})}); };
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
     watchParent(process.env.DISPATCH_PARENT_PID, stop);

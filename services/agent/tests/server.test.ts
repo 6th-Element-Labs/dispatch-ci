@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
+import { createServer } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -257,6 +258,34 @@ describe('dispatch-agent', () => {
     expect(input[0]?.text).toContain('thread t1')
     expect(input[0]?.text).not.toContain('Selected email context supplied by Dispatch UI')
     expect(input[0]?.text).not.toContain('"subject":"Berth"')
+  })
+
+  it('carries saved contact work into new email chats and keeps chat usable if work is offline', async () => {
+    let available = true
+    const work = createServer((request, response) => {
+      expect(request.url).toBe('/v1/work/context?account=link-one&contact=jacob%40example.com')
+      response.writeHead(available ? 200 : 503, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(available ? { items: [{ title: 'Send revised proposal', status: 'done' }, { kind: 'decision', title: 'Use approved budget' }] } : { error: 'unavailable' }))
+    })
+    servers.push(work)
+    await new Promise<void>(resolve => work.listen(0, '127.0.0.1', resolve))
+    const fake = runtime()
+    const server = createAgentServer(fake, { workBase: `http://127.0.0.1:${(work.address() as AddressInfo).port}` })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const send = () => fetch(`${base}/v1/threads/new-weekly-chat/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'What is still open?', mailContext: { accountId: 'link-one', threadId: 'week-2', workContact: 'jacob@example.com' } }) })
+    expect((await send()).status).toBe(202)
+    let input = rpcParams(fake, 'turn/start').input as { text: string }[]
+    expect(input[0]?.text).toContain('Send revised proposal')
+    expect(input[0]?.text).toContain('Use approved budget')
+    expect(input[0]?.text).toContain('"status":"done"')
+    available = false
+    fake.request.mockClear()
+    expect((await send()).status).toBe(202)
+    input = rpcParams(fake, 'turn/start').input as { text: string }[]
+    expect(input[0]?.text).toContain('Saved work context is currently unavailable')
+    expect(input[0]?.text).not.toContain('Use approved budget')
   })
 
   it('serves the model catalog joined with usage buckets', async () => {

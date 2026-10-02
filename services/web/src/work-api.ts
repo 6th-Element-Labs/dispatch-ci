@@ -17,6 +17,7 @@ export interface WorkSource {
 export interface WorkItem {
     id: string;
     accountId: string;
+    accountEmail?: string;
     kind: 'task' | 'decision';
     title: string;
     summary: string;
@@ -62,6 +63,6 @@ export type WorkContext = {
 };
 async function request<T>(path: string, body?: unknown): Promise<T> { const response = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(path.includes('/analyze') ? 190000 : 8000) }); const value = await response.json(); if (!response.ok)
     throw new Error(value.detail ?? value.error ?? 'Work is unavailable'); return value as T; }
-export const workApi = { list: (params: URLSearchParams) => request<WorkView>(`/v1/work?${params}`), action: (item: WorkItem, patch: Record<string, unknown>) => request<{
+export const workApi = { undo:(item:WorkItem)=>request<{item:WorkItem}>(`/v1/work/items/${item.id}/undo`,{revision:item.revision}), list: (params: URLSearchParams) => request<WorkView>(`/v1/work?${params}`), action: (item: WorkItem, patch: Record<string, unknown>) => request<{
         item: WorkItem;
     }>(`/v1/work/items/${item.id}`, { revision: item.revision, ...patch }), pause: () => request('/v1/work/pause', {}), scan: (more = false) => request('/v1/work/scan', { more }), analyze: (accountId: string, threadId: string) => request<WorkView>('/v1/work/analyze', { accountId, threadId }) };

@@ -42,9 +42,15 @@ advances the fingerprint. Explicit commitments and suggestions remain distinct.
 Dates and owners can be unknown. Older evidence cannot roll back newer completion.
 
 User edits, Done, Dismiss and Snooze take precedence over all future extraction.
+Each edited field is protected separately: renaming a task still allows later
+evidence to mark it complete. Undo restores the earlier values and override state.
 Version checks prevent stale browser or Codex commands from overwriting a newer
 edit. A new weekly email is reconciled with existing work for its participants.
 Completed contact/topic chats are included on the next review of related mail.
+New email chats receive saved work for the sender, including completed work and
+decisions. A work-service outage leaves normal email chat usable and explicitly
+marks that earlier context unavailable. Email, Contact and Topic controls select
+separate chats; source-history links are read-only until a scope is selected.
 
 ## API contract
 
@@ -61,9 +67,13 @@ and `detail`. Service dependency errors leave persisted work available.
   structured output; interrupted/failed turns are failures.
 - Work `GET /v1/work`: items, decisions, people, topics, review status. Optional
   account/contact/topic/thread/filter parameters; ranking belongs to this service.
+- Work `GET /v1/work/context`: bounded contact/topic context, including closed work
+  and decisions, with explicit total/returned/limited coverage.
 - Work `POST /v1/work/scan`: start/refresh review, or `{more:true}` for older mail.
+- Work `POST /v1/work/pause`: pause automatic review and cancel pending extraction.
 - Work `POST /v1/work/analyze`: review one exact account/thread.
 - Work `POST /v1/work/items/:id`: expected revision plus user changes.
+- Work `POST /v1/work/items/:id/undo`: restore the previous user action at its exact revision.
 - Agent's Dispatch MCP exposes `list_work` and `update_todo` over those same APIs.
 
 ## UI and acceptance

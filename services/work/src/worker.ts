@@ -4,7 +4,7 @@ export async function getJson(base: string, path: string, init: RequestInit = {}
     const response = await fetch(`${base}${path}`, { ...init, headers: { 'content-type': 'application/json', ...init.headers }, signal: AbortSignal.any([AbortSignal.timeout(path.includes('extract') ? 180000 : 60000), ...(signal ? [signal] : [])]) });
     const body = await response.json() as any;
     if (!response.ok)
-        throw new Error(body.detail ?? body.error ?? `Service returned ${response.status}`);
+        throw Object.assign(new Error(body.detail ?? body.error ?? `Service returned ${response.status}`),{status:response.status});
     return body;
 }
 export class WorkScanner {
@@ -16,7 +16,7 @@ export class WorkScanner {
     #analyses = new Map<string, Promise<void>>();
     #timer: ReturnType<typeof setInterval> | undefined;
     constructor(readonly store: WorkStore, readonly mailBase: string, readonly agentBase: string) { store.setState({ running: false }); }
-    start(run = true) { this.#controller = new AbortController(); clearInterval(this.#timer); this.#timer = setInterval(() => { if (this.store.state().enabled)
+    start(run = true) { if (!this.#controller || this.#controller.signal.aborted) this.#controller = new AbortController(); clearInterval(this.#timer); this.#timer = setInterval(() => { if (this.store.state().enabled)
         void this.scan().catch(() => undefined); }, 300000); this.#timer.unref(); if (run && this.store.state().enabled)
         void this.scan().catch(() => undefined); }
     async pause() { this.stop(); await Promise.allSettled([...(this.#flight ? [this.#flight] : []), ...this.#analyses.values()]); }
@@ -25,7 +25,7 @@ export class WorkScanner {
     scan(more = false): Promise<void> {
         if (this.#flight)
             return this.#flight;
-        const depth = this.store.state().depth + (more ? 30 : 0);
+        const depth = Math.min(1000,this.store.state().depth + (more ? 30 : 0));
         this.store.setState({ enabled: true, running: true, scanned: 0, total: 0, failures: 0, error: null, depth });
         this.#controller = new AbortController();
         this.#flight = this.#run(depth, this.#controller.signal).catch(e => { this.store.setState({ error: String(e instanceof Error ? e.message : e) }); throw e; }).finally(() => { this.store.setState({ running: false, lastScan: new Date().toISOString() }); this.#flight = undefined; });
@@ -37,15 +37,18 @@ export class WorkScanner {
         for (const candidate of candidates) {
             if (signal.aborted)
                 break;
+            let unavailable=false;
             try {
                 await this.analyze(candidate.accountId, candidate.threadId, signal);
             }
             catch (e) {
                 this.store.setState({ failures: this.store.state().failures + 1, error: String(e instanceof Error ? e.message : e) });
+                unavailable=[401,403,429,502,503].includes((e as {status?:number}).status??0);
                 if (signal.aborted)
                     break;
             }
             this.store.setState({ scanned: this.store.state().scanned + 1 });
+            if(unavailable)break;
         }
     }
     analyze(accountId: string, threadId: string, signal?: AbortSignal): Promise<void> {
