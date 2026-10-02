@@ -27,8 +27,8 @@ export class WorkScanner {
             return this.#flight;
         const depth = Math.min(1000,this.store.state().depth + (more ? 30 : 0));
         this.store.setState({ enabled: true, running: true, scanned: 0, total: 0, failures: 0, error: null, depth });
-        this.#controller = new AbortController();
-        this.#flight = this.#run(depth, this.#controller.signal).catch(e => { this.store.setState({ error: String(e instanceof Error ? e.message : e) }); throw e; }).finally(() => { this.store.setState({ running: false, lastScan: new Date().toISOString() }); this.#flight = undefined; });
+        const controller = this.#controller = new AbortController();
+        this.#flight = this.#run(depth, controller.signal).catch(e => { if (!controller.signal.aborted) { this.store.setState({ error: String(e instanceof Error ? e.message : e) }); throw e; } }).finally(() => { this.store.setState({ running: false, ...(controller.signal.aborted ? {} : { lastScan: new Date().toISOString() }) }); this.#flight = undefined; });
         return this.#flight;
     }
     async #run(depth: number, signal: AbortSignal) {
@@ -42,10 +42,10 @@ export class WorkScanner {
                 await this.analyze(candidate.accountId, candidate.threadId, signal);
             }
             catch (e) {
-                this.store.setState({ failures: this.store.state().failures + 1, error: String(e instanceof Error ? e.message : e) });
-                unavailable=[401,403,429,502,503].includes((e as {status?:number}).status??0);
                 if (signal.aborted)
                     break;
+                this.store.setState({ failures: this.store.state().failures + 1, error: String(e instanceof Error ? e.message : e) });
+                unavailable=[401,403,429,502,503].includes((e as {status?:number}).status??0);
             }
             this.store.setState({ scanned: this.store.state().scanned + 1 });
             if(unavailable)break;

@@ -21,3 +21,13 @@ it('pause still cancels an in-flight mailbox read after the review timer is rest
  try { expect(signal?.aborted).toBe(true); }
  finally { release(Response.json({candidates:[]})); await scan; await pause; store.close(); }
 });
+
+it('an intentional pause is not an error or a completed review', async () => {
+ const store = new WorkStore(':memory:');
+ vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve,reject)=>init.signal!.addEventListener('abort',()=>reject(new DOMException('This operation was aborted','AbortError')),{once:true}))));
+ const scanner = new WorkScanner(store, 'http://mail', 'http://agent');
+ const scan = scanner.scan();
+ await scanner.pause();await scan;
+ expect(store.state()).toMatchObject({running:false,error:null,failures:0,lastScan:null});
+ store.close();
+});
