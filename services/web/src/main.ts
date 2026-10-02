@@ -1,3 +1,5 @@
+import { WorkPage } from './work-view.js'
+import { workApi, type WorkContext, type WorkSource, type WorkItem } from './work-api.js'
 import DOMPurify from 'dompurify'
 import { installWebLinks } from './web-links.js'
 import { DraftRecovery, type RecoveryDraft } from './draft-recovery.js'
@@ -354,6 +356,7 @@ installWebLinks(app, window as { isTauri?: unknown }, error => {
   elements.mailError.textContent = `Could not open link: ${error instanceof Error ? error.message : String(error)}`
 })
 
+let sourceHistoryMode=false
 let threadId: string | undefined
 let activeTurnId: string | undefined
 const promptSubmissions = new Set<string>()
@@ -374,7 +377,7 @@ function renderAgentComposer(): void {
   const stopIcon = elements.stop.querySelector<HTMLElement>('[data-stop-icon]')!
   stopIcon.className = stopping ? 'spinner-border spinner-border-sm' : 'ti ti-player-stop'
   elements.send.hidden = active && (!typed || stopping)
-  elements.send.disabled = !typed || stopping || submitting
+  elements.send.disabled = !typed || stopping || submitting || sourceHistoryMode
   elements.send.dataset.steering = String(active)
   elements.send.setAttribute('aria-label', active ? 'Update Codex direction' : 'Send')
   elements.send.title = active ? 'Update Codex direction while it works' : 'Send to Codex'
@@ -558,7 +561,9 @@ let readStateActionSequence = 0
 let conversationLoadSequence = 0
 const conversationCache = new Map<string, Promise<ConversationProjection>>()
 const BINDING_CACHE = 'dispatch.codex.bindings.v1'
-type CodexPaneKey = { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
+let workPage: WorkPage | undefined
+let codexScopes: HTMLDivElement | undefined
+type CodexPaneKey = WorkContext | { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
 const acceptedReadState = new Map<string, boolean>()
 // Explicit Mark as Unread stays unread until the user leaves and selects it again.
 const suppressReadDwell = new Set<string>()
@@ -613,13 +618,16 @@ function connectTaskActivity(): void {
 
 function bindingCacheKey(key: CodexPaneKey): string {
   if (key.kind === 'draft') return `draft:${key.draftKey}`
-  return key.kind === 'unbound' ? 'unbound' : `conversation:${key.accountId}:${key.gmailThreadId}`
+  if (key.kind === 'contact' || key.kind === 'topic') return `${key.kind}:${JSON.stringify([key.accountId,key.contextId])}`
+  return key.kind === 'conversation' ? `conversation:${key.accountId}:${key.gmailThreadId}` : 'unbound'
 }
 
 function selectCodexContext(key: CodexPaneKey): void {
+  sourceHistoryMode=false
   pendingCodexPrompts.set(bindingCacheKey(desiredCodexKey), elements.prompt.value)
   desiredCodexKey = key
-  app.querySelector<HTMLElement>('[data-codex-context]')!.textContent = key.kind === 'conversation' ? '· This email' : key.kind === 'draft' ? '· This draft' : '· General'
+  elements.prompt.placeholder = key.kind === 'contact' ? 'Ask Codex about this contact…' : key.kind === 'topic' ? 'Ask Codex about this topic…' : key.kind === 'conversation' ? 'Ask Codex about this email…' : 'Ask Codex…'
+  app.querySelector<HTMLElement>('[data-codex-context]')!.textContent = key.kind === 'conversation' ? '· This email' : key.kind === 'draft' ? '· This draft' : key.kind === 'contact' ? '· This contact' : key.kind === 'topic' ? '· This topic' : '· General'
   bindingSequence += 1
   paneSequence += 1
   codexContextReady = false
@@ -633,6 +641,7 @@ function selectCodexContext(key: CodexPaneKey): void {
   activeTurnId = undefined
   setAgentStatus('Connecting')
   renderBackgroundTasks()
+  renderCodexScopes()
 }
 
 function readBindingCache(): Record<string, string> {
@@ -859,9 +868,9 @@ function defaultEmptyListMessage(): string {
 const mailboxLabels: Record<GmailMailbox, string> = { inbox: 'Inbox', sent: 'Sent', drafts: 'Drafts', archive: 'Archive', spam: 'Spam', trash: 'Trash' }
 
 function renderMailbox(): void {
-  elements.mailboxTitle.textContent = mailboxLabels[mailbox]
+  elements.mailboxTitle.textContent = workPage?.active ? (workPage.mode === 'ea' ? 'EA' : 'To-dos') : mailboxLabels[mailbox]
   app.querySelectorAll<HTMLButtonElement>('[data-mailbox]').forEach((button) => {
-    const active = button.dataset.mailbox === mailbox
+    const active = !workPage?.active && button.dataset.mailbox === mailbox
     button.classList.toggle('active', active)
     button.setAttribute('aria-current', active ? 'page' : 'false')
   })
@@ -1237,6 +1246,7 @@ async function openAttachment(message: MessageProjection, attachmentId: string, 
 }
 
 async function selectConversation(id: string, options: { revealOnMobile?: boolean; startReadDwell?: boolean; refresh?: boolean } = {}): Promise<void> {
+  if (workPage?.active) return
   const previousId = selectedConversationId
   markReadDwell.cancel()
   const matchResult = searchView?.results.find(result => result.conversation.id === id)
@@ -1428,6 +1438,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
         ;(message?.querySelector('mark') ?? message)?.scrollIntoView({ block: 'center' })
       }
     }
+    renderRelatedWork()
     prefetchConversations(id)
     if (keepCodex) return
     try {
@@ -2483,6 +2494,7 @@ async function openForward(): Promise<void> {
 }
 
 function openCompose(existingKey?: string): void {
+  leaveWork()
   const accountId = selectedAccountId ?? selected?.accountId ?? accounts[0]?.id
   if (!accountId) {
     addAgentMessage('error', 'Connect a Gmail account before composing mail.')
@@ -3575,7 +3587,7 @@ async function bindAndShowCodex(key: CodexPaneKey, options: { adoptThreadId?: st
     await showCodexThread(binding.threadId, binding.created, binding.replaced, binding.detail)
     if (!current()) return false
     const context = selected ?? (mailbox === 'drafts' ? conversations.find((item) => item.id === selectedConversationId) : undefined)
-    const currentKey = context ? conversationBindingKey(context) : !selectedConversationId ? desiredCodexKey : undefined
+    const currentKey = workPage?.active || key.kind==='contact' || key.kind==='topic' ? desiredCodexKey : context ? conversationBindingKey(context) : !selectedConversationId ? desiredCodexKey : undefined
     if (currentKey && JSON.stringify(key) === JSON.stringify(currentKey) && (options.sequence === undefined || options.sequence === selectionSequence)) codexContextReady = true
     const restore = pendingMailEffects.get(binding.threadId)
     if (codexContextReady && restore) {
@@ -3660,7 +3672,7 @@ async function connectAgent(): Promise<void> {
 
 async function sendPrompt(): Promise<void> {
   const text = elements.prompt.value.trim()
-  if (!text || !threadId) return
+  if (!text || !threadId || sourceHistoryMode) return
   const targetThreadId = threadId
   const interrupt = interruptRequests.get(targetThreadId)
   if (promptSubmissions.has(targetThreadId) || (interrupt && interrupt.turnId === activeTurnId && !interrupt.error)) return
@@ -3681,7 +3693,8 @@ async function sendPrompt(): Promise<void> {
       ...userChoseModel() ? { model: selectedModelId } : {},
       ...userChoseEffort() ? { effort: selectedEffort } : {},
       appId: gmailAppId(apps),
-      mailContext: selected || activeDraft ? {
+      workContext: desiredCodexKey.kind==='contact'||desiredCodexKey.kind==='topic' ? desiredCodexKey : undefined,
+      mailContext: !workPage?.active && desiredCodexKey.kind!=='contact' && desiredCodexKey.kind!=='topic' && (selected || activeDraft) ? {
         searchMatch: selected && searchView ? { query: searchView.query, hits: searchView.results.find(result => result.conversation.id === selectedConversationId)?.hits } : undefined,
         draft: activeDraft ? { id: activeDraft.id, accountId: activeDraft.accountId, to: recipientValue(elements.draftTo), cc: recipientValue(elements.draftCc), bcc: recipientValue(elements.draftBcc), subject: elements.draftSubject.value, hasUnsavedChanges: draftDirty } : undefined,
         accountId: selected?.accountId,
@@ -3689,6 +3702,7 @@ async function sendPrompt(): Promise<void> {
         threadId: selected?.threadId,
         subject: selected?.subject,
         sender: selected?.sender.address,
+        workContact: selected ? (selected.sender.address!==accounts.find(a=>a.id===selected!.accountId)?.email?selected.sender.address:selected.messages.flatMap(m=>m.to??[]).find(a=>a.address!==accounts.find(account=>account.id===selected!.accountId)?.email)?.address) : undefined,
         attachment: selectedAttachmentContext?.accountId === selected?.accountId
           && selectedAttachmentContext?.threadId === selected?.threadId
           && selected?.messages.some((message) => message.id === selectedAttachmentContext?.messageId
@@ -3883,7 +3897,7 @@ async function loadConversations(preserveSelection = false): Promise<void> {
     : ''
   elements.mailSource.textContent = usedCache ? `Refreshing · cached ${cacheLabel}` : 'Loading'
   elements.mailError.hidden = true
-  if (!preserveSelection) {
+  if (!preserveSelection && !workPage?.active) {
     markReadDwell.cancel()
     selected = undefined
     selectedSummary = undefined
@@ -4403,9 +4417,11 @@ document.addEventListener('visibilitychange', () => {
 elements.account.addEventListener('change', () => {
   clearSearchView()
   selectedAccountId = elements.account.value || undefined
+  if(workPage?.active) { void openWork(workPage.mode); return }
   void loadConversations()
 })
 function switchMailbox(next: GmailMailbox): void {
+  leaveWork()
   clearSearchView()
   mailbox = next
   renderMailbox()
@@ -4829,6 +4845,7 @@ document.addEventListener('keydown', (event) => {
 })
 window.addEventListener('resize', renderPanels)
 window.addEventListener('keydown', (event) => {
+  if (workPage?.active && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {event.preventDefault();return}
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
     event.preventDefault()
     elements.search.focus()
@@ -4856,6 +4873,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (workPage?.active) return
   if (event.key !== 'Delete' && event.key !== 'Backspace') return
   if (event.altKey || event.ctrlKey || event.shiftKey || (event.metaKey && event.key === 'Delete')) return
   if (isEditableTarget(event.target) || isEditableTarget(document.activeElement)) return
@@ -4915,6 +4933,7 @@ for (const [name, key] of Object.entries(TOOLBAR_KEYS)) {
 let pendingGo = false
 let pendingGoTimer: number | undefined
 window.addEventListener('keydown', (event) => {
+  if (workPage?.active) return
   if (event.defaultPrevented || isEditableTarget(event.target) || isEditableTarget(document.activeElement)) return
   if (app.querySelector('dialog[open]')) return
   const resolved = resolveShortcut(event, pendingGo)
@@ -4954,11 +4973,100 @@ undoToast.root.addEventListener('mouseenter', pauseUndoCountdown)
 undoToast.root.addEventListener('mouseleave', () => { if (!undoToast.root.hidden && undoTimer === undefined) startUndoCountdown(undoRemaining || UNDO_WINDOW_MS) })
 window.addEventListener('keydown', (event) => {
   if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'z') return
+  if (workPage?.active) return
   if (undoToast.root.hidden || isEditableTarget(event.target) || isEditableTarget(document.activeElement)) return
   event.preventDefault()
   void undoLastMove()
 })
 
+codexScopes=document.createElement('div');codexScopes.className='work-codex-scopes';codexScopes.setAttribute('role','group');codexScopes.setAttribute('aria-label','Codex context scope')
+const codexHeader=app.querySelector('[data-codex-context]')!.closest('header')
+if(codexHeader){const row=document.createElement('div');row.className=codexHeader.className;row.append(...codexHeader.childNodes);codexHeader.className='';codexHeader.append(row,codexScopes)}
+function renderCodexScopes():void{
+  // This function is also called during startup, before the optional controls exist.
+  if(!codexScopes)return
+  codexScopes.replaceChildren()
+  const scopes=workPage?.active?workPage.scopes:undefined
+  const self=accounts.find(a=>a.id===selected?.accountId)?.email
+  const contact=selected?.sender.address!==self?selected?.sender.address:selected?.messages.flatMap(m=>m.to??[]).find(a=>a.address!==self)?.address
+  const options:[string,WorkContext|undefined,WorkSource|undefined][]=[['Email',undefined,scopes?.email],['Contact',scopes?.contact??(selected?.accountId&&contact?{kind:'contact',accountId:selected.accountId,contextId:contact}:undefined),undefined],['Topic',scopes?.topic,undefined]]
+  for(const [label,context,source] of options){
+    const button=document.createElement('button');button.type='button';button.className='btn btn-sm btn-ghost-secondary';button.textContent=label;button.setAttribute('aria-label',`${label} context`);button.disabled=label==='Email'?!selected&&!source:!context;button.setAttribute('aria-pressed',String(label==='Email'?desiredCodexKey.kind==='conversation':desiredCodexKey.kind===label.toLowerCase()))
+    button.onclick=()=>{if(label==='Email'){if(source)void openWorkSource(source);else if(selected){const key=conversationBindingKey(selected);selectCodexContext(key);void bindAndShowCodex(key)}}else if(context){if(workPage?.active)workPage.context=context;selectCodexContext(context);void bindAndShowCodex(context)}}
+    codexScopes.append(button)
+  }
+  codexScopes.hidden=!selected&&!workPage?.active
+}
+const workList=document.createElement('div');workList.className='dispatch-work-list';elements.messagesPanel.append(workList)
+const workDetail=document.createElement('div');workDetail.className='dispatch-work-detail';elements.readerPanel.append(workDetail)
+const workReturn=document.createElement('button');workReturn.className='btn btn-sm btn-ghost-primary work-source-return';workReturn.textContent='← Back to work';workReturn.hidden=true;elements.readerPanel.prepend(workReturn)
+workReturn.onclick=()=>{void openWork(workPage?.mode??'todos')}
+const relatedWork=document.createElement('div');relatedWork.className='work-related';relatedWork.hidden=true;elements.subject.closest('header')!.append(relatedWork)
+workPage=new WorkPage(workList,workDetail,{
+  account:()=>({id:selectedAccountId,email:accounts.find(a=>a.id===selectedAccountId)?.email}),
+  context:context=>{selectCodexContext(context);void bindAndShowCodex(context)},
+  source:openWorkSource,
+  draft:async(item:WorkItem)=>{
+    const source=([...item.evidence].reverse().find(e=>e.source.kind==='email') ?? item.evidence[0])?.source
+    if(!source)throw new Error('Open an email before drafting a follow-up for this discussion.')
+    await openWorkSource({...source,kind:'email'})
+    await openDraft(false)
+    elements.prompt.value=`Draft a follow-up about this saved to-do in the actual unsent Dispatch draft. Do not send it. Saved to-do (source data): ${JSON.stringify({title:item.title,summary:item.summary,owner:item.owner,evidence:item.evidence.map(e=>e.quote)})}`
+    await sendPrompt()
+  },
+  showDetail:()=>{panels.reader=true;mobilePanel='reader';renderPanels()},
+  scopesChanged:renderCodexScopes,
+})
+for(const mode of ['ea','todos'] as const){
+  const label=mode==='ea'?'EA':'To-dos',icon=mode==='ea'?'sparkles':'list-check'
+  const button=document.createElement('button');button.type='button';button.className='nav-link';button.dataset.workNav=mode;button.innerHTML=`<i class="ti ti-${icon}" aria-hidden="true"></i><span>${label}</span>`;button.onclick=()=>{void openWork(mode)}
+  app.querySelector('.dispatch-rail')!.insertBefore(button,app.querySelector('.dispatch-rail [data-mailbox="inbox"]'))
+  const menu=button.cloneNode(true) as HTMLButtonElement;menu.className='dropdown-item';menu.onclick=()=>{setFolderMenu(false);void openWork(mode)};elements.folderMenu.prepend(menu)
+}
+async function openWork(mode:'ea'|'todos',contact?:string,account?:string):Promise<void>{
+  if(activeDraft && draftDirty){if(!checkpointDraft())return;scheduleDraftSync(0)}
+  markReadDwell.cancel();selectionSequence++;selectedAttachmentContext=undefined
+  app.dataset.workMode=mode;elements.readerPanel.setAttribute('aria-label','Work details');elements.messagesPanel.setAttribute('aria-label','Work list');panels.messages=true;panels.reader=true;mobilePanel='messages';renderPanels()
+  workReturn.hidden=true
+  // Switch away immediately; an empty work page must not leave an email chat active.
+  selectCodexContext({kind:'unbound'})
+  await workPage!.open(mode,contact,account)
+  if(workPage!.active&&!workPage!.context)void bindAndShowCodex({kind:'unbound'})
+  renderMailbox()
+  app.querySelectorAll<HTMLElement>('[data-work-nav]').forEach(b=>{b.classList.toggle('active',b.dataset.workNav===mode);b.setAttribute('aria-current',b.dataset.workNav===mode?'page':'false')})
+}
+function leaveWork():void{
+  if(!workPage?.active)return
+  workPage.close();delete app.dataset.workMode;elements.readerPanel.setAttribute('aria-label','Selected email');elements.messagesPanel.setAttribute('aria-label','Messages')
+  app.querySelectorAll<HTMLElement>('[data-work-nav]').forEach(b=>{b.classList.remove('active');b.setAttribute('aria-current','false')})
+  renderMailbox()
+}
+async function openWorkSource(source:WorkSource):Promise<void>{
+  if(source.kind==='codex'&&source.codexThreadId){
+    sourceHistoryMode=true
+    await showCodexThread(source.codexThreadId,false,false)
+    agentEvents?.close();agentEvents=undefined;activeTurnId=undefined;codexContextReady=false
+    elements.prompt.placeholder='Choose Contact or Topic to continue…'
+    app.querySelector<HTMLElement>('[data-codex-context]')!.textContent='· Source history'
+    setAgentStatus('Source history');renderAgentComposer();panels.agent=true;mobilePanel='agent';renderPanels()
+    return
+  }
+  const conversation=await api.readConversation(source.threadId,source.accountId,false,'inbox')
+  leaveWork();mailbox='inbox';renderMailbox()
+  if(!conversations.some(c=>c.id===conversation.id))conversations.unshift(conversation)
+  conversationCache.set(conversationCacheKey(conversation),Promise.resolve(conversation))
+  await selectConversation(conversation.id,{revealOnMobile:true})
+  workReturn.hidden=false
+}
+function renderRelatedWork():void{
+  renderCodexScopes()
+  relatedWork.replaceChildren();relatedWork.hidden=!selected?.accountId
+  if(!selected?.accountId)return
+  const account=selected.accountId,thread=selected.threadId,self=accounts.find(a=>a.id===selected!.accountId)?.email,contact=(selected.sender.address!==self?selected.sender.address:selected.messages.flatMap(m=>m.to??[]).find(a=>a.address!==self)?.address??selected.sender.address).toLowerCase()
+  const button=document.createElement('button');button.className='btn btn-sm btn-ghost-primary';button.innerHTML='<i class="ti ti-list-check me-1" aria-hidden="true"></i>Work across threads';button.title=`Open work involving ${contact}`;button.onclick=()=>{void openWork('todos',contact,account)}
+  const analyze=document.createElement('button');analyze.className='btn btn-sm btn-ghost-secondary';analyze.textContent='Find to-dos in this thread';analyze.onclick=async()=>{analyze.disabled=true;analyze.textContent='Reviewing…';try{await workApi.analyze(account,thread);if(selected?.threadId===thread&&selected.accountId===account)await openWork('todos',contact,account)}catch(e){analyze.textContent='Retry review';analyze.title=String(e)}finally{analyze.disabled=false}}
+  relatedWork.append(button,analyze)
+}
 renderMailbox()
 renderPanels()
 void start()

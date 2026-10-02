@@ -1,5 +1,5 @@
 import { watchParent } from './parent-watch.js'
-import { projectSearchResults, type SearchMatch } from './search-results.js'
+import { projectSearchResults, searchableMessageText, type SearchMatch } from './search-results.js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -39,7 +39,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'directSyncStatus' | 'connectDirectSync' | 'useConnectorSync' | 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'setRuntimeDraining' | 'enqueueDraftSave' | 'attachDraftFiles' | 'resolveDraftConflict' | 'conflictCopies' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'readWorkConversation' | 'directSyncStatus' | 'connectDirectSync' | 'useConnectorSync' | 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'setRuntimeDraining' | 'enqueueDraftSave' | 'attachDraftFiles' | 'resolveDraftConflict' | 'conflictCopies' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -265,6 +265,34 @@ export function createMailServer(
     if (request.method === 'POST' && receiptMatch?.[1] && gmail.verifySendReceipt) {
       try { return writeJson(response, 200, { receipt: await gmail.verifySendReceipt(decodeURIComponent(receiptMatch[1])) }) }
       catch (error) { return writeJson(response, 404, { error: 'receipt_not_found', detail: String(error) }) }
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/work/candidates') {
+      try {
+        const limit = Number(url.searchParams.get('limit') ?? 30)
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1000) return writeJson(response, 400, { error: 'invalid_limit' })
+        if (!gmail.listMailboxConversations) return writeJson(response, 503, { error: 'mail_index_unavailable' })
+        const candidates = []
+        for (const account of await gmail.accounts()) {
+          const rows = (await Promise.all((['inbox', 'sent', 'archive'] as const).map(folder => gmail.listMailboxConversations!(folder, 'all', account.id)))).flat()
+          // A thread can appear in several folders; retain its newest projection.
+          candidates.push(...[...new Map(rows.sort((a,b) => a.receivedAt.localeCompare(b.receivedAt)).map(row => [row.threadId, row])).values()].sort((a,b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0,limit))
+        }
+        return writeJson(response, 200, { candidates })
+      } catch (error) { return writeJson(response, 502, { error: 'work_sources_unavailable', detail: String(error) }) }
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/work/sources') {
+      const accountId=url.searchParams.get('account'), threadId=url.searchParams.get('thread')
+      if (!accountId || !threadId) return writeJson(response, 400, { error: 'account_and_thread_required' })
+      try {
+        const conversation=await (gmail.readWorkConversation?.(accountId,threadId) ?? gmail.readConversation(accountId,threadId))
+        const accountEmail=(gmail.cachedAccounts?.() ?? await gmail.accounts()).find(a=>a.id===accountId)?.email.toLowerCase()
+        if (conversation.completeness?.complete === false) return writeJson(response, 409, { error: 'incomplete_conversation', detail: 'Some messages are missing. Refresh the conversation before analyzing it.' })
+        const sources=conversation.messages.map(m=>({id:JSON.stringify([accountId,m.id]),kind:'email',accountId,accountEmail,threadId,messageId:m.id,title:m.subject,at:m.receivedAt,
+          author:m.sender.address,participants:[...new Set([m.sender.address,...(m.to??[]).map(a=>a.address),...(m.cc??[]).map(a=>a.address)])].map(a=>a.toLowerCase()),
+          text:searchableMessageText(m)}))
+        if(sources.some(s=>s.text.length>24000) || sources.reduce((n,s)=>n+s.text.length,0)>120000) return writeJson(response, 422, {error:'conversation_too_large',detail:'This conversation exceeds the current analysis size. Its work has not been marked up to date.'})
+        return writeJson(response, 200, {sources,accountEmail})
+      } catch(error) { return writeJson(response, 502, {error:'work_sources_unavailable',detail:String(error)}) }
     }
     if (request.method === 'GET' && url.pathname === '/v1/conversations') {
       const state = stateFilter(url.searchParams.get('state'))

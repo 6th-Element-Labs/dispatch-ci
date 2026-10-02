@@ -162,3 +162,11 @@ Editor saves can supply their original remote baseline. Mail compares changed fi
 The supported connector inventory exposes search pagination, not Gmail history checkpoints. Sync retains bounded head checks and complete-stream reconciliation; repeated token cycles and incomplete scans fail without reconciling missing mail as deleted. A history adapter or direct OAuth transport requires a supported provider capability or Dispatch-owned OAuth registration and is not implied by these repairs. Codex App Server remains the agent harness and connector transport.
 
 If managed Codex login renewal fails, the mail-owned projection exposes `reconnectRequired`. The Reconnect control starts App Server's `account/login/start` and opens its official OAuth URL in the system browser; App Server owns the localhost callback. Normal worker retries resume saving after sign-in. Manual refresh or wake can retry pending saves immediately. Browser recovery remains responsible for typing that has not yet been accepted by mail.
+
+## Durable work service
+
+EA and To-dos use the independently packaged `services/work` process on port 8413.
+It owns SQLite task/decision state, source links, contact/topic identity, extraction
+checkpoints and attention ranking. Mail exports canonical evidence over HTTP;
+agent exports bound Codex discussion evidence and provides structured inference
+through Codex App Server. Neither owns work records. See [EA and To-dos](EA_TODOS.md).

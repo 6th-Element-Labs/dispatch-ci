@@ -18,6 +18,12 @@
       "port": 8412,
       "store": "codex-owned-session-store",
       "owns": ["app-server-process", "agent-transport", "streamed-agent-events", "codex-execution-preferences"]
+    },
+    {
+      "name": "work",
+      "port": 8413,
+      "store": "work-sqlite",
+      "owns": ["tasks", "decisions", "contact-and-topic-context", "evidence-links", "extraction-checkpoints", "attention-ranking"]
     }
   ],
   "requirements": {
