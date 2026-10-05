@@ -79,6 +79,11 @@ async function routeMailFixtures(page: Page) {
     const bodyMarkdown = String(fields.bodyMarkdown ?? '')
     await route.fulfill({ status: 202, json: { draft: draftProjectionFromCommand(fields, String(fields.draftId ?? 'd1'), bodyMarkdown || (fields.messageId ? 'Thanks.' : '')) } })
   })
+  await page.route('http://127.0.0.1:8411/v1/draft-sends', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+    const fields = route.request().postDataJSON()
+    await route.fulfill({ status: 202, json: { receipt: { id: 'send-default', accountId: fields.accountId, draftId: fields.draftId ?? 'd1', status: 'accepted', messageId: 'sent-default' } } })
+  })
   await page.route('http://127.0.0.1:8411/v1/drafts/preview', async (route) => {
     const request = await route.request().postDataJSON() as { bodyMarkdown: string }
     await route.fulfill({ json: { bodyHtml: `<p>${request.bodyMarkdown}</p>` } })
@@ -652,7 +657,6 @@ test('previews a new compose draft with account, Cc, and Bcc before saving', asy
   await page.getByRole('textbox', { name: 'Draft Bcc' }).fill('audit@example.com')
   await page.getByRole('textbox', { name: 'Draft subject' }).fill('Project update')
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Draft preview')
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect.poll(() => draftRequest).toEqual({ messageId: '', clientDraftId: expect.any(String), accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyMarkdown: 'Draft preview', attachments: [] })
 })
 
@@ -713,7 +717,7 @@ test('autosaves each saved-draft header and keeps the account locked', async ({ 
   })
   await page.goto('/')
   await page.getByRole('button', { name: 'Compose' }).click()
-  await page.getByRole('button', { name: 'Save draft' }).click()
+  await page.getByRole('textbox', { name: 'Draft body' }).fill('Initial saved text')
   await expect(page.getByRole('combobox', { name: 'Draft account' })).toBeDisabled()
 
   const changes: Array<[string, string, string]> = [
@@ -1246,7 +1250,9 @@ test('edits, saves, and sends a Gmail draft from the middle panel', async ({ pag
     const projection = draftProjectionFromCommand(fields, String(fields.draftId ?? 'draft-1'))
     await route.fulfill({ status: 202, json: { draft: { ...projection, inReplyToMessageId: 'm1', to: [messages[0]!.sender] } } })
   })
-  await page.route(/http:\/\/127\.0\.0\.1:8411\/v1\/drafts\/draft-1\?action=send.*/, async (route) => {
+  await page.route('http://127.0.0.1:8411/v1/draft-sends', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+    expect(route.request().postDataJSON()).toMatchObject({ to: 'ana@example.com', cc: 'manager@example.com', bcc: 'audit@example.com', bodyMarkdown: String.raw`\*\*Approved reply\*\*` })
     sendCount += 1
     await route.fulfill({ json: { receipt: { id: 'receipt-1', draftId: 'draft-1', accountId: 'link-one', accountLabel: 'work@example.com', messageId: 'sent-1', status: 'accepted', requestedAt: '2026-09-08T01:00:00Z', detailsSource: 'draft', details: { to: ['ana@example.com'], cc: ['manager@example.com'], bcc: ['audit@example.com'], subject: 'Re: Opua berth confirmation', attachments: [] } } } })
   })
@@ -1260,11 +1266,9 @@ test('edits, saves, and sends a Gmail draft from the middle panel', async ({ pag
   await page.getByRole('textbox', { name: 'Draft Cc' }).fill('manager@example.com')
   await page.getByRole('button', { name: 'Add Bcc', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft Bcc' }).fill('audit@example.com')
-  await page.getByRole('button', { name: 'Send draft' }).click()
-  await expect(page.getByRole('button', { name: 'Send now' })).toBeVisible()
-  await expect(page.locator('[data-send-confirm-text]')).toHaveText('To: ana@example.com\nCc: manager@example.com\nBcc: audit@example.com\nSubject: Re: Opua berth confirmation')
-  expect(sendCount).toBe(0)
-  await page.getByRole('button', { name: 'Send now' }).click()
+  await page.locator('[data-send-draft]').click()
+  await expect(page.locator('[data-send-confirm]')).toHaveCount(0)
+  await expect(page.locator('[data-draft]')).toBeHidden()
   await expect.poll(() => sendCount).toBe(1)
   await expect(page.locator('[data-receipts-dialog]')).toBeHidden()
 })
@@ -1778,7 +1782,7 @@ test('collapses an unsent draft without losing edits and gives space back to the
   await expect(page.locator('[data-draft] .card-header [data-recovery-status]')).toBeAttached()
   await expect(body).toBeHidden()
   await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeHidden()
-  await expect(page.getByRole('button', { name: 'Send draft', exact: true })).toBeHidden()
+  await expect(page.locator('[data-send-draft]')).toBeHidden()
   expect((await page.locator('[data-body]').boundingBox())!.height).toBeGreaterThan(before!.height)
   const expand = page.getByRole('button', { name: 'Expand draft', exact: true })
   await expand.focus(); await page.keyboard.press('Enter')
@@ -2087,7 +2091,6 @@ test('adds a recipient chip from mail autocomplete', async ({ page }) => {
   await page.getByRole('button', { name: 'Compose' }).click()
   await page.getByRole('textbox', { name: 'Draft recipient' }).fill('ana')
   await page.getByRole('option', { name: 'Ana Morales <ana@example.com>' }).click()
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect.poll(() => draftRequest?.to).toBe('ana@example.com')
   await expect(page.getByRole('button', { name: 'Remove ana@example.com' })).toBeVisible()
 })
@@ -2632,7 +2635,7 @@ test('cached draft opens immediately and a late refresh cannot overwrite newer e
   await page.goto('/')
   await page.getByRole('button', { name: 'Drafts', exact: true }).click()
   await expect(page.getByLabel('Draft body')).toHaveText('Stored content')
-  await expect(page.locator('[data-send-draft]')).toBeDisabled()
+  await expect(page.locator('[data-send-draft]')).toBeEnabled()
   await expect.poll(() => Boolean(refreshing)).toBe(true)
   await page.getByLabel('Draft body').fill('My newer edit')
   await refreshing!.fulfill({ json: { draft: { ...draft, cachedAt: undefined, bodyMarkdown: 'Remote older version' } } })
@@ -2822,8 +2825,10 @@ for (const hasRecipient of [true, false]) {
     const writes: string[] = []
     const draft = { id: 'send-existing', accountId: 'account-A', inReplyToMessageId: 'm1', to: hasRecipient ? [messages[0]!.sender] : [], cc: '', bcc: '', subject: 'Existing draft', bodyMarkdown: 'Read-only projection', bodyHtml: '<p>Original HTML</p>', bodyText: 'Read-only projection', attachments: [], state: 'draft' }
     await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft } }))
-    await page.route(/8411\/v1\/drafts\/send-existing/, route => {
-      writes.push(route.request().method() + ':' + new URL(route.request().url()).searchParams.get('action'))
+    await page.route('http://127.0.0.1:8411/v1/draft-sends', route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+      writes.push(route.request().method() + ':send')
+      expect(route.request().postDataJSON()).not.toHaveProperty('bodyMarkdown')
       return route.fulfill({ json: route.request().method() === 'PUT' ? { draft } : { delivery: { id: 'sent-message' } } })
     })
     await page.goto('/')
@@ -2831,11 +2836,10 @@ for (const hasRecipient of [true, false]) {
     await expect(page.locator('[data-draft-body]')).toHaveText('Read-only projection')
     await page.locator('[data-send-draft]').click()
     if (hasRecipient) {
-      await page.locator('[data-send-confirm-go]').click()
       await expect.poll(() => writes).toEqual(['POST:send'])
     } else {
       await expect(page.locator('[data-draft-error]')).toContainText('Add a recipient')
-      await expect(page.locator('[data-send-confirm]')).toBeHidden()
+      await expect(page.locator('[data-send-confirm]')).toHaveCount(0)
       expect(writes).toEqual([])
     }
   })
@@ -3041,7 +3045,6 @@ test('resolves only the affected draft inline and keeps typing made while choosi
   await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft subject' }).fill('Local subject')
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Local version')
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect(page.locator('[data-draft-conflict]')).toBeVisible()
   await expect(page.locator('[data-draft-conflict-summary]')).toContainText('subject, message')
   await expect(page.locator('[data-draft-conflict-remote]')).toContainText('Remote Gmail text')
@@ -3084,7 +3087,6 @@ test('keeps typing made during Keep my edits and accepts a follow-up save', asyn
   await page.goto('/')
   await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.getByRole('textbox', { name: 'Draft body' }).fill('My edits')
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect(page.locator('[data-draft-conflict]')).toBeVisible()
   await page.getByRole('button', { name: 'Keep my edits' }).click()
   await expect.poll(() => Boolean(resolution)).toBe(true)
@@ -3126,14 +3128,12 @@ test('keeps a saved Codex attachment during stale queued-editor saves and permit
   await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await expect(page.locator('[data-draft]')).toBeVisible()
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Before append')
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect.poll(() => commands.length).toBe(1)
   expect(commands[0]?.body).toMatchObject({ bodyMarkdown: 'Before append', attachments: [] })
 
   // The Codex attachment append completes remotely while this editor still has the older file list.
   remoteAppendReady = true
   await page.getByRole('textbox', { name: 'Draft body' }).fill('After append')
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect.poll(() => Boolean(commands[1]?.route)).toBe(true)
   expect(commands[1]?.body).toMatchObject({
     draftId: 'queued-append-race', bodyMarkdown: 'After append',
@@ -3177,7 +3177,6 @@ test('removing a visible pending append uses only the observed attachment baseli
   await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await expect(page.locator('[data-draft]')).toBeVisible()
   await page.getByRole('textbox', { name: 'Draft body' }).fill('Before append')
-  await page.getByRole('button', { name: 'Save draft' }).click()
   await expect.poll(() => commands.length).toBe(1)
 
   await page.locator('[data-draft-files]').setInputFiles({ name: 'pending.txt', mimeType: 'text/plain', buffer: Buffer.from('file bytes') })
@@ -3260,7 +3259,6 @@ test('keeps a new draft and says so when Discard follows a save Gmail may have c
   await page.goto('/')
   await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.locator('[data-draft-body]').fill('Maybe saved')
-  await page.locator('[data-save-draft]').click()
   await expect.poll(() => Boolean(pendingCreate)).toBe(true)
   await page.locator('[data-discard-draft]').click()
   await pendingCreate!.fulfill({ status: 504, json: { error: 'gmail_draft_create_failed', detail: 'Timed out waiting for Gmail.' } })
@@ -3307,21 +3305,22 @@ test('keeps a newer recovery copy while an older Gmail save is pending', async (
   await page.route('http://127.0.0.1:8411/v1/draft-saves', route => { pending = route })
   await page.goto('/'); await page.getByRole('button', { name: 'Compose', exact: true }).click()
   await page.locator('[data-draft-body]').fill('Older text')
-  await page.locator('[data-save-draft]').click(); await expect.poll(() => Boolean(pending)).toBe(true)
+  await expect.poll(() => Boolean(pending)).toBe(true)
   await page.locator('[data-draft-body]').fill('Newer text')
   await pending!.fulfill({ json: { draft: { id: 'saved', accountId: 'one', inReplyToMessageId: '', to: [], subject: '', bodyMarkdown: 'Older text', bodyText: 'Older text', bodyHtml: '<p>Older text</p>', attachments: [], state: 'draft' } } })
   await expect(page.locator('[data-draft-body]')).toHaveText('Newer text')
   expect((await localRecovery(page))[0]?.bodyMarkdown).toBe('Newer text')
 })
 
-test('keeps sending quiet and locks edits until Gmail responds', async ({ page }) => {
+test('Send closes the editor immediately while Gmail is still responding', async ({ page }) => {
   const draft = { id: 'd-receipt', accountId: 'one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Delivery', bodyMarkdown: 'Hello', bodyText: 'Hello', bodyHtml: '<p>Hello</p>', attachments: [], state: 'draft' }
   let pending: import('@playwright/test').Route | undefined
   await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft } }))
-  await page.route(/8411\/v1\/drafts\/d-receipt/, route => { pending = route })
+  await page.route('http://127.0.0.1:8411/v1/draft-sends', route => { if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } }); pending = route })
   await page.goto('/'); await page.getByRole('button', { name: 'Reply', exact: true }).click()
-  await page.locator('[data-send-draft]').click(); await page.locator('[data-send-confirm-go]').click()
-  await expect(page.locator('[data-draft-body]')).toBeDisabled()
+  await page.locator('[data-send-draft]').click()
+  await expect(page.locator('[data-draft]')).toBeHidden()
+  await expect(page.locator('[data-send-status]')).toContainText('Sending')
   await expect.poll(() => Boolean(pending)).toBe(true)
   await pending!.fulfill({ json: { receipt: { id: 'receipt-proof', accountId: 'one', accountLabel: 'work@example.com', draftId: draft.id, messageId: 'provider-id', status: 'verified', requestedAt: '2026-09-08T01:00:00Z', detailsSource: 'sent-message', details: { to: ['ana@example.com'], cc: ['cc@example.com'], bcc: ['audit@example.com'], subject: 'Delivery', attachments: [{ name: 'contract.pdf', mediaType: 'application/pdf', sizeLabel: '10 KB' }] } } } })
   await expect(page.locator('[data-receipts-dialog]')).toHaveCount(0)
@@ -3933,7 +3932,7 @@ for (const dirty of [false, true]) test(`Codex's durable draft opens pending and
   await page.evaluate(draft => (window as any).queueEvents.onmessage({ data: JSON.stringify({ method: 'item/completed', params: { item: { type: 'mcpToolCall', server: 'dispatch_mail', tool: 'create_draft', status: 'completed', result: { structuredContent: { draft } } } } }) }), pendingDraft)
   await expect(page.locator('[data-draft-body]')).toHaveText('AI draft text')
   await expect(page.locator('[data-recovery-status]')).toHaveText('Saved · waiting to sync')
-  await expect(page.locator('[data-send-draft]')).toBeDisabled()
+  await expect(page.locator('[data-send-draft]')).toBeEnabled()
   confirmed = true
   if (dirty) {
     await expect.poll(() => Boolean(confirmingRead), { timeout: 8000 }).toBe(true)
@@ -3980,7 +3979,6 @@ test('rich draft formatting survives saving and reopening', async ({ page }) => 
   await page.getByRole('textbox', { name: 'Link URL' }).fill('https://example.com/review')
   await page.getByRole('button', { name: 'Apply link', exact: true }).click()
   await expect(body.locator('a')).toHaveAttribute('href', 'https://example.com/review')
-  await page.getByRole('button', { name: 'Save draft', exact: true }).click()
   await expect.poll(() => String(saved.at(-1)?.bodyMarkdown)).toBe('**[Formatted words](https://example.com/review)**')
   expect(String(saved.at(-1)?.bodyMarkdown)).toContain('https://example.com/review')
   await page.route('http://127.0.0.1:8411/v1/drafts/open', route => route.fulfill({ json: { draft: draftProjectionFromCommand(saved.at(-1)!, 'rich-one') } }))
@@ -4314,4 +4312,62 @@ test('work controls stay visible above a long email and Contact follows the late
   await page.getByRole('button',{name:'Contact context',exact:true}).click()
   await expect.poll(()=>bindings.some(b=>b.kind==='contact'&&b.contextId==='james@example.com')).toBe(true)
   await expect(review).toBeInViewport()
+})
+
+for (const navigate of [false, true]) {
+  test(`failed Send keeps the exact reply${navigate ? ' without replacing a newer compose' : ' and reopens it'}`, async ({ page }) => {
+    await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'demo', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+    let resolveStatus!: () => void
+    const gate = new Promise<void>(resolve => { resolveStatus = resolve })
+    await page.route('http://127.0.0.1:8411/v1/draft-sends', async route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+      expect(route.request().postDataJSON()).toMatchObject({ bodyMarkdown: 'Send exactly this reply' })
+      return route.fulfill({ status: 202, json: { receipt: { id: 'pending-send', accountId: 'demo', status: 'preparing' } } })
+    })
+    await page.route('http://127.0.0.1:8411/v1/draft-sends/pending-send', async route => {
+      await gate
+      return route.fulfill({ json: { receipt: { id: 'pending-send', accountId: 'demo', status: 'failed', error: 'Gmail unavailable. Nothing was sent.' } } })
+    })
+    await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft: { ...draftProjectionFromCommand({ accountId: 'demo', to: 'ana@example.com', subject: 'Reply' }, 'd1') } } }))
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Reply', exact: true }).click()
+    await page.locator('[data-draft-body]').fill('Send exactly this reply')
+    await page.locator('[data-send-draft]').click()
+    await expect(page.locator('[data-draft]')).toBeHidden()
+    if (navigate) {
+      await page.getByRole('button', { name: 'Compose', exact: true }).click()
+      await page.locator('[data-draft-body]').fill('A completely different email')
+    }
+    resolveStatus()
+    await expect(page.locator('[data-send-status]')).toBeHidden()
+    await expect(page.locator('[data-draft-body]')).toHaveText(navigate ? 'A completely different email' : 'Send exactly this reply')
+    await expect(page.locator(navigate ? '[data-mail-error]' : '[data-draft-error]')).toContainText('Nothing was sent')
+  })
+}
+
+test('reply Send handles a locally queued autosave without requiring Save or a second confirmation', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/draft-saves', async route => {
+    const fields = route.request().postDataJSON()
+    await route.fulfill({ status: 202, json: { draft: { ...draftProjectionFromCommand(fields, 'queued-123'), syncState: 'pending' } } })
+  })
+  let sends = 0
+  await page.route('http://127.0.0.1:8411/v1/draft-sends', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+    sends++
+    expect(route.request().postDataJSON()).toMatchObject({ draftId: 'queued-123' })
+    return route.fulfill({ status: 202, json: { receipt: { id: 'one-send', accountId: 'demo', status: 'accepted' } } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/drafts/queued-123?account=demo', route => route.fulfill({ json: { draft: { ...draftProjectionFromCommand({ accountId: 'demo', to: 'ana@example.com', bodyMarkdown: 'Queued reply' }, 'queued-123'), syncState: 'pending', syncError: 'Gmail is saving this reply' } } }))
+  await page.route('http://127.0.0.1:8411/v1/drafts', route => route.fulfill({ json: { draft: { ...draftProjectionFromCommand({ accountId: 'demo', to: 'ana@example.com', subject: 'Reply' }, 'd1') } } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply', exact: true }).click()
+  await page.locator('[data-draft-body]').fill('Queued reply')
+  // Demo saves use their direct path; return a pending projection there too.
+  await page.route(/8411\/v1\/drafts\/d1/, route => route.fulfill({ json: { draft: { ...draftProjectionFromCommand({ accountId: 'demo', to: 'ana@example.com', bodyMarkdown: 'Queued reply' }, 'queued-123'), syncState: 'pending', syncError: 'Gmail is saving this reply' } } }))
+  await expect(page.locator('[data-recovery-status]')).toHaveText('Gmail is saving this reply')
+  await expect(page.locator('[data-send-draft]')).toBeEnabled()
+  await expect(page.locator('[data-save-draft], [data-send-confirm]')).toHaveCount(0)
+  await page.locator('[data-send-draft]').click()
+  await expect(page.locator('[data-draft]')).toBeHidden()
+  await expect.poll(() => sends).toBe(1)
 })

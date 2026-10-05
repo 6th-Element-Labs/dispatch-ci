@@ -184,6 +184,18 @@ export const api = {
     })
     return result.draft
   },
+  async submitDraftSend(fields: Record<string, unknown>): Promise<{ draft?: DraftProjection; receipt: SendReceipt }> {
+    return request(`${MAIL}/v1/draft-sends`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(durableDraftFields(fields)) })
+  },
+  async pendingSends(): Promise<SendReceipt[]> {
+    return (await request<{ sends: SendReceipt[] }>(`${MAIL}/v1/draft-sends`)).sends
+  },
+  async failedSendDraft(id: string): Promise<DraftProjection | undefined> {
+    return (await request<{ draft?: DraftProjection }>(`${MAIL}/v1/draft-sends/${encodeURIComponent(id)}`)).draft
+  },
+  async draftSendStatus(id: string): Promise<SendReceipt> {
+    return (await request<{ receipt: SendReceipt }>(`${MAIL}/v1/draft-sends/${encodeURIComponent(id)}`)).receipt
+  },
   async sendDraft(id: string, accountId: string): Promise<SendReceipt | undefined> {
     const result = await request<{ receipt?: SendReceipt }>(`${MAIL}/v1/drafts/${encodeURIComponent(id)}?action=send&account=${encodeURIComponent(accountId)}`, { method: 'POST' })
     return result.receipt

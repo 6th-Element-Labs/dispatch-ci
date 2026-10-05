@@ -662,3 +662,21 @@ it('exports bounded work evidence from the exact account and refuses incomplete 
   const response=await fetch(base+'/v1/work/sources?account=a&thread=t');expect(response.status).toBe(200);expect(await response.json()).toMatchObject({sources:[{kind:'email',accountId:'a',messageId:'m',text:'I will send the proposal.',accountEmail:'boss@example.com'}]})
   complete=false;expect((await fetch(base+'/v1/work/sources?account=a&thread=t')).status).toBe(409)
 })
+
+it('accepts an editor send snapshot immediately and exposes its background status without a provider send call', async () => {
+  const draft = projectDraft({ id: 'queued-snapshot', accountId: 'one', inReplyToMessageId: 'm1', to: [], subject: 'Reply', bodyMarkdown: 'Current text' })
+  const receipt = { id: 'attempt', accountId: 'one', accountLabel: 'work@example.com', draftId: draft.id, requestedAt: new Date().toISOString(), status: 'preparing' as const, detailsSource: 'unavailable' as const }
+  const enqueue = vi.fn(() => ({ ...draft, draftRevision: 7 }))
+  const begin = vi.fn(() => receipt)
+  const send = vi.fn(async () => { throw new Error('HTTP acceptance must not wait for delivery') })
+  const base = await start({}, { enqueueDraftSave: enqueue, beginGmailDraftSend: begin, sendGmailDraft: send, sendReceipt: id => id === receipt.id ? receipt : undefined })
+  const submit = (fields: object) => fetch(`${base}/v1/draft-sends`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) })
+  const accepted = await submit({ accountId: 'one', messageId: 'm1', to: 'recipient@example.com', bodyMarkdown: 'Current text' })
+  expect(accepted.status).toBe(202)
+  expect(await accepted.json()).toMatchObject({ receipt: { id: 'attempt', status: 'preparing' } })
+  expect(begin).toHaveBeenCalledWith('one', draft.id, 7)
+  expect(send).not.toHaveBeenCalled()
+  expect(await (await fetch(`${base}/v1/draft-sends/attempt`)).json()).toMatchObject({ receipt: { id: 'attempt' } })
+  expect((await submit({ accountId: 'one', to: '', bodyMarkdown: 'Do not send' })).status).toBe(400)
+  expect(enqueue).toHaveBeenCalledTimes(1)
+})
