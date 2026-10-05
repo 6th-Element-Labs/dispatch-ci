@@ -26,7 +26,11 @@ it('does not keep retrying conclusively missing contact history or block later m
  const {store,scanner}=setup();
  store.enqueue({key:'empty-chat',accountId:'a',kind:'codex',contextId:'empty',revision:'1',priority:3});
  const mock=vi.mocked(fetch),original=mock.getMockImplementation()!;
- mock.mockImplementation(async(input,init)=>String(input).includes('/v1/work/discussions')?Response.json({error:'discussion_history_missing'},{status:410}):original(input,init));
+ mock.mockImplementation(async(input,init)=>{
+   if(String(input).includes('/v1/work/discussions'))return Response.json({error:'discussion_history_missing'},{status:410});
+   if(String(input).endsWith('/v1/work/briefing')){const payload=JSON.parse(String(init?.body));return Response.json({lead:[],entries:payload.items.map((i:any)=>({itemId:i.id,section:'waiting',text:i.summary}))});}
+   return original(input,init);
+ });
  await scanner.scan();
  expect(store.state()).toMatchObject({failures:0,error:null});
  expect(store.coverage()).toMatchObject({failed:0,pending:0});
