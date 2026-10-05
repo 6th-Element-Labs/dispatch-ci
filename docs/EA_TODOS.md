@@ -1,94 +1,164 @@
-# EA and work across threads
+# EA daily briefing and automatic To-dos
 
-Dispatch keeps work attached to people and topics rather than to one email subject.
-The EA page and To-dos page are projections of the same local records. Every inferred
-item has an exact quote and a link to its email or completed Codex discussion.
+Dispatch has two distinct work pages. EA is a saved morning newspaper. To-dos is
+continuing work across emails, people, topics and imported calls. The approved
+requirements are in [EA_TODOS_SCOPE.md](EA_TODOS_SCOPE.md).
 
-## Ownership
+## Ownership and defaults
 
-`services/work` is an independent localhost service on port 8413. It alone writes
-`~/Library/Application Support/Dispatch/work.sqlite`. SQLite transactions store
-tasks, decisions, source evidence, user overrides, scan settings and content
-fingerprints. No service reads another service's database or private session files.
-Mail owns message projection and excludes draft, trash and spam sources. Agent
-owns access to Codex histories and calls the existing Codex App Server for structured
-extraction. Web renders the work service's ordering and filters.
+Work is an independent localhost service on 8413. Its SQLite store owns tasks,
+decisions, informative topic updates, review jobs/checkpoints, transcripts, change
+history, settings and briefing editions. Mail owns canonical message evidence and
+its transactional change feed. Agent owns completed-chat delivery and calls the
+actual Codex App Server. Web renders those HTTP projections. No service reads
+another service's database or private Codex session files.
 
-A contact identity is a normalized email address within a connected account.
-Aliases are not merged by name. Topics have stable account-scoped IDs. Contact and
-topic Codex chats have separate durable bindings, alongside existing email bindings.
+Automatic review defaults to all connected accounts and the last 90 days of
+**indexed** email. Inbox, Sent and Archive are eligible; drafts, Spam and Trash are
+excluded. Coverage is explicitly indexed mail, not a claim that every Gmail body
+has already downloaded. The review window, selected accounts, important contacts
+and topics, automatic review and local briefing time are configurable.
 
-## Extraction and continuity
+The default morning edition is prepared at or after 8 AM local time while Dispatch
+runs. A closed or sleeping app prepares after launch/wake; there is no cloud job
+or promise of an edition while the device is off. Existing saved work and editions
+remain readable when Gmail or Codex is offline.
 
-The user starts review with Find open work or Find to-dos in this thread. A mailbox
-review initially covers up to 30 recent indexed conversations per account, across
-Inbox, Sent and Archive. Include older threads expands this window by 30. Once
-started, review runs every five minutes while the background service runs. Its
-progress, failures and window are visible; it does not claim full-mailbox coverage.
+## Durable automatic review
 
-The mail service reuses complete downloaded conversations when the indexed message
-IDs are all present. The work service hashes the supplied email and completed chat
-sources. Unchanged evidence does not trigger another model call. Changed evidence
-is sent with relevant existing records through a dedicated ephemeral App Server
-thread and `turn/start.outputSchema`. This is one inference request through the
-actual Codex harness, not an alternative agent loop. Apps, shell, web and configured
-MCP servers are disabled for extraction. The user's interactive chats retain their
-normal permission settings.
+Mail notices are committed in the same transaction as indexed message changes.
+Agent journals completed bound email/contact/topic turns and seeds bindings after
+restart to recover missed completion delivery. Work commits queued jobs and its
+source cursor together. Review runs on launch and checks changes every 30 seconds,
+including while a longer inference runs. New mail, completed chats and transcript
+imports take priority over initial history review.
 
-The model proposes records and existing-item links. The work service rejects
-unknown accounts, identities, owners, invalid dates and quotes absent from the
-supplied source. Validation precedes one transaction; a failed extraction never
-advances the fingerprint. Explicit commitments and suggestions remain distinct.
-Dates and owners can be unknown. Older evidence cannot roll back newer completion.
+Jobs survive restart and retry with a bounded delay. Failures and pending counts
+stay visible on the work pages. Pause cancels active work without advancing a source
+fingerprint. Unchanged evidence skips inference. Large sources are segmented with
+stable positions and overlap, then reviewed in small bounded batches. All proposals
+for a source job are validated and committed together; a failed later batch does
+not partially accept earlier proposals.
 
-User edits, Done, Dismiss and Snooze take precedence over all future extraction.
-Each edited field is protected separately: renaming a task still allows later
-evidence to mark it complete. Undo restores the earlier values and override state.
-Version checks prevent stale browser or Codex commands from overwriting a newer
-edit. A new weekly email is reconciled with existing work for its participants.
-Completed contact/topic chats are included on the next review of related mail.
-New email chats receive saved work for the sender, including completed work and
-decisions. A work-service outage leaves normal email chat usable and explicitly
-marks that earlier context unavailable. Email, Contact and Topic controls select
-separate chats; source-history links are read-only until a scope is selected.
-The agent reads each chat's history contract: paginated Codex threads use
-`thread/turns/list` with full items; older threads retain legacy hydration. Resume
-requests exclude history, so a deprecated history path cannot break the binding.
+Each inference uses an ephemeral thread and structured output in the existing
+Codex App Server, using the configured model with its lowest supported normal
+reasoning effort. Extraction has no shell, apps, web or MCP action tools. It yields
+to interactive Codex. The user's chat model, effort and access settings stay intact.
+Normal email service requests never wait for a work inference.
 
-## API contract
+## To-dos and continuity
 
-All endpoints use JSON, localhost only and bounded requests. Errors carry `error`
-and `detail`. Service dependency errors leave persisted work available.
+Contacts are formal normalized email addresses within an account. Display names do
+not merge identities. Topics and obligations have stable account-scoped IDs. The
+model receives related existing work so a new subject or weekly meeting can continue
+an obligation. Similar titles alone do not merge separate deliverables.
 
-- Mail `GET /v1/work/candidates?limit=30`: recent indexed conversation summaries.
-- Mail `GET /v1/work/sources?account=…&thread=…`: source IDs, account, addresses,
-  timestamps and canonical message text. Incomplete or oversized sources fail
-  explicitly rather than being silently marked reviewed.
-- Agent `GET /v1/work/sources?account=…&thread=…&contacts=…&topics=…`: completed
-  human/assistant messages from durable bindings, with chat/turn/item provenance.
-- Agent `POST /v1/work/extract`: `{sources, existing}` → `{items}` with strict
-  structured output; interrupted/failed turns are failures.
-- Work `GET /v1/work`: items, decisions, people, topics, review status. Optional
-  account/contact/topic/thread/filter parameters; ranking belongs to this service.
-- Work `GET /v1/work/context`: bounded contact/topic context, including closed work
-  and decisions, with explicit total/returned/limited coverage.
-- Work `POST /v1/work/scan`: start/refresh review, or `{more:true}` for older mail.
-- Work `POST /v1/work/pause`: pause automatic review and cancel pending extraction.
-- Work `POST /v1/work/analyze`: review one exact account/thread.
-- Work `POST /v1/work/items/:id`: expected revision plus user changes.
-- Work `POST /v1/work/items/:id/undo`: restore the previous user action at its exact revision.
-- Agent's Dispatch MCP exposes `list_work` and `update_todo` over those same APIs.
+Work rejects mismatched accounts, unsupported contacts/owners, invalid calendar
+dates, unknown existing IDs and quotes absent from their sources before committing.
+Explicit commitments remain separate from suggestions. Unknown owners and dates
+stay unknown. Only fulfillment evidence or a user action marks a task done; a
+promise or absence from this week's discussion is not completion.
 
-## UI and acceptance
+Accepted records and source fingerprints carry extraction version 2. A version change queues prior jobs for review without losing human corrections.
 
-EA and To-dos sit above mail in the compact/expanded rail and folder menu. To-dos
-provide All, Mine, Waiting, Done and Snoozed. A detail shows owner, due date, topic,
-contacts, exact evidence and source navigation. Done, Snooze, Dismiss and Undo use
-local durable writes. Edit details changes title, owner and due date. Draft follow-up
-opens the real unsent editor and asks Codex to fill it; it never sends automatically.
-Mail's destructive keyboard shortcuts are disabled while work is visible.
+User changes protect their edited fields. Done, Snooze and Dismiss survive future
+review. Renaming alone still allows supported completion. Revision checks prevent
+stale writes; Undo restores the prior action. A source trail records changes and
+exact evidence. Removed message evidence is retained and marked unavailable without
+erasing work or implying completion.
 
-Acceptance tests must cover two weekly threads from the same person, old Codex
-context, one continuing task after restart, preserved user actions, invalid evidence
-rollback, failed model responses, account isolation, and mail/work navigation.
-Real Gmail/Codex and native checks are reported separately from fixture-based tests.
+To-dos supports All, Mine, Waiting, Done, Snoozed and Dismissed, plus contact/topic
+views. Selecting a work item opens its actual current record, not an editable stale
+briefing snapshot. Source links open email, completed Codex history or a transcript
+passage. Draft follow-up opens the real unsent editor and asks Codex to populate it.
+It does not send automatically. Email, Contact and Topic keep separate Codex chats;
+new email chats can receive relevant saved work for the same people.
+
+## Calls
+
+Import TXT, VTT or SRT through either work page. Choose the mail account, title,
+meeting time and participant addresses. Optional confirmed speaker mappings connect
+names to email addresses. Unmapped speakers remain unknown owners; a participant
+list alone does not prove who said “I will.” Subtitle evidence links to its cue and
+available timestamp. Plain text retains its supplied text without invented timing.
+
+The same filename and meeting time identify a corrected import. Stable cue/source
+IDs and content revisions avoid duplicate imports and reconcile continuing work.
+Import failures keep the entered fields and chosen file so the user can retry.
+
+This version does not fetch Google Meet/Otter transcripts, record audio or join
+calls. Those provider capabilities require separate credentials and scope.
+
+## The daily newspaper
+
+EA opens a dated edition with At a glance, Needs your attention, Topic updates,
+Waiting on others, Today and next, and Since your briefing. Entries cite validated
+work and its original evidence. Informative updates can appear without creating a
+to-do. Attention ranking prioritizes explicit commitments, due work and marked
+important people/topics; the model explains relevant developments.
+
+A saved edition is immutable. Later reviewed changes, including completion, appear
+under Since your briefing. Create revised edition preserves the original. Recent
+editions and revisions are selectable; the date picker accesses older saved days.
+The first edition may use the work reviewed so far during backfill. Its pending,
+failed and synchronization coverage remains explicit; it never says a partial
+review is complete. A failed generation leaves the last completed edition intact
+and exposes Retry. Long or busy work queues do not erase existing editions.
+
+The model receives a bounded selection (up to 120 work records and 150k characters)
+and can create up to 80 entries. Selection counts show when more work exists than
+was considered. Saved records retain full accepted evidence, even when model input
+uses short excerpts. Dates and scope remain visible offline.
+
+## HTTP contracts
+
+JSON contracts are in `contracts/work.v1.json` and `contracts/work-inputs.v1.json`.
+All endpoints are localhost only; bounded failures carry `error` and `detail`.
+
+| Owner | Endpoint | Behavior |
+| --- | --- | --- |
+| Mail | GET /v1/work/changes?cursor=&since=&limit= | Durable paged changes, availability, account catalog and mail-sync coverage |
+| Mail | GET /v1/work/sources?account=&thread= | Complete eligible canonical message evidence |
+| Agent | GET /v1/work/changes?cursor= | Durable bound-discussion changes |
+| Agent | GET /v1/work/discussions?account=&chat= | Completed evidence from a verified account binding |
+| Agent | GET /v1/work/sources | Related completed email/contact/topic chat evidence |
+| Agent | POST /v1/work/extract | Structured proposed work; 429 when foreground Codex needs priority |
+| Agent | POST /v1/work/briefing | Structured cited newspaper text |
+| Work | GET /v1/work | Ranked tasks, decisions, updates, people/topics, coverage and settings |
+| Work | GET /v1/work/context | Bounded saved context with total/returned/limited counts |
+| Work | GET /v1/work/items/:id | Current record and change history |
+| Work | POST /v1/work/items/:id | Revision-checked user changes |
+| Work | POST /v1/work/items/:id/undo | Revision-checked undo |
+| Work | GET or POST /v1/work/settings | Read/change review settings |
+| Work | POST /v1/work/transcripts | Validate/store/enqueue a transcript without awaiting its extraction |
+| Work | GET /v1/work/transcript?account=&import= | Original import and canonical timestamped segments |
+| Work | GET /v1/work/briefing?edition=&date= | Saved edition, history, later changes and current coverage |
+| Work | POST /v1/work/briefing | Start a revised edition, return 202 immediately |
+| Work | POST /v1/work/scan | Refresh/retry; more:true expands history by 90 days |
+| Work | POST /v1/work/pause | Stop automatic review and cancel active inference |
+| Work | POST /v1/work/analyze | Explicit review of one account/thread |
+
+The internal Dispatch MCP `list_work` and `update_todo` use these same work APIs.
+
+## Qualification and limits
+
+Automated tests cover restart/cursor recovery, source revision races, continuation
+across email and two meetings, distinct same-title obligations, human overrides,
+unknown speakers, malformed subtitles, long-source batching, rollback after a failed
+later batch, account isolation, source removal, immutable editions/date history,
+newspaper navigation and preserved import inputs.
+
+A controlled **synthetic** benchmark used the actual Codex runtime 0.160.0: 20 email
+sources plus five transcript sources, with 50 labelled explicit commitments. It
+returned 50 correct commitments (50/50 precision and recall), the expected owners
+and dates, three supported later completions, zero duplicate obligations and 47
+cited briefing entries. The first oversized one-shot attempt timed out; smaller
+batches with lower background effort passed. This is runtime proof for that sample,
+not a general accuracy claim about real customer mail. User-labelled representative
+email/call review remains necessary before claiming those rates in the field.
+
+An isolated end-to-end test also used the real runtime: automatic email ingestion, two VTT imports through the HTTP intake, one continuing task, explicit completion, three evidence links, two preserved briefing revisions, and foreground interruption returning 429 all passed. This still used synthetic provider evidence.
+
+Native/provider acceptance, exact-commit public CI and the installed remote-main
+identity are reported separately in release evidence. Browser fixtures alone do
+not prove Gmail delivery or native behavior.

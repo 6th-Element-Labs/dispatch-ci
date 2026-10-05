@@ -59,6 +59,14 @@ export class CodexBindingStore {
     return this.#records.get(bindingRecordKey(key))
   }
 
+  workBindings():Array<{kind:'conversation'|'contact'|'topic';accountId:string;contextId:string;codexThreadId:string}> {
+    return [...this.#records].flatMap<{kind:'conversation'|'contact'|'topic';accountId:string;contextId:string;codexThreadId:string}>(([key,codexThreadId])=>{
+      if(key.startsWith('conversation:')){const tail=key.slice(13),separator=tail.lastIndexOf(':');return separator>0?[{kind:'conversation' as const,accountId:tail.slice(0,separator),contextId:tail.slice(separator+1),codexThreadId}]:[];}
+      const match=/^(contact|topic):(\[.*\])$/.exec(key);if(!match)return [];
+      const [accountId,contextId]=JSON.parse(match[2]!);return [{kind:match[1] as 'contact'|'topic',accountId,contextId,codexThreadId}];
+    });
+  }
+
   async put(key: CodexBindingKey, threadId: string): Promise<void> {
     if (!this.#loaded) await this.load()
     this.#records.set(bindingRecordKey(key), threadId)

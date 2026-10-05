@@ -17,6 +17,7 @@
     },
     { "source": "docs/PRODUCT.md", "destination": "docs/PRODUCT.md" },
     { "source": "docs/EA_TODOS.md", "destination": "docs/EA_TODOS.md" },
+    { "source": "docs/EA_TODOS_SCOPE.md", "destination": "docs/EA_TODOS_SCOPE.md" },
     { "source": "docs/ARCHITECTURE.md", "destination": "docs/ARCHITECTURE.md" },
     { "source": "docs/DESIGN.md", "destination": "docs/DESIGN.md" },
     { "source": "docs/assets", "destination": "docs/assets" },

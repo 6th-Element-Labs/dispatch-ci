@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { WorkStore } from './store.js';
 import { WorkScanner } from './worker.js';
 import { watchParent } from './parent-watch.js';
+import { getJson } from './worker.js';
+import { transcriptSources } from './sources.js';
 export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
     let draining = false;
     const server = createServer(async (req, res) => {
@@ -33,12 +35,17 @@ export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
                 return reply(200, { service: 'dispatch-work', draining, activeOperations: 0 });
             }
             if (req.method === 'GET' && url.pathname === '/v1/work/context')return reply(200,store.context(url.searchParams));
+            if (req.method === 'GET' && url.pathname === '/v1/work/briefing')return reply(200,{...store.briefingView(url.searchParams),status:store.briefingStatus()});
+            if (req.method === 'GET' && url.pathname === '/v1/work/settings')return reply(200,{settings:store.settings(),accounts:store.accounts()});
+            if (req.method === 'GET' && url.pathname === '/v1/work/transcript'){
+                const value=store.transcript(url.searchParams.get('account')??'',url.searchParams.get('import')??'');return reply(value?200:404,value??{error:'transcript_not_found'});
+            }
             if (req.method === 'GET' && url.pathname === '/v1/work')
                 return reply(200, store.view(url.searchParams));
             const match = /^\/v1\/work\/items\/([a-z0-9]+)(\/undo)?$/.exec(url.pathname);
             if (req.method === 'GET' && match && !match[2]) {
                 const item = store.get(match[1]!);
-                return reply(item ? 200 : 404, item ? { item } : { error: 'not_found' });
+                return reply(item ? 200 : 404, item ? { item,history:store.history(item.id) } : { error: 'not_found' });
             }
             if (req.method !== 'POST')
                 return reply(404, { error: 'not_found' });
@@ -48,7 +55,7 @@ export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
             let bytes = 0;
             for await (const chunk of req) {
                 bytes += chunk.length;
-                if (bytes > 64000)
+                if (bytes > (url.pathname==='/v1/work/transcripts'?2100000:64000))
                     return reply(413, { error: 'request_too_large' });
                 chunks.push(Buffer.from(chunk));
             }
@@ -58,11 +65,29 @@ export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
             if (match)
                 return reply(200, { item: match[2] ? store.undo(match[1]!,body.revision) : store.action(match[1]!, body) });
             if (url.pathname === '/v1/work/pause') {
+                store.configure({...store.settings(),enabled:false});
                 store.setState({ enabled: false });
                 await scanner.pause();
                 return reply(200, { scan: store.state() });
             }
+            if(url.pathname==='/v1/work/settings'){
+                if(Array.isArray(body.accounts)&&body.accounts.some((id:string)=>!store.accounts().some(a=>a.id===id)))return reply(400,{error:'unknown_review_account',detail:'Choose a connected mail account.'});
+                const settings=store.configure(body);if(settings.enabled)scanner.start();else await scanner.pause();return reply(200,{settings});
+            }
+            if(url.pathname==='/v1/work/briefing'){
+                void scanner.prepareBriefing(true).catch(()=>undefined);return reply(202,{status:store.briefingStatus()});
+            }
+            if(url.pathname==='/v1/work/transcripts'){
+                const {accounts}=await getJson(scanner.mailBase,'/v1/accounts');
+                const account=accounts.find((a:any)=>a.id===body.accountId);if(!account)return reply(400,{error:'unknown_account'});
+                if(!store.accountSelected(account.id))return reply(400,{error:'account_not_selected',detail:'Enable this account in review settings before importing its transcript.'});
+                const transcript=transcriptSources(body,account.email.toLowerCase());
+                store.importTranscript(account.id,transcript.input.importId,transcript,transcript.revision);
+                store.configure({...store.settings(),enabled:true});scanner.start(false);void scanner.scan().catch(()=>undefined);
+                return reply(202,{importId:transcript.input.importId,segments:transcript.sources.length,revision:transcript.revision});
+            }
             if (url.pathname === '/v1/work/scan') {
+                store.retryJobs();
                 scanner.start(false);
                 void scanner.scan(body.more === true).catch(() => undefined);
                 return reply(202, { scan: store.state() });

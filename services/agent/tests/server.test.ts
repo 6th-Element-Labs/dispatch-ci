@@ -928,3 +928,10 @@ it('persists separate Codex bindings for a contact, topic and email',async()=>{
   for(const key of keys){const response=await fetch(base+'/v1/threads/bindings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(key)});expect(response.status).toBe(200)}
   expect(new Set(keys.map(key=>bindings.get(key))).size).toBe(3)
 })
+
+it('defers background analysis while an interactive Codex chat is working',async()=>{
+ const {base,fake}=await startWithBindings();const receive=fake.subscribe.mock.calls[0]![0];receive({method:'turn/started',params:{threadId:'user-chat',turn:{id:'user-turn'}}});const response=await fetch(`${base}/v1/work/extract`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});expect(response.status).toBe(429);expect(await response.json()).toMatchObject({error:'interactive_codex_busy'});expect(fake.request).not.toHaveBeenCalledWith('thread/start',expect.anything());
+});
+it('publishes completed bound Codex discussions through the durable evidence feed only once',async()=>{
+ const {base,fake,bindings}=await startWithBindings();await bindings.put({kind:'contact',accountId:'account',contextId:'jacob@example.com'},'chat');const receive=fake.subscribe.mock.calls[0]![0];const complete={method:'turn/completed',params:{threadId:'chat',turn:{id:'turn',status:'completed'}}};receive(complete);receive(complete);const page=await (await fetch(`${base}/v1/work/changes?cursor=0`)).json();expect(page.events.filter((e:any)=>e.turnId==='turn')).toHaveLength(1);expect(page.events).toEqual(expect.arrayContaining([expect.objectContaining({accountId:'account',contextId:'jacob@example.com'})]));expect((await fetch(`${base}/v1/work/discussions?account=other&chat=chat`)).status).toBe(404);
+});
