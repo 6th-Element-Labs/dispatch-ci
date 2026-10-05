@@ -1826,7 +1826,8 @@ export class GmailConnectorProvider {
     const latest = new Map<string, SendReceipt>()
     for (const receipt of this.#local.receipts()) {
       if (!receipt.background) continue
-      const key = `${receipt.accountId}:${receipt.draftId}`
+      const identity = receipt.draftId ? this.#draftQueue.origin(receipt.accountId, receipt.draftId) ?? receipt.draftId : receipt.id
+      const key = `${receipt.accountId}:${identity}`
       if (!latest.has(key)) latest.set(key, receipt)
     }
     return [...latest.values()].filter(receipt => !['accepted', 'verified'].includes(receipt.status))

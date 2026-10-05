@@ -8,6 +8,7 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
   const createGate = new Promise<void>(resolve => { releaseCreate = resolve })
   let sends = 0
   let creates = 0
+  let deliveryOutcome = outcome
   let payload: Record<string, any> = {}
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
@@ -23,8 +24,8 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
     if (req.url?.endsWith('/read')) return res.end(JSON.stringify({ structuredContent: { id: 'm1', thread_id: 't1', label_ids: ['DRAFT'], internal_date: '1788486120000', payload: { mime_type: 'text/plain', headers: [{ name: 'From', value: 'test@example.com' }, { name: 'To', value: payload.to }, { name: 'Subject', value: payload.subject }, { name: 'Content-ID', value: `<${payload.draftContentId}>` }], body: { content: payload.bodyMarkdown } } } }))
     if (req.url?.endsWith('/drafts/send')) {
       sends++; expect(input.draftId ?? input.draft_id).toBe('saved')
-      if (outcome === 'rejected') { res.statusCode = 403; return res.end(JSON.stringify({ error: 'Provider rejected the send' })) }
-      if (outcome === 'unknown') { res.statusCode = 502; return res.end(JSON.stringify({ error: 'timeout after provider accepted send' })) }
+      if (deliveryOutcome === 'rejected') { res.statusCode = 403; return res.end(JSON.stringify({ error: 'Provider rejected the send' })) }
+      if (deliveryOutcome === 'unknown') { res.statusCode = 502; return res.end(JSON.stringify({ error: 'timeout after provider accepted send' })) }
       return res.end(JSON.stringify({ structuredContent: { id: 'sent' } }))
     }
     res.statusCode = 404; res.end('{}')
@@ -49,6 +50,14 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
       expect(provider.beginGmailDraftSend('one', draft.id).id).toBe(receipt.id)
       expect(provider.beginGmailDraftSend('one', 'saved').id).toBe(receipt.id)
       expect(sends).toBe(1)
+    }
+    if (outcome === 'rejected') {
+      expect(provider.backgroundSends()).toHaveLength(1)
+      deliveryOutcome = 'accepted'
+      const retry = provider.beginGmailDraftSend('one', 'saved')
+      await expect.poll(() => provider.sendReceipt(retry.id)?.status).toBe('accepted')
+      expect(sends).toBe(2)
+      expect(provider.backgroundSends()).toHaveLength(0)
     }
   } finally { releaseCreate(); provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
 })
