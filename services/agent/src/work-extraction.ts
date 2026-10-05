@@ -23,7 +23,7 @@ export async function extractWork(runtime: Runtime, raw: unknown, signal?: Abort
         throw new Error('Work extraction must use one account');
     return structuredWork(runtime,payload,workOutputSchema,instructions,signal,timeoutMs,onThread);
 }
-const briefFields={lead:{type:'array',items:{type:'object',properties:{text:string,itemIds:{type:'array',items:string}},required:['text','itemIds'],additionalProperties:false}},entries:{type:'array',items:{type:'object',properties:{itemId:string,section:{enum:['attention','updates','waiting','upcoming']},text:string},required:['itemId','section','text'],additionalProperties:false}}};
+const briefFields={lead:{type:'array',maxItems:5,items:{type:'object',properties:{text:string,itemIds:{type:'array',minItems:1,maxItems:30,items:string}},required:['text','itemIds'],additionalProperties:false}},entries:{type:'array',maxItems:80,items:{type:'object',properties:{itemId:string,section:{enum:['attention','updates','waiting','upcoming']},text:string},required:['itemId','section','text'],additionalProperties:false}}};
 export const briefingOutputSchema={type:'object',properties:briefFields,required:['lead','entries'],additionalProperties:false};
 export async function composeBriefing(runtime:Runtime,raw:unknown,signal?:AbortSignal,onThread?:(id:string)=>void){
     const payload=z.object({date:z.string(),items:z.array(z.object({id:z.string(),accountId:z.string(),title:z.string(),summary:z.string(),kind:z.enum(['task','decision','update'])}).passthrough()).min(1).max(120)}).strict().parse(raw);

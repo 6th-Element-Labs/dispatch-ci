@@ -129,7 +129,7 @@ export class WorkScanner {
             const cutoff=new Date().toISOString(),view=this.store.view(new URLSearchParams()),last=this.store.briefings()[0];
             const since=last?.cutoff??new Date(Date.now()-7*86400000).toISOString();
             const important=(item:any)=>Number(item.contacts.some((c:string)=>settings.importantContacts.includes(c))||settings.importantTopics.includes(item.topicId));
-            const candidates=[...view.items,...view.decisions.filter(i=>i.evidence.some(e=>e.source.at>=since)),...view.updates.filter(i=>i.evidence.some(e=>e.source.at>=since))].filter(i=>!['done','dismissed','snoozed'].includes(i.status)).sort((a,b)=>important(b)-important(a));
+            const candidates=[...view.items,...view.decisions.filter(i=>i.evidence.some(e=>e.source.at>=since)),...view.updates.filter(i=>i.evidence.some(e=>e.source.at>=since))].filter(i=>!['dismissed','snoozed'].includes(i.status)&&(i.kind!=='task'||i.status!=='done')).sort((a,b)=>important(b)-important(a));
             const items:typeof candidates=[],input:Record<string,unknown>[]=[];let inputBytes=0;
             for(const item of candidates){const bounded={...item,summary:item.summary.slice(0,600),evidence:item.evidence.slice(-2).map(e=>({quote:e.quote.slice(0,500),source:{id:e.source.id,kind:e.source.kind,author:e.source.author,title:e.source.title,at:e.source.at}}))},size=JSON.stringify(bounded).length;if(inputBytes+size>150000||input.length>=120)break;items.push(item);input.push(bounded);inputBytes+=size;}
             const content=items.length?await getJson(this.agentBase,'/v1/work/briefing',{method:'POST',body:JSON.stringify({date:day,items:input})},combined):{lead:[],entries:[]};
