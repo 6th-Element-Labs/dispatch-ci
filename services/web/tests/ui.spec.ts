@@ -4227,7 +4227,7 @@ test('Codex single-row footer keeps permissions and Stop visible in a narrow pan
   await expect(page.locator('.dispatch-agent-header').getByRole('button', { name: 'Codex settings' })).toBeVisible()
 })
 
-test('EA carries work across threads, preserves edits, and keeps mail actions scoped', async ({page}) => {
+test('To-dos carries work across threads, preserves edits, and keeps mail actions scoped', async ({page}) => {
   await stubAgent(page)
   const bindings:Record<string,unknown>[]=[]
   await page.route('http://127.0.0.1:8412/v1/threads/bindings',async route=>{const body=route.request().postDataJSON();bindings.push(body);await route.fulfill({json:{binding:{threadId:`work-${body.kind}-${body.contextId??body.gmailThreadId??'general'}`,created:false,replaced:false}}})})
@@ -4237,6 +4237,7 @@ test('EA carries work across threads, preserves edits, and keeps mail actions sc
   await page.route('http://127.0.0.1:8413/**',async route=>{
     const url=new URL(route.request().url())
     if(route.request().method()==='POST'&&url.pathname.endsWith('abc123')){Object.assign(item,route.request().postDataJSON(),{revision:item.revision+1});await route.fulfill({json:{item}});return}
+    if(url.pathname.includes('/items/')){await route.fulfill({json:{item,history:[]}});return}
     const filter=url.searchParams.get('filter')??'all'
     const visible=filter==='done'?item.status==='done':filter==='snoozed'?item.status==='snoozed':!['done','snoozed','dismissed'].includes(item.status)
     await route.fulfill({json:{items:visible?[item]:[],decisions:[decision],people:['jacob@example.com'],topics:[{id:'topic123',name:'September delivery',accountId:'demo'}],scan:{enabled:true,running:false,scanned:30,total:30,depth:30,lastScan:'2026-10-02T10:00:00Z',error:null,failures:0}}})
@@ -4244,8 +4245,8 @@ test('EA carries work across threads, preserves edits, and keeps mail actions sc
   let mailMutations=0
   page.on('request',request=>{if(request.method()==='POST'&&/8411.*\/actions/.test(request.url()))mailMutations++})
   await page.goto('/')
-  await page.locator('.dispatch-rail [data-work-nav="ea"]').click()
-  await expect(page.getByRole('heading',{name:'What needs you today'})).toBeVisible()
+  await page.locator('.dispatch-rail [data-work-nav="todos"]').click()
+  await expect(page.getByRole('heading',{name:'Work that stays with you'})).toBeVisible()
   await expect(page.getByRole('heading',{name:item.title,exact:true})).toBeVisible()
   await expect(page.getByText('Source trail')).toBeVisible()
   await expect.poll(()=>bindings.some(b=>b.kind==='topic'&&b.contextId==='topic123')).toBe(true)
@@ -4445,4 +4446,31 @@ for (const scenario of ['clean', 'late-edit', 'different-draft', 'without-tool-e
   await held!.fulfill({ json: { receipt: { id: 'confirmed', accountId: 'one', draftId: 'gmail-remote', status: 'verified', messageId: 'sent-id' } } })
   if (scenario === 'late-edit' || scenario === 'different-draft') await expect(page.locator('[data-draft-body]')).toHaveText(scenario === 'late-edit' ? 'Keep my later edit' : 'Different message')
   else await expect(page.locator('[data-draft]')).toBeHidden()
+})
+
+test('EA shows a fixed newspaper with separate later updates and dated history',async({page})=>{
+ await stubAgent(page)
+ const source={id:'mail-source',kind:'email',accountId:'demo',threadId:'t1',messageId:'m1',title:'Delivery update',at:'2026-10-05T08:00:00Z',author:'jacob@example.com',participants:['jacob@example.com'],text:''}
+ const item={id:'ea123',accountId:'demo',accountEmail:'steve@example.com',kind:'task',title:'Confirm delivery',summary:'Delivery needs confirmation.',topic:'Proposal',topicId:'topic123',contacts:['jacob@example.com'],owner:'jacob@example.com',due:'2026-10-09',status:'waiting',certainty:'explicit',snoozedUntil:null,revision:1,updatedAt:'2026-10-05T08:00:00Z',evidence:[{source,quote:'I will confirm delivery.'}]}
+ const settings={enabled:true,hour:8,minute:0,days:90,accounts:[],importantContacts:[],importantTopics:[]}
+ const coverage={scope:'indexed',from:'2026-07-07T08:00:00Z',discovered:10,reviewed:10,pending:0,failed:0,ingestionAt:'2026-10-05T08:00:00Z',mailSyncAt:'2026-10-05T08:00:00Z',mailState:'ready',caughtUp:true,complete:true}
+ const edition={id:'edition1',date:'2026-10-05',revision:1,preparedAt:'2026-10-05T08:00:00Z',cutoff:'2026-10-05T08:00:00Z',timezone:'Pacific/Fiji',items:[structuredClone(item)],coverage,selection:{total:1,included:1},content:{lead:[{text:'Delivery confirmation needs attention before Friday.',itemIds:[item.id]}],entries:[{itemId:item.id,section:'waiting',text:'Jacob owes the delivery confirmation.'}]}}
+ await page.route('http://127.0.0.1:8413/**',async route=>{
+  const url=new URL(route.request().url());if(url.pathname.includes('/items/'))return route.fulfill({json:{item,history:[]}})
+  if(url.pathname==='/v1/work/briefing')return route.fulfill({json:{edition,editions:[{id:edition.id,date:edition.date,revision:1,preparedAt:edition.preparedAt}],since:item.status==='done'?[item]:[],coverage,status:{running:false,error:null}}})
+  return route.fulfill({json:{items:item.status==='done'?[]:[item],decisions:[],updates:[],people:item.contacts,topics:[{id:item.topicId,name:item.topic,accountId:'demo'}],accounts:[{id:'demo',email:'steve@example.com'}],transcripts:[],settings,coverage,scan:{enabled:true,running:false,lastScan:edition.preparedAt,error:null,failures:0,scanned:10,total:10,depth:30}}})
+ })
+ await page.goto('/');await page.locator('.dispatch-rail [data-work-nav="ea"]').click()
+ await expect(page.getByRole('heading',{name:'Your morning briefing'})).toBeVisible();await expect(page.getByRole('heading',{name:'At a glance'})).toBeVisible();await expect(page.getByText('Delivery confirmation needs attention before Friday.',{exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Since your briefing'})).toBeVisible()
+ item.status='done';item.revision++;item.updatedAt='2026-10-05T10:00:00Z';await expect(page.getByText('Completed since this edition.',{exact:true})).toBeVisible({timeout:7000});await expect(page.getByText('Jacob owes the delivery confirmation.',{exact:true})).toBeVisible()
+ await page.getByRole('combobox',{name:'Briefing edition'}).selectOption('edition1');await expect(page.getByText('Delivery confirmation needs attention before Friday.',{exact:true})).toBeVisible();await page.locator('.briefing-entry').first().click();await expect(page.getByRole('button',{name:'Reopen',exact:true})).toBeVisible();await page.getByRole('button',{name:'Back to briefing'}).click();await expect(page.getByRole('heading',{name:'At a glance'})).toBeVisible();await page.screenshot({path:resolve('test-results','ea-newspaper.png'),fullPage:true})
+})
+
+test('imports call transcripts, retains inputs on failure, and opens timestamped evidence',async({page})=>{
+ await stubAgent(page)
+ const source={id:'cue',kind:'transcript',accountId:'demo',threadId:'meeting:weekly',messageId:'',importId:'weekly',title:'Weekly proposal call',at:'2026-10-05T08:00:00Z',author:'jacob@example.com',participants:['jacob@example.com'],text:'I will send the scope.',startSeconds:90}
+ const item={id:'call123',accountId:'demo',kind:'task',title:'Send the scope',summary:'Jacob will send the scope.',topic:'Proposal',topicId:'topic123',contacts:['jacob@example.com'],owner:'jacob@example.com',due:null,status:'waiting',certainty:'explicit',snoozedUntil:null,revision:1,updatedAt:source.at,evidence:[{source,quote:source.text}]}
+ const settings={enabled:true,hour:8,minute:0,days:90,accounts:[],importantContacts:[],importantTopics:[]},coverage={scope:'indexed',from:'2026-07-07T08:00:00Z',discovered:1,reviewed:1,pending:0,failed:0,ingestionAt:source.at,mailSyncAt:source.at,mailState:'ready',caughtUp:true,complete:true};const imports:Record<string,unknown>[]=[];let failed=true
+ await page.route('http://127.0.0.1:8413/**',async route=>{const url=new URL(route.request().url());if(url.pathname==='/v1/work/transcripts'){imports.push(route.request().postDataJSON());if(failed){failed=false;return route.fulfill({status:503,json:{error:'temporarily_unavailable',detail:'Transcript import temporarily unavailable.'}})}return route.fulfill({status:202,json:{importId:'weekly'}})}if(url.pathname==='/v1/work/transcript')return route.fulfill({json:{input:{title:source.title,at:source.at},sources:[source]}});if(url.pathname.includes('/items/'))return route.fulfill({json:{item,history:[]}});return route.fulfill({json:{items:[item],decisions:[],updates:[],people:item.contacts,topics:[{id:item.topicId,name:item.topic,accountId:'demo'}],accounts:[{id:'demo',email:'steve@example.com'}],transcripts:[],settings,coverage,scan:{enabled:true,running:false,lastScan:source.at,error:null,failures:0,scanned:1,total:1,depth:30}}})})
+ await page.goto('/');await page.locator('.dispatch-rail [data-work-nav="todos"]').click();await page.getByText('Import call transcript',{exact:true}).click();const form=page.locator('[data-work-import]');await form.locator('input[name=file]').setInputFiles({name:'weekly.vtt',mimeType:'text/vtt',buffer:Buffer.from('WEBVTT\n\n00:01:30.000 --> 00:01:35.000\n<v Jacob>I will send the scope.</v>')});await form.locator('input[name=at]').fill('2026-10-05T08:00');await form.locator('textarea[name=speakers]').fill('Jacob=jacob@example.com');await form.getByRole('button',{name:'Import transcript',exact:true}).click();await expect(page.getByRole('alert')).toContainText('temporarily unavailable');await expect(form.locator('input[name=title]')).toHaveValue('weekly');await form.getByRole('button',{name:'Import transcript',exact:true}).click();await expect.poll(()=>imports.length).toBe(2);expect(imports[1]).toMatchObject({format:'vtt',speakers:{Jacob:'jacob@example.com'},accountId:'demo'});await page.locator('[data-work=source]').click();await expect(page.getByRole('heading',{name:source.title})).toBeVisible();await expect(page.locator('[data-selected-transcript]')).toContainText('01:30');await page.waitForTimeout(5500);await expect(page.getByRole('heading',{name:source.title})).toBeVisible();await page.getByRole('button',{name:'Return to work'}).click();await expect(page.getByRole('heading',{name:item.title,exact:true})).toBeVisible()
 })

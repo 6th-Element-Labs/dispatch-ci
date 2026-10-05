@@ -1313,8 +1313,16 @@ export class GmailConnectorProvider {
   async readWorkConversation(accountId: string, threadId: string): Promise<ConversationProjection> {
     const cached=this.#local.conversation(accountId,threadId)
     const ids=this.#index?.threadMessageIds(accountId,threadId) ?? []
-    if(cached?.conversation.completeness?.complete && ids.length && ids.every(id=>cached.conversation.messages.some(m=>m.id===id))) return this.readConversation(accountId,threadId,true)
-    return this.readConversation(accountId,threadId)
+    const conversation=await this.readConversation(accountId,threadId,Boolean(cached?.conversation.completeness?.complete && ids.length && ids.every(id=>cached.conversation.messages.some(m=>m.id===id))))
+    const excluded=new Set(this.#index?.excludedWorkMessageIds(accountId,threadId)??[])
+    const messages=conversation.messages.filter(m=>!excluded.has(m.id));
+    if(!messages.length)throw new Error('This thread has no eligible email evidence.');
+    return {...projectConversation(messages,'gmail'),completeness:conversation.completeness,availability:conversation.availability}
+  }
+
+  workChanges(cursor:number,since:string,limit:number) {
+    if(!this.#index)throw new Error('The durable Gmail index is unavailable.');
+    return this.#index.workChanges(cursor,since,limit);
   }
 
   offlineStatus() { return { ...this.#local.stats(), download: this.#download } }

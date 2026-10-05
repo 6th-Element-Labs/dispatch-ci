@@ -2494,7 +2494,7 @@ async function openForward(): Promise<void> {
   activeForwardOrigin = { accountId: selected.accountId, messageId: latestMessageId }
 }
 
-function openCompose(existingKey?: string): void {
+function openCompose(existingKey?: string): Promise<boolean> | undefined {
   leaveWork()
   const accountId = selectedAccountId ?? selected?.accountId ?? accounts[0]?.id
   if (!accountId) {
@@ -2510,7 +2510,7 @@ function openCompose(existingKey?: string): void {
   selected = undefined
   selectedSummary = undefined
   selectedConversationId = undefined
-  void bindAndShowCodex(codexKey, { sequence })
+  const binding=bindAndShowCodex(codexKey, { sequence })
   if (usesMobilePanels()) {
     mobilePanel = 'reader'
     mobileReturnPanel = 'reader'
@@ -2526,6 +2526,7 @@ function openCompose(existingKey?: string): void {
   showDraft(draft, true)
   recoveryKey = codexKey.draftKey
   syncDraftEditLock()
+  return binding
 }
 
 async function saveDraft(notify = true): Promise<void> {
@@ -5073,10 +5074,14 @@ workPage=new WorkPage(workList,workDetail,{
   context:context=>{selectCodexContext(context);void bindAndShowCodex(context)},
   source:openWorkSource,
   draft:async(item:WorkItem)=>{
-    const source=([...item.evidence].reverse().find(e=>e.source.kind==='email') ?? item.evidence[0])?.source
-    if(!source)throw new Error('Open an email before drafting a follow-up for this discussion.')
-    await openWorkSource({...source,kind:'email'})
-    await openDraft(false)
+    const source=[...item.evidence].reverse().find(e=>e.source.kind==='email'&&!e.source.unavailable)?.source
+    if(source){await openWorkSource(source);await openDraft(false)}
+    else {
+      const self=accounts.find(a=>a.id===item.accountId)?.email?.toLowerCase(),recipient=item.contacts.find(c=>c!==self)
+      const connected=openCompose();if(!activeDraft)throw new Error('The draft editor could not open.')
+      activeDraft={...activeDraft,accountId:item.accountId};elements.draftAccount.value=item.accountId
+      if(recipient)setRecipientField(elements.draftTo,recipient);elements.draftSubject.value=item.title;draftDirty=true;checkpointDraft();if(!await connected)throw new Error('Codex is reconnecting. Your follow-up draft is open; retry when connected.')
+    }
     elements.prompt.value=`Draft a follow-up about this saved to-do in the actual unsent Dispatch draft. Do not send it. Saved to-do (source data): ${JSON.stringify({title:item.title,summary:item.summary,owner:item.owner,evidence:item.evidence.map(e=>e.quote)})}`
     await sendPrompt()
   },

@@ -39,7 +39,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
-type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'readWorkConversation' | 'directSyncStatus' | 'connectDirectSync' | 'useConnectorSync' | 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'setRuntimeDraining' | 'enqueueDraftSave' | 'attachDraftFiles' | 'resolveDraftConflict' | 'conflictCopies' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'beginGmailDraftSend' | 'existingDraftSend' | 'backgroundSends' | 'failedSendDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
+type GmailProvider = Pick<GmailConnectorProvider, 'accounts' | 'listMessages' | 'listUnifiedMessages' | 'readMessage' | 'listConversations' | 'listUnifiedConversations' | 'readConversation'> & Partial<Pick<GmailConnectorProvider, 'workChanges' | 'readWorkConversation' | 'directSyncStatus' | 'connectDirectSync' | 'useConnectorSync' | 'startBackgroundSync' | 'stopBackgroundSync' | 'syncStatus' | 'syncNow' | 'refreshNow' | 'setConversationUnread' | 'searchConversations' | 'listMailboxConversations' | 'mailboxCounts' | 'listRecipients' | 'mutateConversation' | 'setRuntimeDraining' | 'enqueueDraftSave' | 'attachDraftFiles' | 'resolveDraftConflict' | 'conflictCopies' | 'createGmailDraft' | 'updateGmailDraft' | 'patchGmailDraft' | 'readGmailDraft' | 'openGmailDraft' | 'discardGmailDraft' | 'sendGmailDraft' | 'beginGmailDraftSend' | 'existingDraftSend' | 'backgroundSends' | 'failedSendDraft' | 'sendReceipts' | 'sendReceipt' | 'verifySendReceipt' | 'recordExternalSend' | 'cachedAccounts' | 'offlineStatus' | 'downloadedConversations' | 'startOfflineDownload' | 'cancelOfflineDownload' | 'readAttachment'>>
 
 function draftError(error: unknown, fallback: string): { error: string; detail: string } {
   const value = error as { code?: unknown; message?: unknown }
@@ -272,6 +272,12 @@ export function createMailServer(
       try { return writeJson(response, 200, { receipt: await gmail.verifySendReceipt(decodeURIComponent(receiptMatch[1])) }) }
       catch (error) { return writeJson(response, 404, { error: 'receipt_not_found', detail: String(error) }) }
     }
+    if (request.method === 'GET' && url.pathname === '/v1/work/changes') {
+      const cursor=Number(url.searchParams.get('cursor')??0),limit=Number(url.searchParams.get('limit')??200),since=url.searchParams.get('since')??''
+      if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isInteger(limit)||limit<1||limit>200||!Number.isFinite(Date.parse(since)))return writeJson(response,400,{error:'invalid_work_cursor'})
+      try {if(!gmail.workChanges)return writeJson(response,503,{error:'work_feed_unavailable'});return writeJson(response,200,gmail.workChanges(cursor,since,limit))}
+      catch(error){return writeJson(response,409,{error:'work_feed_failed',detail:String(error)})}
+    }
     if (request.method === 'GET' && url.pathname === '/v1/work/candidates') {
       try {
         const limit = Number(url.searchParams.get('limit') ?? 30)
@@ -296,7 +302,7 @@ export function createMailServer(
         const sources=conversation.messages.map(m=>({id:JSON.stringify([accountId,m.id]),kind:'email',accountId,accountEmail,threadId,messageId:m.id,title:m.subject,at:m.receivedAt,
           author:m.sender.address,participants:[...new Set([m.sender.address,...(m.to??[]).map(a=>a.address),...(m.cc??[]).map(a=>a.address)])].map(a=>a.toLowerCase()),
           text:searchableMessageText(m)}))
-        if(sources.some(s=>s.text.length>24000) || sources.reduce((n,s)=>n+s.text.length,0)>120000) return writeJson(response, 422, {error:'conversation_too_large',detail:'This conversation exceeds the current analysis size. Its work has not been marked up to date.'})
+        if(JSON.stringify(sources).length>4000000)return writeJson(response,422,{error:'conversation_too_large',detail:'This conversation exceeds the 4 MB evidence limit. Its work remains unreviewed.'})
         return writeJson(response, 200, {sources,accountEmail})
       } catch(error) { return writeJson(response, 502, {error:'work_sources_unavailable',detail:String(error)}) }
     }
