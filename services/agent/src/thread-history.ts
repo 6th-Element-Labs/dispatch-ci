@@ -2,6 +2,31 @@ interface Runtime {
   request(method: string, params?: unknown): Promise<unknown>
 }
 
+/** A missing rollout is conclusive; timeouts and unloaded sessions are not. */
+export function isMissingStoredHistory(error: unknown, threadId: string): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message === `no rollout found for thread id ${threadId}`
+    || message === `thread not found: ${threadId}`
+    || message === `unknown thread: ${threadId}`
+}
+
+/** Empty opened chats can have a durable Dispatch binding without a saved Codex rollout. */
+export async function readWorkThreadHistory(runtime: Runtime, threadId: string): Promise<any | null> {
+  try { return await readThreadHistory(runtime, threadId) }
+  catch (error) {
+    if (isMissingStoredHistory(error, threadId)) return null
+    if (!(error instanceof Error) || error.message !== `thread not loaded: ${threadId}`) throw error
+    try {
+      // Load the same identity only. Do not start a turn, replace a binding, or override permissions.
+      await runtime.request('thread/resume', { threadId, excludeTurns: true })
+    } catch (resumeError) {
+      if (isMissingStoredHistory(resumeError, threadId)) return null
+      throw resumeError
+    }
+    return readThreadHistory(runtime, threadId)
+  }
+}
+
 /** Use the persisted history contract; current Codex threads page turns explicitly. */
 export async function readThreadHistory(runtime: Runtime, threadId: string): Promise<any> {
   const metadata = await runtime.request('thread/read', { threadId, includeTurns: false }) as any
