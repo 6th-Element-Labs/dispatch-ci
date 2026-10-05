@@ -12,7 +12,8 @@ export function isMissingStoredHistory(error: unknown, threadId: string): boolea
 
 /** Empty opened chats can have a durable Dispatch binding without a saved Codex rollout. */
 export async function readWorkThreadHistory(runtime: Runtime, threadId: string): Promise<any | null> {
-  try { return await readThreadHistory(runtime, threadId) }
+  let metadata: any
+  try { metadata = await runtime.request('thread/read', { threadId, includeTurns: false }) }
   catch (error) {
     if (isMissingStoredHistory(error, threadId)) return null
     if (!(error instanceof Error) || error.message !== `thread not loaded: ${threadId}`) throw error
@@ -23,13 +24,19 @@ export async function readWorkThreadHistory(runtime: Runtime, threadId: string):
       if (isMissingStoredHistory(resumeError, threadId)) return null
       throw resumeError
     }
-    return readThreadHistory(runtime, threadId)
+    metadata = await runtime.request('thread/read', { threadId, includeTurns: false })
   }
+  // Once stored metadata exists, an unsupported or incomplete history read is not absence.
+  return readHistoryFromMetadata(runtime, threadId, metadata)
 }
 
 /** Use the persisted history contract; current Codex threads page turns explicitly. */
 export async function readThreadHistory(runtime: Runtime, threadId: string): Promise<any> {
   const metadata = await runtime.request('thread/read', { threadId, includeTurns: false }) as any
+  return readHistoryFromMetadata(runtime, threadId, metadata)
+}
+
+async function readHistoryFromMetadata(runtime: Runtime, threadId: string, metadata: any): Promise<any> {
   if (metadata.thread?.historyMode !== 'paginated') {
     return runtime.request('thread/read', { threadId, includeTurns: true })
   }

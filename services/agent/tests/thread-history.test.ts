@@ -50,6 +50,15 @@ it('retains transient, permission and busy errors as review failures', async () 
   await expect(readWorkThreadHistory(runtime,'saved')).rejects.toThrow('request timed out')
 })
 
+it('does not call existing paginated metadata missing when full history is unavailable',async()=>{
+ const runtime={request:vi.fn(async(method:string):Promise<any>=>{
+   if(method==='thread/read')return {thread:{id:'saved',historyMode:'paginated'}}
+   throw new Error('thread not loaded: saved')
+ })}
+ await expect(readWorkThreadHistory(runtime,'saved')).rejects.toThrow('thread not loaded: saved')
+ expect(runtime.request).not.toHaveBeenCalledWith('thread/resume',expect.anything())
+});
+
 it('does not report a partial or repeated page as complete history', async () => {
   const runtime = { request: vi.fn(async (method: string): Promise<any> => method === 'thread/read' ? { thread: { historyMode: 'paginated' } } : { data: [{ items: [], itemsView: 'full' }], nextCursor: 'same' }) }
   await expect(readThreadHistory(runtime, 'chat')).rejects.toThrow(/repeated/)
