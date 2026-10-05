@@ -557,7 +557,7 @@ const BINDING_CACHE = 'dispatch.codex.bindings.v1'
 let workPage: WorkPage | undefined
 let codexScopes: HTMLDivElement | undefined
 type CodexPaneKey = WorkContext | { kind: 'unbound' } | { kind: 'draft'; draftKey: string } | { kind: 'conversation'; accountId: string; gmailThreadId: string }
-const acceptedReadState = new Map<string, boolean>()
+const acceptedReadState = new Map<string, { unread: boolean; latestMessageId: string }>()
 // Explicit Mark as Unread stays unread until the user leaves and selects it again.
 const suppressReadDwell = new Set<string>()
 let desiredCodexKey: CodexPaneKey = { kind: 'unbound' }
@@ -1365,7 +1365,7 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     // Cached bodies can have old labels. The current mailbox projection and
     // accepted commands own the row and toolbar's read state together.
     const currentSummary = conversations.find(item => item.id === id) ?? summary
-    selected = { ...conversation, unread: acceptedReadState.get(id) ?? currentSummary.unread }
+    selected = { ...conversation, unread: acceptedUnread(currentSummary) ?? currentSummary.unread }
     threadRefreshFailed = false
     readerNeedsRetry = !offlineMode && conversation.availability?.mode === 'downloaded'
     renderCopyChip(conversation.availability)
@@ -1472,7 +1472,7 @@ async function completeReadDwell(conversationId: string): Promise<void> {
   try {
     await api.setConversationUnread(summary.threadId, summary.accountId, false, messageIds)
     if (selectedConversationId !== conversationId || actionSequence !== readStateActionSequence || suppressReadDwell.has(conversationId)) return
-    applyLocalReadState(conversationId, false)
+    applyLocalReadState(conversationId, false, summary.latestMessageId)
   } catch (error) {
     if (selectedConversationId !== conversationId) return
     elements.mailError.hidden = false
@@ -1480,8 +1480,10 @@ async function completeReadDwell(conversationId: string): Promise<void> {
   }
 }
 
-function applyLocalReadState(conversationId: string, unread: boolean): void {
-  acceptedReadState.set(conversationId, unread)
+function applyLocalReadState(conversationId: string, unread: boolean, latestMessageId: string): void {
+  const current = conversations.find(conversation => conversation.id === conversationId)
+  if (current && current.latestMessageId !== latestMessageId) return
+  acceptedReadState.set(conversationId, { unread, latestMessageId })
   if (unread) suppressReadDwell.add(conversationId)
   else suppressReadDwell.delete(conversationId)
   dropConversationCache(conversationId)
@@ -1506,10 +1508,21 @@ function dropConversationCache(conversationId: string): void {
   }
 }
 
+function acceptedUnread(conversation: ConversationSummary): boolean | undefined {
+  const accepted = acceptedReadState.get(conversation.id)
+  if (accepted && accepted.latestMessageId !== conversation.latestMessageId) {
+    acceptedReadState.delete(conversation.id)
+    suppressReadDwell.delete(conversation.id)
+    return undefined
+  }
+  return accepted?.unread
+}
+
 function applyAcceptedReadState(items: readonly ConversationSummary[]): ConversationSummary[] {
   return items
     .map((conversation) => {
-      const unread = acceptedReadState.get(conversation.id)
+      const unread = acceptedUnread(conversation)
+      if (unread === conversation.unread) acceptedReadState.delete(conversation.id)
       return unread === undefined ? conversation : { ...conversation, unread }
     })
     .filter((conversation) => mailState === 'all' || (mailState === 'unread' ? conversation.unread : !conversation.unread))
@@ -1517,8 +1530,8 @@ function applyAcceptedReadState(items: readonly ConversationSummary[]): Conversa
 
 function syncSelectedReadState(): void {
   if (!selected || !selectedConversationId) return
-  const unread = acceptedReadState.get(selectedConversationId)
-    ?? conversations.find((conversation) => conversation.id === selectedConversationId)?.unread
+  const summary = conversations.find(conversation => conversation.id === selectedConversationId)
+  const unread = summary ? acceptedUnread(summary) ?? summary.unread : undefined
   if (unread === undefined || selected.unread === unread) return
   selected = { ...selected, unread }
   renderReadState(unread)
@@ -1537,12 +1550,13 @@ async function applyReadState(nextUnread: boolean, target: ConversationSummary |
   markReadDwell.cancel()
   readStateActionSequence += 1
   const conversationId = target.id
+  const latestMessageId = conversations.find(conversation => conversation.id === conversationId)?.latestMessageId ?? target.latestMessageId
   const messageIds = selected?.id === conversationId ? selected.messages.map(message => message.id) : []
   elements.readState.disabled = true
   renderReadState(!nextUnread, true)
   try {
     await api.setConversationUnread(target.threadId, target.accountId, nextUnread, messageIds)
-    applyLocalReadState(conversationId, nextUnread)
+    applyLocalReadState(conversationId, nextUnread, latestMessageId)
   } catch (error) {
     if (selectedConversationId === conversationId) renderReadState(selected?.unread ?? target.unread)
     elements.mailError.hidden = false
@@ -1655,7 +1669,7 @@ async function openThreadContextMenu(event: MouseEvent, conversationId: string):
   const load = selectConversation(conversationId, { revealOnMobile: true })
   const summary = conversations.find((conversation) => conversation.id === conversationId)
   if (!summary) return
-  const unread = acceptedReadState.get(conversationId) ?? summary.unread
+  const unread = acceptedUnread(summary) ?? summary.unread
   const items = threadContextMenuItems({ mailbox, unread, hasAccountId: Boolean(summary.accountId), openWindow: !inMessageWindow && canOpenMessageWindow(mailbox) })
   try {
     const chosen = await popupContextMenu(items, { clientX: event.clientX, clientY: event.clientY })
@@ -2628,6 +2642,7 @@ async function reviseDraft(): Promise<void> {
 
 let sendActivityFlight: Promise<void> | undefined
 function refreshSendActivity(): Promise<void> {
+  void reconcileSentDraft()
   if (sendActivityFlight) return sendActivityFlight
   sendActivityFlight = api.pendingSends().then(sends => {
     const content = app.querySelector<HTMLElement>('[data-send-activity]')!
@@ -3433,7 +3448,7 @@ function handleAgentEvent(message: AgentEvent): void {
     activeAgentText = ''
     const draftToRefresh = activeDraft
     if (draftToRefresh?.id && draftToRefresh.accountId && codexDraftFlights === 0) {
-      void refreshCodexDraft(draftToRefresh.id, draftToRefresh.accountId, false)
+      void reconcileSentDraft().then(closed => { if (!closed && activeDraft === draftToRefresh) void refreshCodexDraft(draftToRefresh.id, draftToRefresh.accountId!, false) })
     }
   }
   if (message.method === 'item/agentMessage/delta') {
@@ -3466,6 +3481,27 @@ function handleAgentEvent(message: AgentEvent): void {
   }
 }
 
+let sentDraftRefresh = false
+/** Mail resolves queued/Gmail aliases; only a confirmed send can consume a clean editor. */
+async function reconcileSentDraft(): Promise<boolean> {
+  const draft = activeDraft
+  if (!draft?.id || !draft.accountId || offlineMode || sentDraftRefresh || draftDirty || draftSaveFlight || draftIsSending() || draftDiscarding) return false
+  const session = draftEditSession
+  const revision = draftEditRevision
+  sentDraftRefresh = true
+  try {
+    const receipt = await api.sentDraftStatus(draft.id, draft.accountId)
+    if (!receipt || receipt.accountId !== draft.accountId || !['accepted', 'verified'].includes(receipt.status)) return false
+    if (session !== draftEditSession || revision !== draftEditRevision || activeDraft?.id !== draft.id || activeDraft.accountId !== draft.accountId || draftDirty || draftSaveFlight || draftDiscarding) return false
+    clearRecovery()
+    hideDraftEditor()
+    void refreshMailboxCounts()
+    if (mailbox === 'drafts') void loadConversations(true)
+    return true
+  } catch { return false }
+  finally { sentDraftRefresh = false }
+}
+
 let codexDraftFlights = 0
 let codexDraftRequest = 0
 
@@ -3490,7 +3526,7 @@ async function refreshCodexDraft(draftId: string, accountId: string, createdByCo
     if (snapshot.selection !== selectionSequence || snapshot.pane !== paneSequence) return
     if (requestErrorCode(String(error)) === 'gmail_draft_not_found') {
       // Codex sent the draft or Gmail replaced it; the id in the event is already stale.
-      if (activeDraft?.id === draftId && activeDraft.accountId === accountId && !draftDirty && !draftSaveFlight) { clearRecovery(); hideDraftEditor() }
+      await reconcileSentDraft()
       addAgentMessage('tool', 'Gmail no longer has that draft; it was sent or replaced. Drafts has been refreshed.')
       if (mailbox === 'drafts') void loadConversations(true)
       return
@@ -3525,7 +3561,7 @@ async function applyCodexMailEffect(effect: CodexMailEffect): Promise<void> {
     await refreshCodexDraft(effect.draftId, effect.accountId, true)
     return
   }
-  if (effect.draftId && activeDraft?.id === effect.draftId && activeDraft.accountId === effect.accountId && !draftDirty && !draftSaveFlight) { clearRecovery(); hideDraftEditor() }
+  await reconcileSentDraft()
   if (!offlineMode) void loadConversations(true)
 }
 

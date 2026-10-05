@@ -18,8 +18,8 @@ export function folderFlagsFromLabels(labels: readonly unknown[]): Pick<
 > {
   // Gmail keeps INBOX, SENT, and DRAFT labels on messages it has moved to
   // Trash or Spam; a trashed draft is in Trash, not in Drafts.
-  const inSpam = labels.includes('SPAM')
   const inTrash = labels.includes('TRASH')
+  const inSpam = !inTrash && labels.includes('SPAM')
   const shelved = inSpam || inTrash
   const inInbox = !shelved && labels.includes('INBOX')
   const inSent = !shelved && labels.includes('SENT')
@@ -46,10 +46,10 @@ export function flagsAfterAction(
     }
   }
   if (action === 'trash') {
-    return { ...message, inTrash: true, inInbox: false, inArchive: false, inSent: false, inDrafts: false }
+    return { ...message, inTrash: true, inSpam: false, inInbox: false, inArchive: false, inSent: false, inDrafts: false }
   }
   if (action === 'spam') {
-    return { ...message, inSpam: true, inInbox: false, inArchive: false }
+    return { ...message, inSpam: true, inTrash: false, inInbox: false, inSent: false, inDrafts: false, inArchive: false }
   }
   return { ...message, inInbox: true, inSpam: false, inTrash: false, inArchive: false }
 }
@@ -102,6 +102,7 @@ function queueEligible(message: IndexedGmailMessage, state: MailStateFilter): bo
 }
 
 function folderMember(message: IndexedGmailMessage, mailbox: Exclude<GmailMailbox, 'inbox'>): boolean {
+  if (mailbox !== 'trash' && message.inTrash) return false
   if (mailbox === 'sent') return message.inSent
   if (mailbox === 'drafts') return message.inDrafts
   if (mailbox === 'archive') return message.inArchive
@@ -719,9 +720,9 @@ export class GmailIndex {
     const spam = new Set<string>()
     for (const message of this.messages(accountId)) {
       const key = `${message.accountId}:${message.threadId}`
-      if (message.inInbox && message.unread) inbox.add(key)
-      if (message.inDrafts) drafts.add(key)
-      if (message.inSpam) spam.add(key)
+      if (queueEligible(message, 'unread')) inbox.add(key)
+      if (folderMember(message, 'drafts')) drafts.add(key)
+      if (folderMember(message, 'spam')) spam.add(key)
     }
     return { inbox: inbox.size, drafts: drafts.size, spam: spam.size }
   }

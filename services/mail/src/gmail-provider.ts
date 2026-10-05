@@ -1375,7 +1375,7 @@ export class GmailConnectorProvider {
 
   async mutateConversation(accountId: string, threadId: string, messageIds: readonly string[], action: GmailConversationAction): Promise<void> {
     if (!accountId || !threadId) throw new Error('Gmail conversation action requires account and thread identity')
-    const effectiveMessageIds = messageIds.length ? messageIds : this.#index?.threadMessageIds(accountId, threadId) ?? []
+    const effectiveMessageIds = [...new Set([...(this.#index?.threadMessageIds(accountId, threadId) ?? []), ...messageIds])]
     if (this.#index && effectiveMessageIds.length) {
       this.#index.applyConversationAction(accountId, effectiveMessageIds, action, true)
       void this.flushActions()
@@ -1449,7 +1449,7 @@ export class GmailConnectorProvider {
         const value = await this.#post('/v1/connectors/gmail/modify', {
           linkId: job.accountId, messageIds: job.messageIds,
           addLabels: job.action === 'unread' ? ['UNREAD'] : job.action === 'trash' ? ['TRASH'] : job.action === 'spam' ? ['SPAM'] : job.action === 'inbox' ? ['INBOX'] : [],
-          removeLabels: job.action === 'read' ? ['UNREAD'] : job.action === 'unread' ? [] : job.action === 'inbox' ? ['TRASH', 'SPAM'] : ['INBOX'],
+          removeLabels: job.action === 'read' ? ['UNREAD'] : job.action === 'unread' ? [] : job.action === 'inbox' ? ['TRASH', 'SPAM'] : job.action === 'trash' ? ['INBOX', 'SPAM'] : job.action === 'spam' ? ['INBOX', 'TRASH'] : ['INBOX'],
         })
         const reply = JSON.stringify(value)
         if (/"success":false/.test(reply)) {
@@ -1658,6 +1658,7 @@ export class GmailConnectorProvider {
   }
 
   async readGmailDraft(accountId: string, draftId: string, authoritative = false): Promise<DraftProjection> {
+    if (['accepted', 'verified'].includes(this.existingDraftSend(accountId, draftId)?.status ?? '')) throw Object.assign(new Error('This draft was sent.'), { code: 'gmail_draft_not_found' })
     if (this.#draftQueue.owns(accountId, draftId)) return this.#draftQueue.read(accountId, draftId)
     const key = `${accountId}:${draftId}`
     const request = ++this.#draftCacheSequence
@@ -1795,12 +1796,20 @@ export class GmailConnectorProvider {
 
   recordExternalSend(accountId: string, messageId: string, draftId?: string): SendReceipt {
     if (!accountId || !messageId) throw new Error('Account and Gmail message ID are required')
-    const existing = this.#local.receiptForMessage(accountId, messageId) ?? (draftId ? this.#local.receiptForDraft(accountId, draftId) : undefined)
+    const existing = this.#local.receiptForMessage(accountId, messageId) ?? (draftId ? this.existingDraftSend(accountId, draftId) : undefined)
     if (existing?.status === 'verified') return existing
     const now = new Date().toISOString()
     const receipt: SendReceipt = { id: existing?.id ?? randomUUID(), accountId, accountLabel: existing?.accountLabel ?? this.#index?.accounts().find(account => account.id === accountId)?.email ?? accountId, draftId, requestedAt: existing?.requestedAt ?? now, acceptedAt: now, ...existing, messageId, status: 'accepted', detailsSource: existing?.detailsSource ?? 'unavailable', error: undefined }
     this.#local.putReceipt(receipt)
+    if (draftId) {
+      for (const id of [draftId, this.#draftQueue.origin(accountId, draftId), this.#local.draftSave(accountId, draftId)?.remoteId]) {
+        if (!id) continue
+        this.#drafts.delete(`${accountId}:${id}`)
+        this.#local.removeDraft(accountId, id)
+      }
+    }
     void this.verifySendReceipt(receipt.id)
+    void this.#refreshIndexedDrafts(accountId)
     return receipt
   }
 
@@ -1840,7 +1849,7 @@ export class GmailConnectorProvider {
   }
 
   existingDraftSend(accountId: string, draftId?: string, clientDraftId?: string): SendReceipt | undefined {
-    const identities = [clientDraftId ? `queued-${clientDraftId}` : undefined, draftId, draftId ? this.#draftQueue.origin(accountId, draftId) : undefined, draftId ? this.#draftQueue.pendingRemote(accountId, draftId)?.id : undefined]
+    const identities = [draftId ? this.#local.draftSave(accountId, draftId)?.remoteId : undefined, clientDraftId ? `queued-${clientDraftId}` : undefined, draftId, draftId ? this.#draftQueue.origin(accountId, draftId) : undefined, draftId ? this.#draftQueue.pendingRemote(accountId, draftId)?.id : undefined]
     const receipt = identities.flatMap(id => id ? [this.#local.receiptForDraft(accountId, id)] : []).filter((value): value is SendReceipt => Boolean(value)).sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))[0]
     return receipt?.status !== 'failed' ? receipt : undefined
   }
@@ -1886,12 +1895,15 @@ export class GmailConnectorProvider {
       const messageId = text(structured(result).id)
       if (record(result)?.isError || structured(result).error || !messageId) throw new Error('Gmail did not return a confirmed sent message ID.')
       receipt = { ...receipt, messageId, status: 'accepted', acceptedAt: new Date().toISOString() }
-      this.#local.removeDraft(accountId, draftId)
-      if (remoteDraftId !== draftId) this.#local.removeDraft(accountId, remoteDraftId)
+      for (const id of [draftId, remoteDraftId]) {
+        this.#drafts.delete(`${accountId}:${id}`)
+        this.#local.removeDraft(accountId, id)
+      }
+      if (draft.gmailMessageId) this.#index?.discardDraftMessages(accountId, [draft.gmailMessageId])
       if (!this.#stopped) {
         this.#local.putReceipt(receipt)
         void this.verifySendReceipt(receipt.id)
-        void this.#refreshIndexedDrafts()
+        void this.#refreshIndexedDrafts(accountId)
       }
       return { ...(record(result) ?? {}), receipt }
     } catch (error) {

@@ -2368,7 +2368,7 @@ test('stale cached unread labels cannot reverse the toolbar or row styling', asy
   const summary = { ...conversations[0]!, accountId: 'link-one', accountLabel: 'work@example.com', unread: false }
   await stubGmailInbox(page, summary)
   await page.route(/8411\/v1\/conversations\/t1\?account=link-one/, route => route.fulfill({ json: { conversation: {
-    ...summary, unread: true, source: 'gmail', availability: { mode: 'downloaded', cachedAt: '2026-09-20T00:00:00Z' },
+    ...summary, latestMessageId: 'sent-reply', unread: true, source: 'gmail', availability: { mode: 'downloaded', cachedAt: '2026-09-20T00:00:00Z' },
     messages: [{ ...messages[0]!, accountId: 'link-one', source: 'gmail', unread: true, body: { kind: 'plain-text', content: 'Saved body with old labels' }, attachments: [] }],
   } } }))
   const writes: unknown[] = []
@@ -4394,4 +4394,55 @@ test('a successfully sent new compose stays closed when there is no selected thr
   await expect(page.locator('[data-draft-error]')).toBeHidden()
   expect(await localRecovery(page)).toHaveLength(0)
   expect(sends).toBe(1)
+})
+
+test('a new unread message releases the prior read override and agrees with the Inbox badge', async ({ page }) => {
+  await page.clock.install()
+  let first = { ...conversations[0]!, accountId: 'link-one', unread: true }
+  const second = { ...conversations[1]!, accountId: 'link-one', unread: true }
+  let count = 2
+  await stubGmailInbox(page, first)
+  await page.route(/8411\/v1\/conversations\?/, route => route.fulfill({ json: { source: 'gmail', conversations: [first, second] } }))
+  await page.route(/8411\/v1\/mailboxes\/counts/, route => route.fulfill({ json: { counts: { inbox: count, drafts: 0, spam: 0 } } }))
+  await page.route(/8411\/v1\/conversations\/t1\?/, route => route.fulfill({ json: { conversation: { ...first, source: 'gmail', messages: [{ ...messages[0]!, id: first.latestMessageId, accountId: 'link-one', source: 'gmail', body: { kind: 'plain-text', content: 'Latest body' }, attachments: [] }] } } }))
+  await page.route(/8411\/v1\/conversations\/t1\/read-state/, route => { count = 1; return route.fulfill({ json: { accepted: true } }) })
+  await page.route('http://127.0.0.1:8411/v1/sync', route => route.fulfill({ json: { sync: { state: 'ready', messageCount: 2 } } }))
+  await page.goto('/')
+  await expect(page.getByText('Latest body', { exact: true })).toBeVisible()
+  await page.locator('[data-conversation-id="demo:t1"]').click()
+  await page.clock.fastForward(5000)
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).not.toHaveClass(/dispatch-message-unread/)
+  await expect(page.locator('[data-mailbox-count="inbox"]').last()).toHaveText('1')
+  await page.locator('[data-conversation-id="demo:t2"]').click()
+  first = { ...first, latestMessageId: 'new-arrival', unread: true, receivedAt: '2026-10-05T01:00:00Z' }; count = 2
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(page.locator('[data-conversation-id="demo:t1"]')).toHaveClass(/dispatch-message-unread/)
+  await expect(page.locator('.dispatch-message-unread')).toHaveCount(2)
+  await expect(page.locator('[data-mailbox-count="inbox"]').last()).toHaveText('2')
+})
+
+for (const scenario of ['clean', 'late-edit', 'different-draft', 'without-tool-event']) test(`confirmed agent Send reconciles queued aliases safely (${scenario})`, async ({ page }) => {
+  await page.clock.install()
+  await page.addInitScript(() => {
+    class FakeEvents { static CLOSED = 2; readyState = 1; onopen: any; onmessage: any; onerror: any; constructor() { (window as any).sendEvents = this; setTimeout(() => this.onopen?.({}), 0) } close() { this.readyState = 2 } }
+    ;(window as any).EventSource = FakeEvents
+  })
+  await stubAgent(page)
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', name: 'Test', email: 'test@example.com' }] } }))
+  const draft = { id: 'queued-alias', accountId: 'one', inReplyToMessageId: '', to: [{ name: 'Test', address: 'test@example.com', initials: 'T' }], subject: 'Already sent', cc: '', bcc: '', bodyMarkdown: 'Original draft', bodyText: 'Original draft', bodyHtml: '', attachments: [], state: 'draft' }
+  await page.route(/8411\/v1\/drafts\/queued-alias\?/, route => route.fulfill({ json: { draft } }))
+  let held: import('@playwright/test').Route | undefined
+  await page.route(/8411\/v1\/drafts\/queued-alias\/send-status/, route => { held = route })
+  await page.goto('/')
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Connected')
+  await page.evaluate(draft => (window as any).sendEvents.onmessage({ data: JSON.stringify({ method: 'item/completed', params: { item: { type: 'mcpToolCall', server: 'dispatch_mail', tool: 'create_draft', status: 'completed', result: { structuredContent: { draft } } } } }) }), draft)
+  await expect(page.locator('[data-draft-body]')).toHaveText('Original draft')
+  if (scenario === 'without-tool-event') await page.clock.fastForward(5000)
+  else await page.evaluate(() => (window as any).sendEvents.onmessage({ data: JSON.stringify({ method: 'item/completed', params: { item: { type: 'mcpToolCall', server: 'gmail', tool: 'gmail.send_draft', arguments: { link_id: 'one', draft_id: 'gmail-remote' }, status: 'completed', result: { structuredContent: { id: 'sent-id' } } } } }) }))
+  await expect.poll(() => Boolean(held)).toBe(true)
+  if (scenario === 'late-edit') await page.locator('[data-draft-body]').fill('Keep my later edit')
+  if (scenario === 'different-draft') { await page.getByRole('button', { name: 'Compose', exact: true }).click(); await page.locator('[data-draft-body]').fill('Different message') }
+  await held!.fulfill({ json: { receipt: { id: 'confirmed', accountId: 'one', draftId: 'gmail-remote', status: 'verified', messageId: 'sent-id' } } })
+  if (scenario === 'late-edit' || scenario === 'different-draft') await expect(page.locator('[data-draft-body]')).toHaveText(scenario === 'late-edit' ? 'Keep my later edit' : 'Different message')
+  else await expect(page.locator('[data-draft]')).toBeHidden()
 })
