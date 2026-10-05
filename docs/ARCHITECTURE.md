@@ -170,3 +170,7 @@ It owns SQLite task/decision state, source links, contact/topic identity, extrac
 checkpoints and attention ranking. Mail exports canonical evidence over HTTP;
 agent exports bound Codex discussion evidence and provides structured inference
 through Codex App Server. Neither owns work records. See [EA and To-dos](EA_TODOS.md).
+
+### Immediate editor Send
+
+`POST /v1/draft-sends` accepts the current editor fields using the durable draft-save contract, or an unchanged Gmail draft identity without rewriting MIME. Mail persists its preparing send record synchronously and returns HTTP 202. Its one-shot background operation completes the submitted save revision and sends only that confirmed Gmail draft. The operation is counted for runtime drain, rejects stale editor writes while active, and is deduplicated by account/draft identity. `GET /v1/draft-sends` and `GET /v1/draft-sends/:id` expose active/failing status and mail-owned failure recovery without provider calls. Restart marks interrupted preparation failed and interrupted delivery unknown; neither is automatically replayed. Web closes the editor on click, retains local recovery until mail accepts the snapshot, and reports delivery failures without replacing another editor.
