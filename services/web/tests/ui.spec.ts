@@ -4371,3 +4371,27 @@ test('reply Send handles a locally queued autosave without requiring Save or a s
   await expect(page.locator('[data-draft]')).toBeHidden()
   await expect.poll(() => sends).toBe(1)
 })
+
+test('a successfully sent new compose stays closed when there is no selected thread to refresh', async ({ page }) => {
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'demo', email: 'work@example.com', name: 'Work', connectorId: 'gmail' }] } }))
+  let sends = 0
+  await page.route('http://127.0.0.1:8411/v1/draft-sends', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+    sends++
+    expect(route.request().postDataJSON()).toMatchObject({ to: 'ana@example.com', subject: 'New message', bodyMarkdown: 'Send this new message once' })
+    return route.fulfill({ status: 202, json: { receipt: { id: 'compose-send', accountId: 'demo', status: 'preparing' } } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/draft-sends/compose-send', route => route.fulfill({ json: { receipt: { id: 'compose-send', accountId: 'demo', status: 'accepted', messageId: 'sent-new-message' } } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  await page.locator('[data-draft-to]').fill('ana@example.com')
+  await page.locator('[data-draft-subject]').fill('New message')
+  await page.locator('[data-draft-body]').fill('Send this new message once')
+  await page.locator('[data-send-draft]').click()
+  await expect(page.locator('[data-draft]')).toBeHidden()
+  await expect(page.locator('[data-send-status]')).toBeHidden()
+  await expect(page.locator('[data-draft]')).toBeHidden()
+  await expect(page.locator('[data-draft-error]')).toBeHidden()
+  expect(await localRecovery(page)).toHaveLength(0)
+  expect(sends).toBe(1)
+})

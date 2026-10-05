@@ -2709,7 +2709,7 @@ function sendDraft(): void {
       }
       if (receipt.status !== 'accepted' && receipt.status !== 'verified') throw new Error(receipt.error || 'Send was not confirmed. Check Sent before trying again.')
       void loadConversations()
-      if (selected?.id === conversation?.id) void selectConversation(selected!.id, { refresh: true })
+      if (selected && conversation && selected.id === conversation.id) void selectConversation(selected.id, { refresh: true })
     } catch (error) {
       const message = describeRequestError(error instanceof Error ? error.message : String(error))
       // A failure never overwrites another editor or another conversation.
