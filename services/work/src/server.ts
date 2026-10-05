@@ -95,10 +95,11 @@ export function createWorkServer(store: WorkStore, scanner: WorkScanner) {
             if (url.pathname === '/v1/work/analyze') {
                 if (typeof body.accountId !== 'string' || !body.accountId || typeof body.threadId !== 'string' || !body.threadId)
                     return reply(400, { error: 'account_and_thread_required' });
-                store.setState({ enabled: true });
+                if(!store.accountSelected(body.accountId))return reply(400,{error:'account_not_selected',detail:'Enable this account in review settings before reviewing its thread.'});
+                store.enqueue({key:JSON.stringify(['email',body.accountId,body.threadId]),accountId:body.accountId,kind:'email',contextId:body.threadId,revision:`manual:${Date.now()}`,priority:3});
                 scanner.start(false);
-                await scanner.analyze(body.accountId, body.threadId);
-                return reply(200, store.view(new URLSearchParams({ account: body.accountId, thread: body.threadId })));
+                void scanner.scan().catch(()=>undefined);
+                return reply(202, store.view(new URLSearchParams({ account: body.accountId, thread: body.threadId })));
             }
             return reply(404, { error: 'not_found' });
         }

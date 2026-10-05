@@ -136,7 +136,7 @@ All endpoints are localhost only; bounded failures carry `error` and `detail`.
 | Work | POST /v1/work/briefing | Start a revised edition, return 202 immediately |
 | Work | POST /v1/work/scan | Refresh/retry; more:true expands history by 90 days |
 | Work | POST /v1/work/pause | Stop automatic review and cancel active inference |
-| Work | POST /v1/work/analyze | Explicit review of one account/thread |
+| Work | POST /v1/work/analyze | Queue a priority review of one account/thread; return 202 immediately |
 
 The internal Dispatch MCP `list_work` and `update_todo` use these same work APIs.
 
