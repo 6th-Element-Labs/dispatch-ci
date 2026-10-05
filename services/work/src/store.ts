@@ -24,6 +24,9 @@ export class WorkStore {
       CREATE TABLE IF NOT EXISTS item_history(item_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(item_id,revision));
       CREATE TABLE IF NOT EXISTS briefings(id TEXT PRIMARY KEY,date TEXT NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(date,revision));`);
         if(!this.#db.prepare('PRAGMA table_info(jobs)').all().some(r=>r.name==='priority'))this.#db.exec('ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
+        if(!this.#db.prepare('PRAGMA table_info(briefings)').all().some(r=>r.name==='prepared_at')){
+            this.#db.exec("ALTER TABLE briefings ADD COLUMN prepared_at TEXT; ALTER TABLE briefings ADD COLUMN cutoff TEXT; UPDATE briefings SET prepared_at=json_extract(payload,'$.preparedAt'),cutoff=json_extract(payload,'$.cutoff')");
+        }
         this.#db.prepare("UPDATE jobs SET status='pending' WHERE status='running'").run();
         if(this.#state<string>('extractionVersion','')!==extractionVersion){this.#db.prepare("UPDATE jobs SET status='pending',error=NULL,attempts=0 WHERE status='done'").run();this.#save('extractionVersion',extractionVersion);}
     }
@@ -112,15 +115,18 @@ export class WorkStore {
         if(items.length&&!content.entries.length&&!content.lead.length)throw new Error('The briefing omitted all supplied work.');
         const revision=Number(this.#db.prepare('SELECT coalesce(max(revision),0) AS revision FROM briefings WHERE date=?').get(date)!.revision)+1,preparedAt=new Date().toISOString();
         const briefing:Briefing={id:digest(`${date}:${revision}`),date,revision,preparedAt,cutoff,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,content,items,coverage,selection:{total,included:items.length}};
-        this.#db.prepare('INSERT INTO briefings VALUES(?,?,?,?)').run(briefing.id,date,revision,JSON.stringify(briefing));return briefing;
+        this.#db.prepare('INSERT INTO briefings(id,date,revision,payload,prepared_at,cutoff) VALUES(?,?,?,?,?,?)').run(briefing.id,date,revision,JSON.stringify(briefing),preparedAt,cutoff);return briefing;
     }
-    briefings():Briefing[]{return this.#db.prepare('SELECT payload FROM briefings ORDER BY date DESC,revision DESC LIMIT 90').all().map(r=>JSON.parse(String(r.payload)));}
+    #editionHeaders(date?:string):Array<Pick<Briefing,'id'|'date'|'revision'|'preparedAt'|'cutoff'>>{
+        return this.#db.prepare(`SELECT id,date,revision,prepared_at,cutoff FROM briefings ${date?'WHERE date=?':''} ORDER BY date DESC,revision DESC ${date?'':'LIMIT 90'}`).all(...(date?[date]:[])).map(r=>({id:String(r.id),date:String(r.date),revision:Number(r.revision),preparedAt:String(r.prepared_at),cutoff:String(r.cutoff)}));
+    }
+    briefings(){return this.#editionHeaders();}
     briefingView(query:URLSearchParams){
         const date=query.get('date');if(date&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date))||new Date(date).toISOString().slice(0,10)!==date))throw new Error('Choose a valid briefing date.');
         const all=this.briefings();
-        const row=query.get('edition')?this.#db.prepare('SELECT payload FROM briefings WHERE id=?').get(query.get('edition')!):date?this.#db.prepare('SELECT payload FROM briefings WHERE date=? ORDER BY revision DESC LIMIT 1').get(date):undefined;
-        const selected=(query.get('edition')||date?row?JSON.parse(String(row.payload)) as Briefing:null:all[0])??null;
-        if(selected&&!all.some(b=>b.id===selected.id))all.push(selected);
+        const row=query.get('edition')?this.#db.prepare('SELECT payload FROM briefings WHERE id=?').get(query.get('edition')!):date?this.#db.prepare('SELECT payload FROM briefings WHERE date=? ORDER BY revision DESC LIMIT 1').get(date):this.#db.prepare('SELECT payload FROM briefings ORDER BY date DESC,revision DESC LIMIT 1').get();
+        const selected=row?JSON.parse(String(row.payload)) as Briefing:null;
+        if(selected)for(const header of this.#editionHeaders(selected.date))if(!all.some(b=>b.id===header.id))all.push(header);
         const eligible=(item:WorkItem)=>this.accountSelected(item.accountId)&&(!query.get('account')||item.accountId===query.get('account'))&&(!query.get('contact')||item.contacts.includes(query.get('contact')!.toLowerCase()))&&(!query.get('topic')||item.topicId===query.get('topic'));
         if(!selected)return {edition:null,editions:all.map(({id,date,revision,preparedAt})=>({id,date,revision,preparedAt})),since:[],coverage:this.coverage(),requestedDate:date};
         const items=selected.items.filter(eligible),ids=new Set(items.map(i=>i.id));
