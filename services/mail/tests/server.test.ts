@@ -680,3 +680,15 @@ it('accepts an editor send snapshot immediately and exposes its background statu
   expect((await submit({ accountId: 'one', to: '', bodyMarkdown: 'Do not send' })).status).toBe(400)
   expect(enqueue).toHaveBeenCalledTimes(1)
 })
+
+it('reads a sent draft outcome through the mail owner without sending or fetching Gmail', async () => {
+  const receipt = { id: 'confirmed', accountId: 'one', accountLabel: 'test@example.com', draftId: 'gmail-remote', messageId: 'sent', status: 'verified' as const, requestedAt: new Date().toISOString(), detailsSource: 'sent-message' as const }
+  const lookup = vi.fn((accountId: string, draftId?: string) => accountId === 'one' && draftId === 'queued-alias' ? receipt : undefined)
+  const send = vi.fn(async () => { throw new Error('Status must never send') })
+  const base = await start({}, { existingDraftSend: lookup, sendGmailDraft: send })
+  expect(await (await fetch(base + '/v1/drafts/queued-alias/send-status?account=one')).json()).toMatchObject({ receipt: { messageId: 'sent', status: 'verified' } })
+  expect(await (await fetch(base + '/v1/drafts/queued-alias/send-status?account=other')).json()).toEqual({ receipt: null })
+  expect((await fetch(base + '/v1/drafts/queued-alias/send-status')).status).toBe(400)
+  expect(lookup).toHaveBeenCalledWith('one', 'queued-alias')
+  expect(send).not.toHaveBeenCalled()
+})

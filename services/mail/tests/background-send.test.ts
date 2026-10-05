@@ -61,3 +61,30 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
     }
   } finally { releaseCreate(); provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
 })
+
+it('resolves an externally sent Gmail draft back to its saved queue identity and refuses stale reads', async () => {
+  let fields: Record<string, any> = {}
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
+    const input = JSON.parse(Buffer.concat(chunks).toString() || '{}')
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail') return res.end(JSON.stringify({ accounts: [{ linkId: 'one', email: 'test@example.com' }] }))
+    if (req.url?.endsWith('/drafts/create')) { fields = input; return res.end(JSON.stringify({ structuredContent: { draft_id: 'gmail-remote', message: { id: 'draft-message', thread_id: 'thread' } } })) }
+    if (req.url?.endsWith('/drafts/list')) return res.end(JSON.stringify({ structuredContent: { drafts: [{ draft_id: 'gmail-remote', message_id: 'draft-message', thread_id: 'thread', to: [fields.to], subject: fields.subject }] } }))
+    if (req.url?.endsWith('/read')) return res.end(JSON.stringify({ structuredContent: { id: 'draft-message', thread_id: 'thread', label_ids: ['DRAFT'], internal_date: '1788486120000', payload: { mime_type: 'text/plain', headers: [{ name: 'From', value: 'test@example.com' }, { name: 'To', value: fields.to }, { name: 'Subject', value: fields.subject }, { name: 'Content-ID', value: `<${fields.draftContentId}>` }], body: { content: fields.bodyMarkdown } } } }))
+    res.statusCode = 404; res.end('{}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false, localPath: ':memory:', draftListLagMs: 0 })
+  try {
+    const draft = provider.enqueueDraftSave('one', '', { to: 'test@example.com', subject: 'External send', bodyMarkdown: 'Body' })
+    await provider.flushDraftSaves('one')
+    expect(await provider.readGmailDraft('one', draft.id)).toMatchObject({ id: 'gmail-remote', resolvedFromDraftId: draft.id })
+    const receipt = provider.recordExternalSend('one', 'sent', 'gmail-remote')
+    expect(provider.existingDraftSend('one', draft.id)?.id).toBe(receipt.id)
+    expect(provider.existingDraftSend('other', draft.id)).toBeUndefined()
+    await expect(provider.readGmailDraft('one', draft.id)).rejects.toMatchObject({ code: 'gmail_draft_not_found' })
+    await expect(provider.readGmailDraft('one', 'gmail-remote')).rejects.toMatchObject({ code: 'gmail_draft_not_found' })
+    expect(provider.beginGmailDraftSend('one', draft.id).id).toBe(receipt.id)
+  } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
+})

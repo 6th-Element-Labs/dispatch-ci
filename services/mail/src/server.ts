@@ -705,6 +705,12 @@ export function createMailServer(
         return writeJson(response, 502, { error: 'draft_attachment_failed', detail: String(error) })
       }
     }
+    const draftSendStatusMatch = /^\/v1\/drafts\/([^/]+)\/send-status$/.exec(url.pathname)
+    if (request.method === 'GET' && draftSendStatusMatch?.[1]) {
+      const accountId = url.searchParams.get('account')
+      if (!accountId) return writeJson(response, 400, { error: 'gmail_account_required' })
+      return writeJson(response, 200, { receipt: gmail.existingDraftSend?.(accountId, decodeURIComponent(draftSendStatusMatch[1])) ?? null })
+    }
     const draftMatch = /^\/v1\/drafts\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && draftMatch?.[1]) {
       const draftId = decodeURIComponent(draftMatch[1])

@@ -307,3 +307,25 @@ describe('folderFlagsFromLabels', () => {
     index.close()
   })
 })
+
+it('moves Spam to Trash and gives Trash priority over stale overlapping labels and counts', () => {
+  const index = new GmailIndex(':memory:')
+  try {
+    const spam = message('m1', true, false, { inSpam: true })
+    index.replaceAccount('account-1', [spam], 'seed', true)
+    index.applyConversationAction('account-1', ['m1'], 'trash', true)
+    expect(index.mailboxConversations('spam', 'all')).toEqual([])
+    expect(index.mailboxConversations('trash', 'all')).toHaveLength(1)
+    expect(index.mailboxCounts()).toEqual({ inbox: 0, drafts: 0, spam: 0 })
+    index.replaceAccount('account-1', [spam], 'stale', false)
+    expect(index.mailboxConversations('spam', 'all')).toEqual([])
+    index.finishAction(index.pendingActions()[0]!.id)
+    const overlapping = { ...spam, ...folderFlagsFromLabels(['SPAM', 'TRASH', 'INBOX', 'DRAFT']) }
+    expect(overlapping).toMatchObject({ inTrash: true, inSpam: false, inInbox: false, inDrafts: false })
+    index.replaceAccount('account-1', [overlapping], 'confirmed', false)
+    expect(index.mailboxConversations('spam', 'all')).toEqual([])
+    expect(index.mailboxCounts().spam).toBe(0)
+    index.replaceAccount('account-1', [{ ...overlapping, inInbox: true, inSpam: true, inDrafts: true }], 'legacy-overlap', false)
+    expect(index.mailboxCounts()).toEqual({ inbox: 0, drafts: 0, spam: 0 })
+  } finally { index.close() }
+})
