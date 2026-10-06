@@ -162,7 +162,7 @@ describe('public export', () => {
 
   it('finds one release version across the product', async () => {
     const versions = await versionsFromTree(root)
-    assert.deepEqual([...new Set(versions.map(item => item.version))], ['0.1.8'])
+    assert.deepEqual([...new Set(versions.map(item => item.version))], ['0.1.9'])
     assert.equal(versions.length, 7)
   })
 })
