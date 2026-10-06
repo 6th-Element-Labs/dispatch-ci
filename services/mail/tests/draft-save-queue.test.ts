@@ -304,7 +304,9 @@ it('rebases a newer body edit onto its own confirmed write without a false confl
 })
 it('keeps its confirmed Gmail baseline across later edits from the original reply editor', async () => {
   const f = setup()
-  const original = projectDraft({ ...f.remote, id: '', bodyMarkdown: 'Reply text', attachments: [] })
+  // Mail seeds the thread identity with an empty body; the editor observes the
+  // complete queued reply returned by enqueue, not that internal seed.
+  const original = projectDraft({ ...f.remote, id: '', bodyMarkdown: '', attachments: [] })
   const create = f.gateway.create
   f.gateway.create = vi.fn(async job => {
     await create(job)
@@ -320,7 +322,7 @@ it('keeps its confirmed Gmail baseline across later edits from the original repl
   })
   const created = f.queue.enqueue('one', 'message', { bodyMarkdown: 'Reply text', attachments: [] }, undefined, original)
   await f.queue.flush()
-  const originalEditor = { ...original, id: created.id }
+  const originalEditor = { ...created }
   for (const bodyMarkdown of ['First typed reply', 'Final typed reply']) {
     f.queue.enqueue('one', 'message', { bodyMarkdown }, created.id, originalEditor)
     await f.queue.flush()

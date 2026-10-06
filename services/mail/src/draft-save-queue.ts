@@ -262,7 +262,7 @@ export class DraftSaveQueue {
       if (supersedesObservedAppend) base = { ...base, attachments: prior?.base?.attachments ?? base.attachments }
     }
     this.store.putDraftSave({ id, accountId, messageId: messageId || prior?.messageId || previous?.inReplyToMessageId || '', remoteId: prior?.remoteId ?? (remoteId?.startsWith('queued-') ? undefined : remoteId),
-      fields: merged, draft, base, editorBase: editorBase ?? draft, revision: (prior?.revision ?? 0) + 1, state: conflictedPrior ? 'failed' : 'pending', retryAt: 0,
+      fields: merged, draft, base, editorBase: !prior && !remoteId ? draft : editorBase ?? draft, revision: (prior?.revision ?? 0) + 1, state: conflictedPrior ? 'failed' : 'pending', retryAt: 0,
       attempts: conflictedPrior ? prior?.attempts ?? 0 : 0, reconnect: conflictedPrior ? prior?.reconnect ?? false : false,
       error: conflictedPrior ? prior?.error : undefined, createdAt: prior?.createdAt ?? new Date(this.now()).toISOString(), started: prior?.started,
       attachmentAppends, conflictRemote, conflictFields })
