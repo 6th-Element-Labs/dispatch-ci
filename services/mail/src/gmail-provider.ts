@@ -1822,7 +1822,11 @@ export class GmailConnectorProvider {
       const current = this.#stopped ? receipt : this.#local.receipt(id)
       if (current?.status === 'verified' || current?.messageId !== receipt.messageId) return current ?? receipt
       const verified: SendReceipt = { ...receipt, status: 'verified', detailsSource: 'sent-message', details, sentAt: message.receivedAt, verifiedAt: new Date().toISOString(), accountLabel: message.accountLabel ?? receipt.accountLabel, error: undefined, warnings }
-      if (!this.#stopped) this.#local.putReceipt(verified)
+      if (!this.#stopped) {
+        this.#index?.confirmSent(receipt.accountId, { ...messageSummaryOf(message), hasAttachment: message.attachments.length > 0, ...folderFlagsFromLabels(message.labels) }, `sent-${receipt.id}`)
+        this.#mailRevision++
+        this.#local.putReceipt(verified)
+      }
       return verified
     } catch (error) {
       const current = this.#stopped ? receipt : this.#local.receipt(id)

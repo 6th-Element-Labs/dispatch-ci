@@ -42,6 +42,7 @@ async function fixture() {
     if (req.url === '/v1/connectors/gmail/drafts/create') return reply({ structuredContent: { draft_id: 'created-fast' } })
     if (req.url === '/v1/connectors/gmail/drafts/send') { state.sends++; return state.sendError ? reply({ error: 'timeout waiting for Gmail' }, 504) : reply({ structuredContent: { id: 'sent' } }) }
     if (req.url === '/v1/connectors/gmail/search-messages') { state.syncCalls++; if (state.holdSync) await syncGate; return reply({ structuredContent: { emails: body.labelIds?.includes('INBOX') ? [{ id: 'm1', thread_id: 't1', from_: 'work@example.com', subject: 'Delivery', labels: ['INBOX'], email_ts: '2026-09-04T01:00:00Z' }] : [] } }) }
+    if (req.url === '/v1/connectors/gmail/search') return reply({ structuredContent: { message_ids: body.labelIds?.includes('INBOX') ? ['m1'] : [] } })
     reply({ error: 'not found' }, 404)
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())))
@@ -103,6 +104,19 @@ it('keeps accepted sends accepted when verification fails, then allows verificat
   expect(p.sendReceipts()[0]?.status).toBe('accepted')
   f.state.verifyError = false
   expect((await p.verifySendReceipt(result.receipt.id)).status).toBe('verified')
+  expect(f.state.sends).toBe(1)
+})
+it('shows the verified Sent copy before mailbox search catches up, including after restart', async () => {
+  const f = await fixture(); const p = f.open(); await p.syncNow()
+  const revision = p.syncStatus()?.mailRevision
+  await p.sendGmailDraft('one', 'd1')
+  await expect.poll(() => p.sendReceipts()[0]?.status).toBe('verified')
+  expect(await p.listMailboxConversations('sent', 'all', 'one')).toMatchObject([{ latestMessageId: 'sent', hasAttachment: true }])
+  expect(p.syncStatus()?.mailRevision).toBeGreaterThan(revision!)
+  // The connector still returns an empty Sent search and an older thread.
+  expect((await p.readConversation('one', 't1', false, 'sent')).messages.map(m => m.id)).toContain('sent')
+  f.close(p); const restarted = f.open(); await restarted.syncNow()
+  expect(await restarted.listMailboxConversations('sent', 'all', 'one')).toMatchObject([{ latestMessageId: 'sent' }])
   expect(f.state.sends).toBe(1)
 })
 it('keeps ambiguous send failures unknown across restart and blocks a blind retry', async () => {
