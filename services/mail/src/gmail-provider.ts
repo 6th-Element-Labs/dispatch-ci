@@ -814,9 +814,7 @@ export class GmailConnectorProvider {
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
     try {
-      const signal = this.#syncContext.getStore()
-      const response = await fetch(`${this.#agentBase}/v1/connectors/gmail`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) })
-      const value = await response.json() as unknown
+      const { response, value } = await this.#connectorRequest('/v1/connectors/gmail')
       if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
       const inventory = record(value)
       this.#inventoryError = undefined
@@ -2121,10 +2119,7 @@ export class GmailConnectorProvider {
     const linkId = text(bodyValue.linkId)
     const retryAt = Math.max(this.#gmailBackoff.get(linkId) ?? 0, this.#local.retryAfter(linkId))
     if (retryAt > Date.now()) throw Object.assign(new Error(`Gmail is rate limiting this account. Retry after ${new Date(retryAt).toISOString()}`), { code: 'gmail_backoff' })
-    const response = await fetch(`${this.#agentBase}${path}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue), signal: this.#syncContext.getStore() ? AbortSignal.any([this.#syncContext.getStore()!, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-    })
-    const value = await response.json() as unknown
+    const { response, value } = await this.#connectorRequest(path, bodyValue)
     // Only a failed call can carry a rate limit, and only its error fields are read: a successful
     // page holds email text, which is untrusted and may quote "RATE_LIMITED ... Retry after <any date>".
     const content = structured(value)
@@ -2146,6 +2141,28 @@ export class GmailConnectorProvider {
     }
     if (!array(content.responses).some(item => record(item)?.success === false)) this.#rateLimitStreak.delete(linkId)
     return value
+  }
+
+  /** Retry only disconnected reads, once within the same deadline. Delivery is never replayed. */
+  async #connectorRequest(path: string, bodyValue?: UnknownRecord): Promise<{ response: Response; value: unknown }> {
+    const readOnly = ['/v1/connectors/gmail', '/v1/connectors/gmail/search', '/v1/connectors/gmail/search-messages',
+      '/v1/connectors/gmail/read', '/v1/connectors/gmail/read-thread', '/v1/connectors/gmail/drafts/list', '/v1/connectors/gmail/attachment'].includes(path)
+    const scan = this.#syncContext.getStore()
+    const deadline = AbortSignal.timeout(30_000)
+    const signal = scan ? AbortSignal.any([scan, deadline]) : deadline
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await fetch(`${this.#agentBase}${path}`, { signal,
+          ...(bodyValue ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue) } : {}) })
+        return { response, value: await response.json() as unknown }
+      } catch (error) {
+        const cause = (error as { cause?: { code?: string }; code?: string })?.cause?.code ?? (error as { code?: string })?.code
+        if (readOnly && attempt === 0 && !signal.aborted && ['UND_ERR_SOCKET', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE'].includes(cause ?? '')) continue
+        // Keep the original connection cause used to distinguish an unreachable
+        // agent from an uncertain write that may already have reached Gmail.
+        throw new Error(`Gmail connector ${readOnly ? 'read' : 'write'} ${path} failed: ${error instanceof Error ? error.message : String(error)}${cause ? ` (${cause})` : ''}`, { cause: (error as Error)?.cause ?? error })
+      }
+    }
   }
 
   /**

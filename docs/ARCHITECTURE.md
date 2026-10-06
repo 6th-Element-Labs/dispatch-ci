@@ -193,3 +193,10 @@ restart. Each protection ends when its search stream lists the message, a later
 message read supplies authoritative labels, or thirty minutes elapse. Explicit
 folder actions and confirmed permanent deletion still take priority. This changes
 visibility only; it neither invents delivery nor retries a send.
+
+Connector transport retries a disconnected read once within the original request
+deadline. The explicit read routes cover inventory, message/thread reads, search,
+draft lists and attachment reads. HTTP provider errors, cancellation and expired
+deadlines are not retried. Create, update, label actions and delivery requests are
+never retried by this transport. Remaining failures identify the route and
+connection code, while retaining the original cause for uncertain-write handling.

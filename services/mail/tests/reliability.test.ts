@@ -18,6 +18,7 @@ async function fixture() {
   const gate = new Promise<void>(resolve => { releaseRead = resolve })
   let releaseSync: (() => void) | undefined
   const syncGate = new Promise<void>(resolve => { releaseSync = resolve })
+  const disconnect = { read: false, persistentRead: false, send: false, draftReads: 0 }
   const state = { threadMessages: undefined as ReturnType<typeof message>[] | undefined, failUpdate: false, trashed: false, failTrash: false, limitDrafts: false, limitDiscard: false, limitThread: false, draftsReply: undefined as unknown, deleted: [] as string[][], holdSync: false, syncCalls: 0, releaseSync: () => releaseSync!(), holdRead: false, releaseRead: () => releaseRead!(), reads: 0, sends: 0, threadError: '', sendError: false, verifyError: false, to: 'ana@example.com' }
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
@@ -30,6 +31,8 @@ async function fixture() {
     if (req.url === '/v1/connectors/gmail/drafts/list' && state.limitDrafts) return reply({ isError: true, structuredContent: { error: 'GmailApiError: Failed to list drafts', error_code: 'RATE_LIMITED', error_data: { code: 'rateLimitExceeded', message: 'User-rate limit exceeded.  Retry after 2099-01-01T00:00:00.000Z' } } })
     if (req.url === '/v1/connectors/gmail/drafts/list') return reply({ structuredContent: { drafts: state.trashed ? [] : [{ draft_id: 'd1', message_id: 'draft-message', thread_id: 't1', to: ['ana@example.com'], cc: ['cc@example.com'], bcc: ['bcc@example.com'], subject: 'Delivery' }] } })
     if (req.url === '/v1/connectors/gmail/read') {
+      if (body.messageId !== 'sent') disconnect.draftReads++
+      if (disconnect.read || disconnect.persistentRead) { disconnect.read = false; req.socket.destroy(); return }
       if (body.messageId === 'sent' && state.verifyError) return reply({ error: 'temporarily unavailable' }, 503)
       const value = message(body.messageId, body.messageId === 'sent' ? ['SENT'] : ['DRAFT'])
       if (body.messageId === 'sent') value.payload.headers[1]!.value = state.to
@@ -40,7 +43,7 @@ async function fixture() {
     if (req.url === '/v1/connectors/gmail/delete') { state.deleted.push(body.messageIds); state.trashed = !state.failTrash; return reply({ structuredContent: { responses: [{ message_id: body.messageIds[0], success: !state.failTrash }] } }) }
     if (req.url === '/v1/connectors/gmail/drafts/update') return reply(state.failUpdate ? { isError: true, structuredContent: { error: 'recipient rejected' } } : { structuredContent: { draft_id: 'd1' } })
     if (req.url === '/v1/connectors/gmail/drafts/create') return reply({ structuredContent: { draft_id: 'created-fast' } })
-    if (req.url === '/v1/connectors/gmail/drafts/send') { state.sends++; return state.sendError ? reply({ error: 'timeout waiting for Gmail' }, 504) : reply({ structuredContent: { id: 'sent' } }) }
+    if (req.url === '/v1/connectors/gmail/drafts/send') { state.sends++; if (disconnect.send) { disconnect.send = false; req.socket.destroy(); return }; return state.sendError ? reply({ error: 'timeout waiting for Gmail' }, 504) : reply({ structuredContent: { id: 'sent' } }) }
     if (req.url === '/v1/connectors/gmail/search-messages') { state.syncCalls++; if (state.holdSync) await syncGate; return reply({ structuredContent: { emails: body.labelIds?.includes('INBOX') ? [{ id: 'm1', thread_id: 't1', from_: 'work@example.com', subject: 'Delivery', labels: ['INBOX'], email_ts: '2026-09-04T01:00:00Z' }] : [] } }) }
     if (req.url === '/v1/connectors/gmail/search') return reply({ structuredContent: { message_ids: body.labelIds?.includes('INBOX') ? ['m1'] : [] } })
     reply({ error: 'not found' }, 404)
@@ -51,7 +54,7 @@ async function fixture() {
   cleanup.push(() => { for (const p of providers) p.stopBackgroundSync() })
   const open = () => { const p = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: path }); providers.push(p); return p }
   const close = (p: GmailConnectorProvider) => { p.stopBackgroundSync(); providers.splice(providers.indexOf(p), 1) }
-  return { state, open, close, path }
+  return { state, disconnect, open, close, path }
 }
 it('keeps full opened threads across restart and does no connector read in downloaded mode', async () => {
   const f = await fixture(); const first = f.open()
@@ -123,6 +126,29 @@ it('keeps ambiguous send failures unknown across restart and blocks a blind retr
   const f = await fixture(); const p = f.open(); f.state.sendError = true
   expect((await p.sendGmailDraft('one', 'd1') as { receipt: SendReceipt }).receipt.status).toBe('unknown')
   f.close(p); const restarted = f.open(); await restarted.sendGmailDraft('one', 'd1'); expect(f.state.sends).toBe(1)
+})
+it('recovers a disconnected read during Send preparation without replaying delivery', async () => {
+  const f = await fixture(); const p = f.open(); f.disconnect.read = true
+  const result = await p.sendGmailDraft('one', 'd1') as { receipt: SendReceipt }
+  expect(result.receipt.status).toBe('accepted')
+  await expect.poll(() => p.sendReceipt(result.receipt.id)?.status).toBe('verified')
+  expect(f.disconnect.draftReads).toBeGreaterThanOrEqual(2)
+  expect(f.state.sends).toBe(1)
+})
+it('never retries the delivery request when its connection closes without a response', async () => {
+  const f = await fixture(); const p = f.open(); f.disconnect.send = true
+  const result = await p.sendGmailDraft('one', 'd1') as { receipt: SendReceipt }
+  expect(result.receipt.status).toBe('unknown')
+  f.close(p); const restarted = f.open(); await restarted.sendGmailDraft('one', 'd1')
+  expect(f.state.sends).toBe(1)
+})
+it('stops after one disconnected-read retry and keeps the failed preparation unsent', async () => {
+  const f = await fixture(); const p = f.open(); f.disconnect.persistentRead = true
+  const result = await p.sendGmailDraft('one', 'd1') as { receipt: SendReceipt }
+  expect(result.receipt.status).toBe('failed')
+  expect(result.receipt.error).toContain('/v1/connectors/gmail/read')
+  expect(f.disconnect.draftReads).toBe(2)
+  expect(f.state.sends).toBe(0)
 })
 it('recovers all interrupted receipts, including entries older than the visible history limit', async () => {
   const f = await fixture(); const db = new LocalMailStore(`${f.path}.local`)
