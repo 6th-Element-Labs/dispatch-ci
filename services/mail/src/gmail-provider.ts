@@ -2151,13 +2151,14 @@ export class GmailConnectorProvider {
     const deadline = AbortSignal.timeout(30_000)
     const signal = scan ? AbortSignal.any([scan, deadline]) : deadline
     for (let attempt = 0; ; attempt++) {
+      let response: Response | undefined
       try {
-        const response = await fetch(`${this.#agentBase}${path}`, { signal,
+        response = await fetch(`${this.#agentBase}${path}`, { signal,
           ...(bodyValue ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyValue) } : {}) })
         return { response, value: await response.json() as unknown }
       } catch (error) {
         const cause = (error as { cause?: { code?: string }; code?: string })?.cause?.code ?? (error as { code?: string })?.code
-        if (readOnly && attempt === 0 && !signal.aborted && ['UND_ERR_SOCKET', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE'].includes(cause ?? '')) continue
+        if (readOnly && attempt === 0 && response?.ok !== false && !signal.aborted && ['UND_ERR_SOCKET', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE'].includes(cause ?? '')) continue
         // Keep the original connection cause used to distinguish an unreachable
         // agent from an uncertain write that may already have reached Gmail.
         throw new Error(`Gmail connector ${readOnly ? 'read' : 'write'} ${path} failed: ${error instanceof Error ? error.message : String(error)}${cause ? ` (${cause})` : ''}`, { cause: (error as Error)?.cause ?? error })

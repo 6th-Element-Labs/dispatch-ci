@@ -18,7 +18,7 @@ async function fixture() {
   const gate = new Promise<void>(resolve => { releaseRead = resolve })
   let releaseSync: (() => void) | undefined
   const syncGate = new Promise<void>(resolve => { releaseSync = resolve })
-  const disconnect = { read: false, persistentRead: false, send: false, draftReads: 0 }
+  const disconnect = { read: false, persistentRead: false, httpReadError: false, send: false, draftReads: 0 }
   const state = { threadMessages: undefined as ReturnType<typeof message>[] | undefined, failUpdate: false, trashed: false, failTrash: false, limitDrafts: false, limitDiscard: false, limitThread: false, draftsReply: undefined as unknown, deleted: [] as string[][], holdSync: false, syncCalls: 0, releaseSync: () => releaseSync!(), holdRead: false, releaseRead: () => releaseRead!(), reads: 0, sends: 0, threadError: '', sendError: false, verifyError: false, to: 'ana@example.com' }
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
@@ -32,6 +32,7 @@ async function fixture() {
     if (req.url === '/v1/connectors/gmail/drafts/list') return reply({ structuredContent: { drafts: state.trashed ? [] : [{ draft_id: 'd1', message_id: 'draft-message', thread_id: 't1', to: ['ana@example.com'], cc: ['cc@example.com'], bcc: ['bcc@example.com'], subject: 'Delivery' }] } })
     if (req.url === '/v1/connectors/gmail/read') {
       if (body.messageId !== 'sent') disconnect.draftReads++
+      if (disconnect.httpReadError) { res.writeHead(429, { 'content-type': 'application/json' }); res.flushHeaders(); setTimeout(() => req.socket.destroy(), 20); return }
       if (disconnect.read || disconnect.persistentRead) { disconnect.read = false; req.socket.destroy(); return }
       if (body.messageId === 'sent' && state.verifyError) return reply({ error: 'temporarily unavailable' }, 503)
       const value = message(body.messageId, body.messageId === 'sent' ? ['SENT'] : ['DRAFT'])
@@ -148,6 +149,13 @@ it('stops after one disconnected-read retry and keeps the failed preparation uns
   expect(result.receipt.status).toBe('failed')
   expect(result.receipt.error).toContain('/v1/connectors/gmail/read')
   expect(f.disconnect.draftReads).toBe(2)
+  expect(f.state.sends).toBe(0)
+})
+it('does not retry a provider HTTP rejection even when its response body disconnects', async () => {
+  const f = await fixture(); const p = f.open(); f.disconnect.httpReadError = true
+  const result = await p.sendGmailDraft('one', 'd1') as { receipt: SendReceipt }
+  expect(result.receipt.status).toBe('failed')
+  expect(f.disconnect.draftReads).toBe(1)
   expect(f.state.sends).toBe(0)
 })
 it('recovers all interrupted receipts, including entries older than the visible history limit', async () => {
