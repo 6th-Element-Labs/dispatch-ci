@@ -349,22 +349,23 @@ test('opens folders from the toolbar popover and keeps the account scope in the 
 })
 
 test('shows a live Tabler activity indicator while Codex is working', async ({ page }) => {
+  await stubAgent(page)
+  await page.addInitScript(() => {
+    class ActivityEvents {
+      static CLOSED = 2; readyState = 1; onopen: any; onmessage: any; onerror: any
+      constructor(url: string) {
+        if (url.includes('/v1/events?')) (window as any).activityEvents = this
+        setTimeout(() => this.onopen?.({}), 0)
+      }
+      close() { this.readyState = 2 }
+    }
+    ;(window as any).EventSource = ActivityEvents
+  })
   await page.goto('/')
-  await page.evaluate(() => {
-    const status = document.querySelector('[data-agent-status]')
-    if (!status) return
-    status.setAttribute('data-status', 'Working')
-    status.setAttribute('title', 'Working')
-    status.setAttribute('aria-label', 'Working')
-  })
+  await expect(page.locator('[data-agent-status]')).toHaveAttribute('data-status', 'Connected')
+  await page.evaluate(() => (window as any).activityEvents.onmessage({ data: JSON.stringify({ method: 'turn/started', params: { turn: { id: 'activity-turn', status: 'inProgress' } } }) }))
   await expect(page.locator('[data-agent-activity]')).toBeVisible()
-  await page.evaluate(() => {
-    const status = document.querySelector('[data-agent-status]')
-    if (!status) return
-    status.setAttribute('data-status', 'Connected')
-    status.setAttribute('title', 'Connected')
-    status.setAttribute('aria-label', 'Connected')
-  })
+  await page.evaluate(() => (window as any).activityEvents.onmessage({ data: JSON.stringify({ method: 'turn/completed', params: { turn: { id: 'activity-turn', status: 'completed' } } }) }))
   await expect(page.locator('[data-agent-activity]')).toBeHidden()
 })
 
