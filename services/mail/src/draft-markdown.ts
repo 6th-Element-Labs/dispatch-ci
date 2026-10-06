@@ -11,7 +11,10 @@ export function normalizedDraftBody(value: string): string {
 }
 
 export function renderDraftMarkdown(markdown: string): string {
-  const rendered = marked.parse(markdown, markedOptions) as string
+  // Earlier rich-editor saves escaped underscores in bare URLs. They denote
+  // the original URL, rather than a URL containing literal backslashes.
+  const source = markdown.replace(/https?:\/\/[^\s<>]+/g, url => url.replace(/\\+_/g, '_'))
+  const rendered = marked.parse(source, markedOptions) as string
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     if (node.nodeType !== 1) return
     if (node.tagName === 'A') {

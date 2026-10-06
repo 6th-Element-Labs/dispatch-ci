@@ -4098,6 +4098,25 @@ test('rich draft formatting survives saving and reopening', async ({ page }) => 
   await expect(body.locator('a')).toHaveAttribute('href', 'https://example.com/review')
 })
 
+test('rich-editor saves preserve bare URLs with underscores through subsequent edits', async ({ page }) => {
+  await gmailMail()(page)
+  const url = 'https://example.com/slides?slide=deck_0_829#slide=deck_0_829'
+  const saved: Record<string, unknown>[] = []
+  await page.route('http://127.0.0.1:8411/v1/draft-saves', route => {
+    const fields = route.request().postDataJSON(); saved.push(fields)
+    return route.fulfill({ status: 202, json: { draft: draftProjectionFromCommand(fields, 'url-one') } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Compose', exact: true }).click()
+  const body = page.getByRole('textbox', { name: 'Draft body' })
+  await body.fill(url)
+  await expect.poll(() => String(saved.at(-1)?.bodyMarkdown)).toBe(url)
+  await body.press('End'); await body.press('Enter'); await body.pressSequentially('More text')
+  await expect.poll(() => String(saved.at(-1)?.bodyMarkdown)).toContain('More text')
+  expect(String(saved.at(-1)?.bodyMarkdown)).toContain(url)
+  expect(String(saved.at(-1)?.bodyMarkdown)).not.toContain('\\_')
+})
+
 test('popping out a draft transfers unsaved formatting, recipients and attachments', async ({ page }) => {
   await gmailMail({ draftStatus: 502 })(page)
   await page.addInitScript(() => {
