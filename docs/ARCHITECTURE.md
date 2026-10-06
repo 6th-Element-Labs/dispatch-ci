@@ -184,3 +184,12 @@ Mail resolves queued draft IDs and Gmail draft IDs for `GET /v1/drafts/:id/send-
 An editor recovery UUID is distinct from a Codex creation UUID. Draft saves resolve the supplied queued or Gmail draft ID first, retaining one queue record and its attachment operations. Conflicting identities fail without changing either draft. A confirmed send prevents subsequent autosaves from recreating that draft. `POST /v1/drafts/:id/send-status?account=...` compares a complete recovery snapshot with the actual Sent message, including normalized body, recipients and attachment hashes. Only a matching snapshot is consumed; later edits remain local. A repeated Send with changed fields cannot reuse an old successful receipt as evidence that those changes were delivered.
 
 Read commands apply to the displayed message IDs. The UI read overlay is scoped to the conversation's latest message ID and expires when the mailbox confirms it or a newer message arrives. Folder actions apply to every currently indexed message in the thread, plus the supplied reader IDs. Trash removes Spam as well as Inbox. Folder counts use the same eligibility rules as their lists, and Trash takes priority over overlapping provider labels.
+
+After Gmail returns and verifies the actual Sent message, mail immediately commits
+that message to its index and advances the mailbox revision. Sent and the selected
+thread can update without waiting for a mailbox scan. Newly confirmed positive
+Sent, Inbox and Unread flags survive lagging search results independently, including
+restart. Each protection ends when its search stream lists the message, a later
+message read supplies authoritative labels, or thirty minutes elapse. Explicit
+folder actions and confirmed permanent deletion still take priority. This changes
+visibility only; it neither invents delivery nor retries a send.
