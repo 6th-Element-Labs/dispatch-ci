@@ -73,6 +73,31 @@ it('rejects two supplied identities that already belong to different drafts', ()
   expect(() => f.queue.enqueue('one', '', { bodyMarkdown: 'Wrong draft' }, first.id, undefined, 'second')).toThrow('Draft identities refer to different drafts')
   expect(f.store.draftSave('one', first.id)?.draft.bodyMarkdown).toBe('First')
 })
+it('keeps one queue identity after an authoritative read resolves a Gmail replacement', async () => {
+  const f = setup()
+  const created = f.queue.enqueue('one', '', { bodyMarkdown: 'Original' }, undefined, undefined, 'codex-create')
+  await f.queue.flush()
+  const replacement = { ...f.remote, id: 'gmail-replacement' }
+  f.setRemote(replacement)
+  expect(await f.queue.read('one', created.id)).toMatchObject({ id: replacement.id, resolvedFromDraftId: created.id })
+  f.queue.pause(true)
+  const edited = f.queue.enqueue('one', '', { bodyMarkdown: 'Later editor edit' }, replacement.id, replacement, 'editor-recovery')
+  expect(edited.id).toBe(created.id)
+  expect(f.store.draftSaves()).toHaveLength(1)
+  expect(f.store.draftSave('one', created.id)?.remoteId).toBe(replacement.id)
+})
+it('adopts a confirmed replacement alias without overwriting edits accepted during its read', async () => {
+  const f = setup()
+  const created = f.queue.enqueue('one', '', { bodyMarkdown: 'Original' })
+  await f.queue.flush(); f.queue.pause(true)
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  vi.mocked(f.gateway.read).mockImplementationOnce(async () => { await gate; return { ...f.remote, id: 'gmail-replacement' } })
+  const reading = f.queue.read('one', created.id)
+  const newer = f.queue.enqueue('one', '', { bodyMarkdown: 'New typing' }, created.id)
+  release(); await reading
+  expect(f.store.draftSave('one', created.id)).toMatchObject({ remoteId: 'gmail-replacement', revision: newer.draftRevision, state: 'pending', draft: { bodyMarkdown: 'New typing' }, fields: { bodyMarkdown: 'New typing' } })
+})
 it('keeps the accepted pending command and retries if persistence fails after Gmail accepts it', async () => {
   const f = setup()
   const originalPut = f.store.putDraftSave.bind(f.store)

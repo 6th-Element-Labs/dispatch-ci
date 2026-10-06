@@ -315,7 +315,20 @@ export class DraftSaveQueue {
     const job = this.store.draftSave(accountId, id)
     if (!job || job.state === 'cancelled') throw Object.assign(new Error('Draft was discarded'), { code: 'gmail_draft_not_found' })
     if (job.state !== 'saved' || !job.remoteId) return this.projection(job)
-    return { ...await this.gateway.read(accountId, job.remoteId), resolvedFromDraftId: id, draftRevision: job.revision }
+    const fresh = await this.gateway.read(accountId, job.remoteId)
+    if (fresh.accountId !== accountId || !fresh.id) throw new Error('Gmail returned a different draft account or missing identity')
+    if (fresh.id !== job.remoteId) {
+      const latest = this.store.draftSave(accountId, id)
+      // Gmail can replace a saved draft. Record the confirmed alias without
+      // overwriting a newer local edit or cancellation accepted during the read.
+      if (latest && latest.state !== 'cancelled' && latest.remoteId === job.remoteId) {
+        this.store.putDraftSave({ ...latest, remoteId: fresh.id,
+          ...(latest.state === 'saved' && latest.revision === job.revision ? { draft: { ...fresh, id } } : {}),
+          base: latest.base ? { ...latest.base, id: fresh.id } : undefined })
+        this.changed()
+      }
+    }
+    return { ...fresh, resolvedFromDraftId: id, draftRevision: job.revision }
   }
   async discard(accountId: string, id: string): Promise<void> {
     const job = this.store.draftSave(accountId, id)
