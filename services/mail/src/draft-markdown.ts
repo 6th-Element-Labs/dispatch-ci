@@ -1,7 +1,14 @@
 import DOMPurify from 'isomorphic-dompurify'
 import { marked } from 'marked'
+import TurndownService from 'turndown'
 
 const markedOptions = { async: false as const, breaks: false, gfm: true }
+const normalizedMarkdown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' })
+normalizedMarkdown.keep(['table', 'sub', 'sup'])
+
+export function normalizedDraftBody(value: string): string {
+  return normalizedMarkdown.turndown(renderDraftMarkdown(value)).replaceAll('\r\n', '\n').trim()
+}
 
 export function renderDraftMarkdown(markdown: string): string {
   const rendered = marked.parse(markdown, markedOptions) as string

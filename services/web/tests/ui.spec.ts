@@ -4558,6 +4558,35 @@ for (const scenario of ['clean', 'late-edit', 'different-draft', 'without-tool-e
   else await expect(page.locator('[data-draft]')).toBeHidden()
 })
 
+for (const matches of [true, false]) test(`a recovered sent editor is consumed only when Mail confirms the complete snapshot (matches=${matches})`, async ({ page }) => {
+  await page.clock.install()
+  await stubAgent(page)
+  await page.addInitScript(() => localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{ key: 'editor-key', updatedAt: '2026-10-06T00:00:00Z', revision: 5, accountId: 'one', gmailDraftId: 'queued-codex-key', gmailThreadId: 'thread', inReplyToMessageId: '', to: 'test@example.com', cc: '', bcc: '', subject: 'Already sent recovery', bodyMarkdown: 'Visible reply', attachments: [] }])))
+  await page.route('http://127.0.0.1:8411/v1/accounts', route => route.fulfill({ json: { accounts: [{ id: 'one', name: 'Test', email: 'test@example.com' }] } }))
+  await page.route('http://127.0.0.1:8411/v1/draft-saves', route => route.fulfill({ status: 400, json: { error: 'gmail_draft_sent', detail: 'This draft was already sent.' } }))
+  let comparisons = 0
+  let held: import('@playwright/test').Route | undefined
+  await page.route(/8411\/v1\/drafts\/queued-codex-key\/send-status/, route => {
+    if (route.request().method() === 'POST') { comparisons++; return route.fulfill({ json: { matches } }) }
+    held = route
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-local-draft-key="editor-key"]').click()
+  await expect(page.locator('[data-draft-body]')).toHaveText('Visible reply')
+  await page.clock.fastForward(5000)
+  await expect.poll(() => Boolean(held)).toBe(true)
+  await held!.fulfill({ json: { receipt: { id: 'confirmed', accountId: 'one', draftId: 'gmail-remote', status: 'verified', messageId: 'sent-id' } } })
+  await expect.poll(() => comparisons).toBeGreaterThan(0)
+  if (matches) {
+    await expect(page.locator('[data-draft]')).toBeHidden()
+    await expect.poll(async () => (await localRecovery(page)).length).toBe(0)
+  } else {
+    await expect(page.locator('[data-draft-body]')).toHaveText('Visible reply')
+    expect((await localRecovery(page)).length).toBe(1)
+  }
+})
+
 test('EA shows a fixed newspaper with separate later updates and dated history',async({page})=>{
  await stubAgent(page)
  const source={id:'mail-source',kind:'email',accountId:'demo',threadId:'t1',messageId:'m1',title:'Delivery update',at:'2026-10-05T08:00:00Z',author:'jacob@example.com',participants:['jacob@example.com'],text:''}
