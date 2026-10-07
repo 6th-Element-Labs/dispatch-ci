@@ -4265,6 +4265,83 @@ test('popping out a draft transfers unsaved formatting, recipients and attachmen
   await expect(body).toHaveText('Edited in its own window')
 })
 
+async function completingDraftPopup(page: Page, routes: (target: Page) => Promise<void>): Promise<Page> {
+  let connected = false
+  const popup = await openMessageWindowPage(page, 'window=draft&conversation=draft%3Apopup-finish&thread=t1&mailbox=drafts&account=one&draftKey=popup-finish', async target => {
+    await gmailMail({ draftStatus: 502 })(target)
+    await target.addInitScript(() => localStorage.setItem('dispatch.editor-recovery.v1', JSON.stringify([{
+      key: 'popup-finish', updatedAt: new Date().toISOString(), revision: 1, accountId: 'one', gmailDraftId: 'd-popup',
+      inReplyToMessageId: '', to: 'ana@example.com', cc: '', bcc: '', subject: 'Popup completion', bodyMarkdown: '**Keep this reply**', attachments: [],
+    }])))
+    await routes(target)
+    await target.route('http://127.0.0.1:8411/v1/draft-sends', route => {
+      if (route.request().method() === 'GET') connected = true
+      return route.fallback()
+    })
+  })
+  // The mail connection starts activity polling after the checkpoint has fully opened.
+  await expect.poll(() => connected).toBe(true)
+  return popup
+}
+
+for (const status of ['accepted', 'failed'] as const) test(`a draft pop-out closes only after confirmed Send and keeps failures editable (${status})`, async ({ page }) => {
+  let result: 'preparing' | typeof status = 'preparing'
+  const receipt = () => ({ id: 'popup-send', accountId: 'one', accountLabel: 'work@example.com', status: result,
+    requestedAt: new Date().toISOString(), detailsSource: 'snapshot', error: result === 'failed' ? 'Gmail unavailable' : undefined })
+  const popup = await completingDraftPopup(page, async target => {
+    await target.route('http://127.0.0.1:8411/v1/draft-sends', route => route.request().method() === 'GET'
+      ? route.fulfill({ json: { sends: [] } }) : route.fulfill({ status: 202, json: { receipt: receipt() } }))
+    await target.route('http://127.0.0.1:8411/v1/draft-sends/popup-send', route => route.fulfill({ json: { receipt: receipt() } }))
+  })
+  await expect(popup.locator('[data-draft-body] strong')).toHaveText('Keep this reply')
+  await popup.locator('[data-send-draft]').click()
+  await expect(popup.locator('[data-reader-empty]')).toHaveText('Sending…')
+  expect(await popup.evaluate(() => (window as unknown as { __closed: boolean }).__closed)).toBe(false)
+  result = status
+  if (status === 'accepted') {
+    await expect.poll(() => popup.evaluate(() => (window as unknown as { __closed: boolean }).__closed)).toBe(true)
+    await expect(popup.locator('[data-reader-empty]')).toHaveText('Sent. You can close this window.')
+    await expect(popup.locator('[data-draft]')).toBeHidden()
+  } else {
+    await expect(popup.locator('[data-draft-error]')).toContainText('Gmail unavailable')
+    await expect(popup.locator('[data-draft-body] strong')).toHaveText('Keep this reply')
+    await expect(popup.locator('[data-recipient-field]').first()).toContainText('ana@example.com')
+    expect(await popup.evaluate(() => (window as unknown as { __closed: boolean }).__closed)).toBe(false)
+  }
+})
+
+test('a draft pop-out closes only once Discard is confirmed', async ({ page }) => {
+  let pending: import('@playwright/test').Route | undefined
+  const popup = await completingDraftPopup(page, async target => {
+    await target.route(/8411\/v1\/drafts\/d-popup(?:\?|$)/, async route => {
+      if (route.request().method() === 'POST') { pending = route; return }
+      await route.fallback()
+    })
+  })
+  await expect(popup.locator('[data-draft-body] strong')).toHaveText('Keep this reply')
+  await popup.getByRole('button', { name: 'Discard', exact: true }).click()
+  await expect.poll(() => Boolean(pending)).toBe(true)
+  expect(await popup.evaluate(() => (window as unknown as { __closed: boolean }).__closed)).toBe(false)
+  await pending!.fulfill({ json: {} })
+  await expect.poll(() => popup.evaluate(() => (window as unknown as { __closed: boolean }).__closed)).toBe(true)
+  await expect(popup.locator('[data-reader-empty]')).toHaveText('Discarded. You can close this window.')
+})
+
+test('a native close failure leaves a confirmed send finished without reopening its draft', async ({ page }) => {
+  const popup = await completingDraftPopup(page, async target => {
+    await target.addInitScript(() => {
+      ;(window as unknown as { __TAURI__: unknown }).__TAURI__ = { window: { getCurrentWindow: () => ({ close: async () => { throw new Error('Native close unavailable') } }) } }
+    })
+    await target.route('http://127.0.0.1:8411/v1/draft-sends', route => route.request().method() === 'GET'
+      ? route.fulfill({ json: { sends: [] } }) : route.fulfill({ status: 202, json: { receipt: { id: 'finished', status: 'accepted' } } }))
+  })
+  await expect(popup.locator('[data-draft-body]')).toBeVisible()
+  await popup.locator('[data-send-draft]').click()
+  await expect(popup.locator('[data-reader-empty]')).toHaveText('Sent. You can close this window.')
+  await expect(popup.locator('[data-draft]')).toBeHidden()
+  await expect(popup.locator('[data-draft-error]')).toBeHidden()
+})
+
 test('a blocked draft popup restores the original editor', async ({ page }) => {
   await gmailMail({ draftStatus: 502 })(page)
   await page.addInitScript(() => { window.open = () => null })

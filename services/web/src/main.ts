@@ -2779,6 +2779,7 @@ function sendDraft(): void {
       ...(draftBase?.id === draft.id ? { base: baselineSnapshot(draftBase) } : {}) } : {}) }
   pendingDraftSends.add(key)
   hideDraftEditor()
+  if (messageWindow?.draftKey) elements.readerEmpty.textContent = 'Sending…'
   renderSending()
   void (async () => {
     try {
@@ -2794,6 +2795,7 @@ function sendDraft(): void {
         receipt = await api.draftSendStatus(receipt.id)
       }
       if (receipt.status !== 'accepted' && receipt.status !== 'verified') throw new Error(receipt.error || 'Send was not confirmed. Check Sent before trying again.')
+      if (await closeCompletedDraftWindow('Sent')) return
       void loadConversations()
       if (selected && conversation && selected.id === conversation.id) void selectConversation(selected.id, { refresh: true })
     } catch (error) {
@@ -2839,6 +2841,7 @@ async function discardDraft(): Promise<void> {
     }
     clearRecovery()
     hideDraftEditor()
+    if (await closeCompletedDraftWindow('Discarded')) return
     void loadConversations()
   } catch (error) {
     draftDiscarding = false
@@ -3098,6 +3101,15 @@ async function closeThisWindow(): Promise<void> {
   const current = (window as { __TAURI__?: { window?: { getCurrentWindow(): { close(): Promise<void> } } } }).__TAURI__?.window?.getCurrentWindow()
   if (current) await current.close()
   else window.close()
+}
+
+/** Standalone compose windows finish with their draft; a message window keeps its email. */
+async function closeCompletedDraftWindow(status: 'Sent' | 'Discarded'): Promise<boolean> {
+  if (!messageWindow?.draftKey) return false
+  elements.readerEmpty.textContent = `${status}. You can close this window.`
+  // A close failure must never turn confirmed delivery into a retryable send failure.
+  try { await closeThisWindow() } catch (error) { console.error('Completed draft window could not close:', error) }
+  return true
 }
 
 /** Like Mail: a message window closes once its conversation leaves the mailbox, and the main window offers Undo. */
