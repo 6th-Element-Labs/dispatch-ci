@@ -51,7 +51,34 @@ export function draftEditorHtml(html: string): string {
 }
 
 export function draftEditorMarkdown(html: string): string {
-  return draftUrls(converter.turndown(draftEditorHtml(html)))
+  return draftUrls(converter.turndown(draftEditorHtml(draftContentHtml(html))))
+}
+
+/** Disclosure labels and open/closed state are presentation, never email content. */
+function draftContentHtml(html: string): string {
+  const template = document.createElement('template')
+  template.innerHTML = html
+  for (const history of template.content.querySelectorAll('details[data-draft-history]')) {
+    history.replaceWith(...[...history.children].filter(child => child.tagName !== 'SUMMARY'))
+  }
+  for (const node of template.content.querySelectorAll('[contenteditable]')) node.removeAttribute('contenteditable')
+  return template.innerHTML
+}
+
+function foldDraftHistory(editor: HTMLElement, disabled: boolean): void {
+  // Only outer quotes fold. New writing outside them stays visible and editable.
+  for (const quote of editor.querySelectorAll<HTMLElement>('blockquote')) {
+    if (quote.parentElement?.closest('blockquote')) continue
+    const history = document.createElement('details')
+    history.className = 'dispatch-draft-history'
+    history.dataset.draftHistory = ''
+    history.contentEditable = 'false'
+    const summary = document.createElement('summary')
+    summary.textContent = 'Quoted history'
+    quote.replaceWith(history)
+    history.append(summary, quote)
+    quote.contentEditable = String(!disabled)
+  }
 }
 
 export interface RichDraftEditor extends HTMLDivElement { value: string; disabled: boolean }
@@ -65,9 +92,10 @@ export function installRichDraftEditor(root: HTMLElement): RichDraftEditor {
   Object.defineProperties(editor, {
     value: {
       get: () => {
-        if (editor.innerHTML !== rendered) {
-          source = draftEditorMarkdown(editor.innerHTML)
-          rendered = editor.innerHTML
+        const content = draftContentHtml(editor.innerHTML)
+        if (content !== rendered) {
+          source = draftEditorMarkdown(content)
+          rendered = content
         }
         return source
       },
@@ -79,18 +107,20 @@ export function installRichDraftEditor(root: HTMLElement): RichDraftEditor {
         if (/^\s*\n/.test(value)) {
           const paragraph = document.createElement('p'); paragraph.append(document.createElement('br')); editor.prepend(paragraph)
         }
-        rendered = editor.innerHTML
+        foldDraftHistory(editor, disabled)
+        rendered = draftContentHtml(editor.innerHTML)
       },
     },
     disabled: { get: () => disabled, set: (value: boolean) => {
       disabled = value
       editor.contentEditable = String(!value)
       editor.setAttribute('aria-disabled', String(value))
+      editor.querySelectorAll<HTMLElement>('[data-draft-history] > blockquote').forEach(quote => { quote.contentEditable = String(!value) })
     } },
   })
   const command = (name: string, value?: string) => {
     if (disabled) return
-    editor.focus()
+    editor.focus({ preventScroll: true })
     document.execCommand(name, false, value)
     editor.dispatchEvent(new Event('input', { bubbles: true }))
   }
@@ -128,7 +158,7 @@ export function installRichDraftEditor(root: HTMLElement): RichDraftEditor {
   const applyLink = () => {
     if (!/^(https?:\/\/|mailto:)\S+$/i.test(linkInput.value.trim())) { linkInput.setCustomValidity('Enter an https://, http://, or mailto: link.'); linkInput.reportValidity(); return }
     linkInput.setCustomValidity('')
-    editor.focus()
+    editor.focus({ preventScroll: true })
     if (linkSelection) { const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(linkSelection) }
     if (window.getSelection()?.isCollapsed) {
       const link = document.createElement('a'); link.href = linkInput.value.trim(); link.textContent = linkInput.value.trim()
@@ -138,7 +168,7 @@ export function installRichDraftEditor(root: HTMLElement): RichDraftEditor {
     linkForm.hidden = true
   }
   root.querySelector('[data-draft-link-apply]')!.addEventListener('click', applyLink)
-  root.querySelector('[data-draft-link-cancel]')!.addEventListener('click', () => { linkForm.hidden = true; editor.focus() })
+  root.querySelector('[data-draft-link-cancel]')!.addEventListener('click', () => { linkForm.hidden = true; editor.focus({ preventScroll: true }) })
   linkInput.addEventListener('input', () => linkInput.setCustomValidity(''))
   linkInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); applyLink() } })
   return editor

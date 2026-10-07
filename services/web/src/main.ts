@@ -136,16 +136,22 @@ app.innerHTML = `
           <div class="dispatch-thread-completeness" data-thread-completeness hidden role="status"><span data-thread-completeness-text></span><button class="btn btn-sm btn-ghost-primary" type="button" data-refresh-thread-completeness>Refresh thread</button></div>
           <article class="dispatch-email-body" data-body></article>
           <section class="dispatch-attachments" data-attachments></section>
-          <section class="card-body dispatch-draft" data-draft hidden>
-            <div class="card"><div class="card-header"><div class="dispatch-draft-title"><strong>Unsent draft</strong><span class="text-secondary small" data-recovery-status role="status"></span></div><div class="dispatch-draft-header-actions"><button type="button" class="btn btn-sm btn-ghost-secondary" data-pop-out-draft aria-label="Open draft in new window" title="Open draft in new window"><i class="ti ti-external-link" aria-hidden="true"></i></button><button type="button" class="btn btn-sm btn-ghost-secondary" data-toggle-preview aria-pressed="false" aria-controls="dispatch-draft-preview"><i class="ti ti-eye me-1" aria-hidden="true"></i>Preview</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-collapse-draft aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-chevron-down me-1" aria-hidden="true"></i>Collapse draft</button></div></div><div id="dispatch-draft-content" data-draft-content><div class="card-body">
+          <section class="dispatch-draft" data-draft hidden>
+            <div class="card"><header class="card-header"><div class="dispatch-draft-title"><strong data-draft-heading>Reply</strong><span class="text-secondary small">Unsent draft</span><span class="text-secondary small" data-recovery-status role="status"></span></div><div class="dispatch-draft-header-actions" role="toolbar" aria-label="Draft actions">
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-attach-draft data-expanded-draft-action aria-label="Attach" title="Attach file"><i class="ti ti-paperclip" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-ghost-secondary" data-toggle-formatting data-expanded-draft-action aria-label="Formatting" title="Formatting" aria-pressed="false" aria-controls="dispatch-draft-formatting">Aa</button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-pop-out-draft data-expanded-draft-action aria-label="Open draft in new window" title="Open draft in new window"><i class="ti ti-external-link" aria-hidden="true"></i></button>
+              <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-collapse-draft aria-label="Collapse draft" title="Minimize draft" aria-expanded="true" aria-controls="dispatch-draft-content"><i class="ti ti-minus" aria-hidden="true"></i></button>
+              <button class="btn btn-sm btn-primary" type="button" data-send-draft data-expanded-draft-action><i class="ti ti-send me-1" aria-hidden="true"></i>Send</button>
+            </div></header><div id="dispatch-draft-content" data-draft-content><div class="card-body">
             <div class="dispatch-draft-fields">
+              <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-account">From</label><select class="form-select" id="dispatch-draft-account" data-draft-account aria-label="Draft account"></select></div>
               <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-to">To</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-to" data-draft-to aria-label="Draft recipient" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Recipient suggestions"></ul></div><span class="dispatch-draft-copy-toggles"><button type="button" class="btn btn-sm btn-ghost-secondary" data-show-copy="cc" aria-label="Add Cc" aria-controls="dispatch-draft-cc-row">Cc</button><button type="button" class="btn btn-sm btn-ghost-secondary" data-show-copy="bcc" aria-label="Add Bcc" aria-controls="dispatch-draft-bcc-row">Bcc</button></span></div>
               <div class="dispatch-draft-field" id="dispatch-draft-cc-row" data-copy-row="cc" hidden><label class="dispatch-draft-label" for="dispatch-draft-cc">Cc</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-cc" data-draft-cc aria-label="Draft Cc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Cc suggestions"></ul></div></div>
               <div class="dispatch-draft-field" id="dispatch-draft-bcc-row" data-copy-row="bcc" hidden><label class="dispatch-draft-label" for="dispatch-draft-bcc">Bcc</label><div class="dispatch-recipient-field" data-recipient-field><div class="dispatch-recipient-chips"></div><input class="form-control" id="dispatch-draft-bcc" data-draft-bcc aria-label="Draft Bcc" autocomplete="off"><ul class="dispatch-recipient-suggestions" hidden role="listbox" aria-label="Bcc suggestions"></ul></div></div>
               <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-subject">Subject</label><input class="form-control" id="dispatch-draft-subject" data-draft-subject aria-label="Draft subject"></div>
-              <div class="dispatch-draft-field"><label class="dispatch-draft-label" for="dispatch-draft-account">From</label><select class="form-select" id="dispatch-draft-account" data-draft-account aria-label="Draft account"></select></div>
             </div>
-            <div class="dispatch-draft-formatting" role="toolbar" aria-label="Message formatting">
+            <div class="dispatch-draft-formatting" id="dispatch-draft-formatting" role="toolbar" aria-label="Message formatting" hidden>
               <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="bold" aria-label="Bold" title="Bold (⌘B)"><i class="ti ti-bold" aria-hidden="true"></i></button>
               <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="italic" aria-label="Italic" title="Italic (⌘I)"><i class="ti ti-italic" aria-hidden="true"></i></button>
               <button type="button" class="btn btn-sm btn-icon btn-ghost-secondary" data-draft-format="underline" aria-label="Underline" title="Underline (⌘U)"><i class="ti ti-underline" aria-hidden="true"></i></button>
@@ -162,11 +168,9 @@ app.innerHTML = `
               <div class="dispatch-draft-conflict-actions"><button class="btn btn-sm btn-ghost-secondary" type="button" data-use-gmail-version>Use Gmail version</button><button class="btn btn-sm btn-primary" type="button" data-keep-local-edits>Keep my edits</button></div>
             </section>
             <ul class="dispatch-draft-attachments" data-draft-attachments aria-label="Draft attachments" hidden></ul>
-            <div class="dispatch-draft-preview markdown" id="dispatch-draft-preview" data-draft-preview aria-label="Draft preview" hidden></div>
             <p class="text-secondary small" data-draft-error hidden></p>
 
-            </div><footer class="card-footer d-flex flex-wrap align-items-center gap-1"><button class="btn btn-ghost-danger" type="button" data-discard-draft><i class="ti ti-trash me-1" aria-hidden="true"></i>Discard</button><button class="btn btn-ghost-secondary" type="button" data-attach-draft><i class="ti ti-paperclip me-1" aria-hidden="true"></i>Attach</button><input type="file" data-draft-files multiple hidden><button class="btn btn-ghost-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><button class="btn btn-primary ms-auto" type="button" data-send-draft><i class="ti ti-send me-1" aria-hidden="true"></i>Send</button></footer></div>
-            </div>
+            </div><footer class="card-footer d-flex flex-wrap align-items-center gap-1"><button class="btn btn-sm btn-ghost-secondary" type="button" data-revise-draft><i class="ti ti-sparkles me-1" aria-hidden="true"></i>Ask Codex to revise</button><input type="file" data-draft-files multiple hidden><button class="btn btn-sm btn-ghost-secondary ms-auto" type="button" data-discard-draft><i class="ti ti-trash me-1" aria-hidden="true"></i>Discard</button></footer></div></div>
           </section>
         </div>
       </main>
@@ -283,7 +287,6 @@ const elements = {
   draftAccount: app.querySelector<HTMLSelectElement>('[data-draft-account]')!,
   draftSubject: app.querySelector<HTMLInputElement>('[data-draft-subject]')!,
   draftBody: installRichDraftEditor(app),
-  draftPreview: app.querySelector<HTMLElement>('[data-draft-preview]')!,
   draftError: app.querySelector<HTMLElement>('[data-draft-error]')!,
   draftConflict: app.querySelector<HTMLElement>('[data-draft-conflict]')!,
   draftConflictSummary: app.querySelector<HTMLElement>('[data-draft-conflict-summary]')!,
@@ -416,10 +419,8 @@ renderServiceStatus()
 let activeDraft: DraftProjection | undefined
 let activeForwardOrigin: { accountId: string; messageId: string } | undefined
 let activeDraftReplyMode: { accountId?: string; messageId: string; replyAll: boolean } | undefined
-let draftPreviewTimer: number | undefined
 let draftAutosaveTimer: number | undefined
 let recipientSuggestTimer: number | undefined
-let draftPreviewSequence = 0
 let draftEditSession = 0
 let draftDirty = false
 let draftEditRevision = 0
@@ -427,9 +428,6 @@ let draftBase: DraftProjection | undefined
 let resolvingDraftConflict = false
 function markDraftDirty(): void { draftDirty = true; draftEditRevision += 1; checkpointDraft() }
 
-function sanitizeDraftPreview(html: string): string {
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
-}
 // Keep Gmail draft writes in order so a slow save cannot overwrite a newer save.
 let draftSaveFlight: Promise<DraftProjection | undefined> | undefined
 // These keys belong to submitted snapshots, independently of the editor the user opens next.
@@ -1307,7 +1305,6 @@ async function selectConversation(id: string, options: { revealOnMobile?: boolea
     syncDraftEditLock()
     draftEditSession += 1
     draftDirty = false
-    if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
     if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
   }
   renderList()
@@ -2272,7 +2269,6 @@ async function restoreLocalDraft(key: string): Promise<void> {
   syncDraftEditLock()
   elements.recoveryStatus.textContent = 'Saved · waiting to sync'
   if (restored.missing.length) draftError(new Error(`Reattach these files before saving: ${restored.missing.join(', ')}`))
-  refreshPreview()
   if (!offlineMode) void bindAndShowCodex(codexKey, { sequence })
 }
 function freezeDraft(disabled: boolean): void {
@@ -2322,14 +2318,19 @@ function setDraftCollapsed(collapsed: boolean): void {
   elements.reader.classList.toggle('dispatch-draft-collapsed', collapsed)
   const button = app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!
   button.setAttribute('aria-expanded', String(!collapsed))
-  button.innerHTML = `<i class="ti ti-chevron-${collapsed ? 'up' : 'down'} me-1" aria-hidden="true"></i>${collapsed ? 'Expand' : 'Collapse'} draft`
-  app.querySelector<HTMLButtonElement>('[data-toggle-preview]')!.hidden = collapsed
+  button.setAttribute('aria-label', collapsed ? 'Expand draft' : 'Collapse draft')
+  button.title = collapsed ? 'Resume draft' : 'Minimize draft'
+  button.classList.toggle('btn-icon', !collapsed)
+  button.innerHTML = collapsed ? '<i class="ti ti-chevron-up me-1" aria-hidden="true"></i>Resume draft' : '<i class="ti ti-minus" aria-hidden="true"></i>'
+  elements.draft.querySelectorAll<HTMLElement>('[data-expanded-draft-action]').forEach(action => { action.hidden = collapsed })
 }
 for (const { row, toggle, input } of copyRows) toggle.addEventListener('click', () => { row.hidden = false; toggle.hidden = true; input.focus() })
-app.querySelector<HTMLButtonElement>('[data-toggle-preview]')!.addEventListener('click', event => {
+app.querySelector('[data-toggle-formatting]')!.addEventListener('mousedown', event => event.preventDefault())
+app.querySelector<HTMLButtonElement>('[data-toggle-formatting]')!.addEventListener('click', event => {
   const button = event.currentTarget as HTMLButtonElement
-  elements.draftPreview.hidden = !elements.draftPreview.hidden
-  button.setAttribute('aria-pressed', String(!elements.draftPreview.hidden))
+  const toolbar = app.querySelector<HTMLElement>('#dispatch-draft-formatting')!
+  toolbar.hidden = !toolbar.hidden
+  button.setAttribute('aria-pressed', String(!toolbar.hidden))
 })
 elements.refreshThreadCompleteness.addEventListener('click', () => {
   const id = selectedConversationId
@@ -2345,25 +2346,28 @@ elements.refreshThreadCompleteness.addEventListener('click', () => {
   })
 })
 app.querySelector<HTMLButtonElement>('[data-collapse-draft]')!.addEventListener('click', () => {
-  setDraftCollapsed(!app.querySelector<HTMLElement>('[data-draft-content]')!.hidden)
+  const collapsed = !app.querySelector<HTMLElement>('[data-draft-content]')!.hidden
+  setDraftCollapsed(collapsed)
+  if (!collapsed) elements.draftBody.focus({ preventScroll: true })
 })
 
 function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   if (!draft.syncState && draft.resolvedFromDraftId) void linkDraftTask(draft.resolvedFromDraftId, draft).catch(error => console.error('Draft task binding needs reconnection:', error))
   const resolvedSameDraft = Boolean(activeDraft && draft.resolvedFromDraftId === activeDraft.id && activeDraft.accountId === draft.accountId)
   const sameDraft = Boolean(activeDraft && draft.id && activeDraft.id && (activeDraft.id === draft.id || resolvedSameDraft) && activeDraft.accountId === draft.accountId && activeDraft.inReplyToMessageId === draft.inReplyToMessageId)
-  if (!sameDraft) setDraftCollapsed(false)
+  if (!sameDraft) {
+    setDraftCollapsed(false)
+    app.querySelector<HTMLElement>('#dispatch-draft-formatting')!.hidden = true
+    app.querySelector<HTMLElement>('[data-toggle-formatting]')!.setAttribute('aria-pressed', 'false')
+  }
   if (!sameDraft) {
     activeForwardOrigin = undefined
     activeDraftReplyMode = undefined
   }
   if (!sameDraft && (activeDraft?.id !== draft.id || activeDraft?.accountId !== draft.accountId)) recoveryKey = undefined
   if (!sameDraft) draftBase = undefined
-  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
   if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
-  draftPreviewTimer = undefined
   draftAutosaveTimer = undefined
-  draftPreviewSequence += 1
   draftEditSession += 1
   draftDirty = false
   activeDraft = draft
@@ -2399,7 +2403,8 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
   }
   elements.draftSubject.value = draft.subject
   elements.draftBody.value = draft.bodyMarkdown || draft.bodyText
-  elements.draftPreview.innerHTML = sanitizeDraftPreview(draft.bodyHtml)
+  app.querySelector<HTMLElement>('[data-draft-heading]')!.textContent = draft.inReplyToMessageId ? 'Reply' : /^fwd:/i.test(draft.subject) ? 'Forward' : 'New message'
+  if (!sameDraft) app.querySelector<HTMLElement>('[data-draft-content]')!.scrollTop = 0
   elements.draftError.hidden = true
   elements.draftError.textContent = ''
   resolvingDraftConflict = false
@@ -2417,11 +2422,8 @@ function showDraft(draft: DraftProjection, accountMutable: boolean): void {
 
 function hideDraftEditor(): void {
   clearDraftAttachmentObjectUrls()
-  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
   if (draftAutosaveTimer !== undefined) window.clearTimeout(draftAutosaveTimer)
-  draftPreviewTimer = undefined
   draftAutosaveTimer = undefined
-  draftPreviewSequence += 1
   draftEditSession += 1
   draftDirty = false
   draftDiscarding = false
@@ -2443,17 +2445,6 @@ function hideDraftEditor(): void {
     elements.reader.hidden = true
     elements.readerEmpty.hidden = false
   }
-}
-
-function refreshPreview(): void {
-  if (draftPreviewTimer !== undefined) window.clearTimeout(draftPreviewTimer)
-  const sequence = ++draftPreviewSequence
-  draftPreviewTimer = window.setTimeout(() => {
-    draftPreviewTimer = undefined
-    void api.previewDraft(elements.draftBody.value).then((bodyHtml) => {
-      if (sequence === draftPreviewSequence && activeDraft) elements.draftPreview.innerHTML = sanitizeDraftPreview(bodyHtml)
-    }).catch(draftError)
-  }, 300)
 }
 
 function autosaveDraft(): void {
@@ -2517,12 +2508,12 @@ async function openDraft(replyAll = false): Promise<void> {
         markDraftDirty()
         if (activeDraft.id) autosaveDraft()
       }
-      elements.draftBody.focus()
+      elements.draftBody.focus({ preventScroll: true })
       return
     }
     showDraft({ id: '', accountId, inReplyToMessageId: latest.id, to: parseRecipientList(to).map(address => ({ name: address, address, initials: '@' })), cc, bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, bodyHtml: '', attachments: [], state: 'draft' }, true)
     activeDraftReplyMode = { accountId, messageId: latest.id, replyAll }
-    markDraftDirty(); refreshPreview(); elements.draftBody.focus()
+    markDraftDirty(); elements.draftBody.focus({ preventScroll: true })
     if (!offlineMode) void saveDraft(false).catch(draftError)
     return
   }
@@ -2542,7 +2533,7 @@ async function openForward(): Promise<void> {
   if (!draftDiscarding && activeDraft && activeForwardOrigin?.accountId === selected.accountId
     && activeForwardOrigin.messageId === latestMessageId && activeDraft.accountId === selected.accountId) {
     setDraftCollapsed(false)
-    elements.draftBody.focus()
+    elements.draftBody.focus({ preventScroll: true })
     return
   }
   const content = emailPlainText(latest.body.kind, latest.body.content)
@@ -2550,7 +2541,7 @@ async function openForward(): Promise<void> {
   if (offlineMode || selected.source === 'gmail') {
     showDraft({ id: '', accountId: selected.accountId, inReplyToMessageId: '', to: [], cc: '', bcc: '', subject, bodyMarkdown, bodyText: bodyMarkdown, bodyHtml: '', attachments: latest.attachments.map(file => ({ ...file, sourceMessageId: latest.id })), state: 'draft' }, true)
     activeForwardOrigin = { accountId: selected.accountId, messageId: latestMessageId }
-    markDraftDirty(); refreshPreview()
+    markDraftDirty()
     if (!offlineMode) void saveDraft(false).catch(draftError)
     return
   }
@@ -2668,7 +2659,6 @@ async function saveDraft(notify = true): Promise<void> {
     syncDraftEditLock()
     elements.sendDraft.disabled = Boolean(savedDraft.conflict)
     elements.draftAccount.disabled = true
-    elements.draftPreview.innerHTML = sanitizeDraftPreview(savedDraft.bodyHtml)
     elements.draftError.hidden = true
     elements.draftError.textContent = ''
     if (draftEditRevision === savingRevision && recipientValue(elements.draftTo) === fields.to
@@ -4678,7 +4668,6 @@ app.querySelector('[data-attach-draft]')?.addEventListener('click', () => { elem
 elements.draftFiles.addEventListener('change', () => { void attachDraftFiles() })
 elements.draftBody.addEventListener('input', () => {
   markDraftDirty()
-  refreshPreview()
   autosaveDraft()
 })
 for (const field of [elements.draftTo, elements.draftCc, elements.draftBcc]) {

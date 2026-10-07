@@ -20,6 +20,15 @@ Dispatch follows the macOS appearance by default. In Dispatch.app, View → Appe
 
 Use a clear 18px subject, 14px message content, 13px controls and 12px supporting information. Keep the title above actions. Reserve stronger colour for selection and intentional actions. The thread and composer are the only main content surfaces that need cards.
 
+Replies keep the original thread above one rich editor. The thread and draft content
+scroll independently. Send, Attach, formatting, pop-out and Minimize stay in the
+draft's top toolbar; long messages and attachment lists never scroll those actions
+away. Formatting is disclosed with Aa, and Cc/Bcc appear when used. Quoted history
+is folded in the editor, remains in the outgoing message, and can be expanded and
+edited. There is no second rendered Preview. Minimize keeps an explicit Unsent
+draft and Resume draft control, preserves all edits, and gives the reader its space
+back. New messages use the same composer without an empty thread above them.
+
 Attachments stay grouped in their conversation. Existing file identities, native open behavior and all-thread attachment disclosure are preserved. Sent messages offer an inline Sent details disclosure that reads the actual mail-owned receipt or verifies the provider's sent record. Receipt details must never be inferred from a draft or fabricated by the UI.
 
 Recovery is a conditional notice near the message list. Restore remains a focused task. Send history and downloaded-mail settings open nonmodal panels from Mail activity so the reader remains usable. Close and Escape dismiss these panels and return focus to their entry point.

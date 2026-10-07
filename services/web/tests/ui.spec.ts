@@ -745,7 +745,7 @@ test('the reader labels only downloaded copies, not live Gmail messages', async 
   await expect(page.locator('[data-copy-status]')).toHaveAttribute('title', /Gmail is unavailable/)
 })
 
-test('previews a new compose draft with account, Cc, and Bcc before saving', async ({ page }) => {
+test('writes a new compose draft with account, Cc, and Bcc in one editor', async ({ page }) => {
   let draftRequest: unknown
   await page.unroute('http://127.0.0.1:8411/v1/accounts')
   await page.unroute('http://127.0.0.1:8411/v1/draft-saves')
@@ -771,10 +771,10 @@ test('previews a new compose draft with account, Cc, and Bcc before saving', asy
   await expect.poll(() => draftRequest).toEqual({ messageId: '', clientDraftId: expect.any(String), accountId: 'link-one', to: 'client@example.com', cc: 'cc@example.com', bcc: 'audit@example.com', subject: 'Project update', bodyMarkdown: 'Draft preview', attachments: [] })
 })
 
-test('sanitizes provider HTML in initial, refreshed, and saved draft previews', async ({ page }) => {
+test('sanitizes the single rich editor and makes no duplicate preview requests', async ({ page }) => {
   const summary = { ...conversations[0]!, id: 'link-one:t1', accountId: 'link-one', accountLabel: 'work@example.com' }
   const unsafeHtml = '<p>Draft preview</p><img src="x" onerror="window.__draftPreviewPwned=true"><a href="javascript:window.__draftPreviewPwned=true">unsafe link</a>'
-  const draft = { id: 'provider-draft', accountId: 'link-one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyMarkdown: 'Provider body', bodyText: 'Provider body', bodyHtml: unsafeHtml, attachments: [], state: 'draft' }
+  const draft = { id: 'provider-draft', accountId: 'link-one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Opua berth confirmation', bodyMarkdown: unsafeHtml, bodyText: 'Draft preview', bodyHtml: unsafeHtml, attachments: [], state: 'draft' }
   await stubGmailInbox(page, summary)
   await page.route('http://127.0.0.1:8411/v1/drafts/open', route => route.fulfill({ json: { draft } }))
   let previewRequests = 0
@@ -792,24 +792,23 @@ test('sanitizes provider HTML in initial, refreshed, and saved draft previews', 
   await page.goto('/')
   await page.getByRole('button', { name: 'Drafts', exact: true }).click()
   await page.locator('[data-conversation-id="link-one:t1"]').click()
-  await expect(page.getByRole('textbox', { name: 'Draft body' })).toHaveText('Provider body')
-  await page.getByRole('button', { name: 'Preview', exact: true }).click()
-  const preview = page.locator('[data-draft-preview]')
+  const editor = page.getByRole('textbox', { name: 'Draft body' })
+  await expect(editor).toContainText('Draft preview')
+  await expect(page.locator('[data-draft-preview]')).toHaveCount(0)
   const expectSanitized = async () => {
-    const result = await preview.evaluate(node => ({
+    const result = await editor.evaluate(node => ({
       onerror: node.querySelector('img')?.getAttribute('onerror') ?? null,
       href: node.querySelector('a')?.getAttribute('href') ?? null,
       executed: (window as unknown as { __draftPreviewPwned?: boolean }).__draftPreviewPwned ?? false,
     }))
     expect(result).toEqual({ onerror: null, href: null, executed: false })
   }
-  await expect(preview).toContainText('Draft preview')
   await expectSanitized()
 
-  await page.getByRole('textbox', { name: 'Draft body' }).fill('Edited provider body')
-  await expect.poll(() => previewRequests).toBe(1)
+  await editor.fill('Edited provider body')
   await expectSanitized()
   await expect.poll(() => saves, { timeout: 5000 }).toBe(1)
+  expect(previewRequests).toBe(0)
   await expectSanitized()
 })
 
@@ -1892,13 +1891,13 @@ test('collapses an unsent draft without losing edits and gives space back to the
   // Save state lives in the header, so it stays in view while the draft is collapsed.
   await expect(page.locator('[data-draft] .card-header [data-recovery-status]')).toBeAttached()
   await expect(body).toBeHidden()
-  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Formatting', exact: true })).toBeHidden()
   await expect(page.locator('[data-send-draft]')).toBeHidden()
   expect((await page.locator('[data-body]').boundingBox())!.height).toBeGreaterThan(before!.height)
   const expand = page.getByRole('button', { name: 'Expand draft', exact: true })
   await expand.focus(); await page.keyboard.press('Enter')
   await expect(body).toHaveText('Keep these unsent words')
-  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Formatting', exact: true })).toBeVisible()
 })
 
 for (const action of ['automatic', 'refresh', 'compose']) test(`failed message download recovers safely: ${action}`, async ({ page }) => {
@@ -3066,10 +3065,8 @@ test('shows a local-only draft as a draft, not as an unread thread with another 
   // A draft with no thread above it has no thread to reply to, forward, or mark read.
   for (const control of ['[data-read-state]', '[data-reply]', '[data-reply-all]', '[data-forward]']) await expect(page.locator(control)).toBeHidden()
   await expect(page.locator('[data-draft] .card-header [data-recovery-status]')).toBeVisible()
-  // The rendered preview is on request, not a second copy of the message.
-  await expect(page.locator('[data-draft-preview]')).toBeHidden()
-  await page.getByRole('button', { name: 'Preview', exact: true }).click()
-  await expect(page.locator('[data-draft-preview]')).toBeVisible()
+  // The rich editor is the only writing surface.
+  await expect(page.locator('[data-draft-preview]')).toHaveCount(0)
   await page.getByRole('button', { name: 'Inbox', exact: true }).click()
   await page.locator('[data-conversation-id]').first().click()
   await expect(page.locator('[data-reply]')).toBeVisible()
@@ -4071,6 +4068,121 @@ test('failed login renewal exposes a working reconnect action while keeping mail
   expect(new URL(page.url()).pathname).toBe('/')
 })
 
+test('reply toolbar stays visible while long email and draft content scroll independently', async ({ page }) => {
+  await gmailMail()(page)
+  const content = Array.from({ length: 90 }, (_, i) => `Original paragraph ${i}.`).join('\n\n')
+  await page.route(/8411\/v1\/conversations\/[^/?]+(\?|$)/, route => route.fulfill({ json: { conversation: {
+    ...conversations[0], id: 'gmail:one:t1', accountId: 'one', source: 'gmail',
+    completeness: { complete: false, knownCount: 2, loadedCount: 1 },
+    messages: [{ ...messages[0], source: 'gmail', body: { kind: 'plain-text', content }, attachments: [] }],
+  } } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply', exact: true }).click()
+  const editor = page.getByRole('textbox', { name: 'Draft body' })
+  const quote = editor.locator('[data-draft-history]')
+  await expect(quote).not.toHaveAttribute('open', '')
+  await expect(quote.locator('blockquote')).toBeHidden()
+  await expect(page.locator('[data-draft-content]')).toHaveJSProperty('scrollTop', 0)
+  await expect(page.locator('[data-draft-preview]')).toHaveCount(0)
+  const send = page.locator('[data-send-draft]')
+  const before = (await send.boundingBox())!
+  const reader = page.locator('[data-body]')
+  await reader.evaluate(node => { node.scrollTop = node.scrollHeight })
+  await expect(page.locator('[data-draft-content]')).toHaveJSProperty('scrollTop', 0)
+  await quote.locator('summary').click()
+  await page.locator('[data-draft-content]').evaluate(node => { node.scrollTop = node.scrollHeight })
+  expect((await send.boundingBox())!.y).toBe(before.y)
+  await expect(send).toBeInViewport()
+  await expect(page.getByRole('button', { name: 'Attach', exact: true })).toBeInViewport()
+  const metrics = await page.locator('[data-reader]').evaluate(node => {
+    const draft = node.querySelector('[data-draft]')!.getBoundingClientRect()
+    const body = node.querySelector('[data-body]')!.getBoundingClientRect()
+    return { bodyBottom: body.bottom, draftTop: draft.top, draftBottom: draft.bottom, readerBottom: node.getBoundingClientRect().bottom }
+  })
+  expect(metrics.bodyBottom).toBeLessThanOrEqual(metrics.draftTop + 1)
+  expect(metrics.draftBottom).toBeLessThanOrEqual(metrics.readerBottom + 1)
+  for (const [width, height] of [[1280, 820], [900, 600], [390, 780]]) {
+    await page.setViewportSize({ width: width!, height: height! })
+    // The narrow browser layout shows one pane at a time; select Email there.
+    if (width! <= 820) await page.getByRole('button', { name: 'Email', exact: true }).click()
+    await expect(send).toBeInViewport()
+    await expect(page.getByRole('button', { name: 'Attach', exact: true })).toBeInViewport()
+    const overflow = await page.locator('[data-draft] .card-header').evaluate(node => node.scrollWidth > node.clientWidth)
+    expect(overflow).toBe(false)
+  }
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await quote.locator('summary').click()
+  await page.locator('[data-draft-content]').evaluate(node => { node.scrollTop = 0 })
+  await reader.evaluate(node => { node.scrollTop = 0 })
+  await page.screenshot({ path: 'test-results/reply-context-implemented.png' })
+})
+
+test('folded quoted history survives edits and send without leaking disclosure labels', async ({ page }) => {
+  await gmailMail()(page)
+  const saved: Record<string, unknown>[] = []
+  const sent: Record<string, unknown>[] = []
+  await page.route('http://127.0.0.1:8411/v1/draft-saves', async route => {
+    const fields = route.request().postDataJSON()
+    saved.push(fields)
+    return route.fulfill({ status: 202, json: { draft: draftProjectionFromCommand(fields, 'quoted-reply') } })
+  })
+  await page.route('http://127.0.0.1:8411/v1/draft-sends', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { sends: [] } })
+    sent.push(route.request().postDataJSON())
+    return route.fulfill({ status: 202, json: { receipt: { id: 'send-quoted', accountId: 'one', draftId: 'quoted-reply', status: 'accepted', messageId: 'sent-quoted' } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Reply', exact: true }).click()
+  const editor = page.getByRole('textbox', { name: 'Draft body' })
+  await expect.poll(() => saved.length).toBeGreaterThan(0)
+  const source = String(saved.at(-1)!.bodyMarkdown)
+  const currentSource = () => editor.evaluate(node => (node as HTMLElement & { value: string }).value)
+  const history = editor.locator('[data-draft-history]')
+  await history.locator('summary').click()
+  expect(await currentSource()).toBe(source)
+  await history.locator('summary').click()
+  // Type in the reply paragraph, retaining the collapsed quote instead of replacing the body.
+  await editor.locator('p').first().click()
+  await page.keyboard.type('Tuesday works. ')
+  await expect.poll(currentSource).toContain('Tuesday works.')
+  expect(await currentSource()).toContain('> Berth confirmed.')
+  expect(await currentSource()).not.toContain('Quoted history')
+  await page.getByRole('button', { name: 'Collapse draft', exact: true }).click()
+  await page.getByRole('button', { name: 'Expand draft', exact: true }).click()
+  expect(await currentSource()).toContain('Tuesday works.')
+  // A later edit creates a snapshot, so Send must carry both the answer and its original quote.
+  await editor.locator('p').first().click()
+  await page.keyboard.type('Thanks. ')
+  await page.locator('[data-send-draft]').click()
+  await expect.poll(() => sent.length).toBe(1)
+  expect(String(sent[0]!.bodyMarkdown)).toContain('Tuesday works.')
+  expect(String(sent[0]!.bodyMarkdown)).toContain('> Berth confirmed.')
+  expect(String(sent[0]!.bodyMarkdown)).not.toContain('Quoted history')
+})
+
+test('folding saved quotes keeps new text after the quote and allows editing the expanded quote', async ({ page }) => {
+  await gmailMail()(page)
+  const source = 'My answer.\n\n> Original terms.\n>\n> > Older terms.\n\nNew text after history.'
+  const draft = { id: 'saved-quotes', accountId: 'one', inReplyToMessageId: 'm1', to: [messages[0]!.sender], cc: '', bcc: '', subject: 'Re: Terms', bodyMarkdown: source, bodyText: source, bodyHtml: '', attachments: [], state: 'draft' }
+  await page.route('http://127.0.0.1:8411/v1/drafts/open', route => route.fulfill({ json: { draft } }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Drafts', exact: true }).click()
+  await page.locator('[data-conversation-id="gmail:one:t1"]').click()
+  const editor = page.getByRole('textbox', { name: 'Draft body' })
+  await expect(editor.locator('[data-draft-history]')).toHaveCount(1)
+  await expect(editor.locator(':scope > p').last()).toHaveText('New text after history.')
+  await expect(editor.locator(':scope > p').last()).toBeVisible()
+  await editor.locator('[data-draft-history] summary').click()
+  const quote = editor.locator('[data-draft-history] > blockquote > p').first()
+  await quote.click()
+  await page.keyboard.type('Updated ')
+  const updated = await editor.evaluate(node => (node as HTMLElement & { value: string }).value)
+  expect(updated).toContain('Updated')
+  expect(updated).toContain('Older terms.')
+  expect(updated).toContain('New text after history.')
+  expect(updated).not.toContain('Quoted history')
+})
+
 test('rich draft formatting survives saving and reopening', async ({ page }) => {
   await gmailMail()(page)
   const saved: Record<string, unknown>[] = []
@@ -4084,6 +4196,7 @@ test('rich draft formatting survives saving and reopening', async ({ page }) => 
   const body = page.getByRole('textbox', { name: 'Draft body' })
   await body.fill('Formatted words')
   await body.press('ControlOrMeta+a')
+  await page.getByRole('button', { name: 'Formatting', exact: true }).click()
   await page.getByRole('button', { name: 'Bold', exact: true }).click()
   await expect(body.locator('b,strong')).toHaveText('Formatted words')
   await page.getByRole('button', { name: 'Insert link', exact: true }).click()
@@ -4131,6 +4244,7 @@ test('popping out a draft transfers unsaved formatting, recipients and attachmen
   const body = page.getByRole('textbox', { name: 'Draft body' })
   await body.fill('Keep these words')
   await body.press('ControlOrMeta+a')
+  await page.getByRole('button', { name: 'Formatting', exact: true }).click()
   await page.getByRole('button', { name: 'Italic', exact: true }).click()
   await page.locator('[data-draft-files]').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('attachment bytes') })
   await expect(page.locator('[data-draft-attachments]')).toContainText('note.txt')
