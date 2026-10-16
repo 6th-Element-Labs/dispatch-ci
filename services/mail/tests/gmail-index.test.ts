@@ -331,6 +331,36 @@ describe('GmailIndex', () => {
 })
 
 describe('GmailIndex reconcileStream', () => {
+  it('retires a sent draft pinned by a completed archive marker, including after restart', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dispatch-archived-draft-')); directories.push(directory)
+    const path = join(directory, 'index.sqlite')
+    let index = new GmailIndex(path)
+    const sent = message('sent', false, false, { threadId: 'thread-draft', inSent: true })
+    index.replaceAccount('account-1', [message('draft', false, false, { inDrafts: true }), message('keep', false, false, { inDrafts: true }), sent], 'seed', false)
+    index.applyConversationAction('account-1', ['draft'], 'archive', true)
+    index.finishAction(index.pendingActions()[0]!.id)
+    index.close(); index = new GmailIndex(path)
+    try {
+      expect(index.reconcileStream('account-1', 'drafts', ['keep'], 'complete-drafts')).toEqual({ cleared: 1, removed: 1, conflicts: 0 })
+      expect(index.message('account-1', 'draft')).toBeUndefined()
+      expect(index.mailboxConversations('drafts', 'all').map(row => row.latestMessageId)).toEqual(['keep'])
+      expect(index.mailboxConversations('sent', 'all').map(row => row.latestMessageId)).toEqual(['sent'])
+      index.close(); index = new GmailIndex(path)
+      const stored = new DatabaseSync(path, { readOnly: true })
+      try { expect(stored.prepare('SELECT count(*) AS n FROM gmail_action_overlay').get()).toMatchObject({ n: 0 }) } finally { stored.close() }
+    } finally { index.close() }
+  })
+  it('keeps pending archive commands authoritative until completion before retiring absent drafts', () => {
+    const index = new GmailIndex(':memory:')
+    try {
+      index.replaceAccount('account-1', [message('draft', false, false, { inDrafts: true })], 'seed', false)
+      index.applyConversationAction('account-1', ['draft'], 'archive', true)
+      expect(index.reconcileStream('account-1', 'drafts', [], 'before-ack')).toEqual({ cleared: 0, removed: 0, conflicts: 0 })
+      expect(index.pendingActions()).toHaveLength(1)
+      index.finishAction(index.pendingActions()[0]!.id)
+      expect(index.reconcileStream('account-1', 'drafts', [], 'after-ack')).toEqual({ cleared: 1, removed: 1, conflicts: 0 })
+    } finally { index.close() }
+  })
   it('drops the drafts flag and the row when Gmail no longer lists a draft, without touching other folders', () => {
     const index = new GmailIndex(':memory:')
     index.replaceAccount('account-1', [

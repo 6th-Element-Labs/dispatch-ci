@@ -429,11 +429,21 @@ export class GmailIndex {
         AND in_inbox = 0 AND in_sent = 0 AND in_drafts = 0 AND in_spam = 0 AND in_trash = 0 AND in_archive = 0`)
     let cleared = 0
     let removed = 0
+    const pending = new Set(flag === 'drafts' ? this.pendingActions().filter(job => job.accountId === accountId).flatMap(job => job.messageIds) : [])
+    const retiredArchives: string[] = []
     this.#db.exec('BEGIN IMMEDIATE')
     try {
       for (const id of stale) {
         if (this.#sentSearchPending(accountId, id, flag)) continue
-        if (this.#acceptedActions.has(`${accountId}\0${id}`)) continue
+        const key = `${accountId}\0${id}`
+        const action = this.#acceptedActions.get(key)
+        if (action) {
+          // Archive never creates or preserves a draft. Once its command has
+          // completed, an authoritative Drafts list can retire that old message.
+          if (flag !== 'drafts' || action !== 'archive' || pending.has(id)) continue
+          this.#db.prepare('DELETE FROM gmail_action_overlay WHERE key=?').run(key)
+          retiredArchives.push(key)
+        }
         if (flag === 'unread' && this.#acceptedUnread.has(`${accountId}\0${id}`)) continue
         cleared += Number(clear.run(accountId, id).changes)
         if (window.remove !== false) removed += Number(remove.run(accountId, id).changes)
@@ -443,6 +453,7 @@ export class GmailIndex {
       this.#db.exec('ROLLBACK')
       throw error
     }
+    for (const key of retiredArchives) this.#acceptedActions.delete(key)
     return { cleared, removed, conflicts }
   }
 

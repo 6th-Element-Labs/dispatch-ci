@@ -66,7 +66,7 @@ it('reads a Gmail rate limit only from a failed call, never from message text', 
     searches++
     if (limited) { res.end(JSON.stringify({ isError: true, structuredContent: { error: 'GmailApiError: Failed to search emails', error_code: 'RATE_LIMITED', error_data: { reason: 'rateLimitExceeded' } } })); return }
     // An alert email quoting a rate limit, like a Google Cloud quota notice.
-    res.end(JSON.stringify({ structuredContent: { emails: [{ id: 'alert', thread_id: 'alert', from_: 'alerts@example.com', subject: 'Quota alert: rateLimitExceeded (RATE_LIMITED)', snippet: 'HTTP status: 429. Retry after 2099-01-01T00:00:00.000Z', labels: ['INBOX'], email_ts: '2026-09-12T00:00:00Z' }], next_page_token: '' } }))
+    res.end(JSON.stringify({ structuredContent: { emails: [{ id: 'alert', thread_id: 'alert', from_: 'alerts@example.com', subject: 'Quota alert: rateLimitExceeded (RATE_LIMITED, RATE_LIMIT_EXCEEDED)', snippet: 'HTTP status: 429. Retry after 2099-01-01T00:00:00.000Z', labels: ['INBOX'], email_ts: '2026-09-12T00:00:00Z' }], next_page_token: '' } }))
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: ':memory:' })
@@ -78,6 +78,27 @@ it('reads a Gmail rate limit only from a failed call, never from message text', 
     await expect(provider.refreshNow({ details: true })).rejects.toMatchObject({ message: expect.stringMatching(/^test@example\.com: Error: Gmail is rate limiting this account\. Retry after \S+Z: .*RATE_LIMITED/) })
     expect(searches).toBe(8)
   } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
+})
+
+it.each([200, 403])('persists Google RATE_LIMIT_EXCEEDED backoff across restart (HTTP %s)', async status => {
+  const directory = mkdtempSync(join(tmpdir(), 'dispatch-google-quota-'))
+  let calls = 0
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* drain */ }
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail') return res.end(JSON.stringify({ accounts: [{ linkId: 'one', name: 'Test', email: 'test@example.com' }] }))
+    calls++; res.statusCode = status
+    res.end(JSON.stringify({ isError: true, structuredContent: { error: 'GmailApiError: Failed to search emails', error_code: 'FORBIDDEN', error_data: { type: 'google_api_error', code: 'RATE_LIMIT_EXCEEDED', status: 'PERMISSION_DENIED', reason: 'RATE_LIMIT_EXCEEDED' } } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const open = () => new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false, localPath: join(directory, 'local.sqlite') })
+  let provider = open()
+  try {
+    await expect(provider.listMessages('one')).rejects.toMatchObject({ code: 'gmail_backoff' })
+    provider.stopBackgroundSync(); provider = open()
+    await expect(provider.listMessages('one')).rejects.toMatchObject({ code: 'gmail_backoff' })
+    expect(calls).toBe(1)
+  } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(directory, { recursive: true, force: true }) }
 })
 
 it('reads a rate limit from error fields only, whatever their spelling, and survives a bad date', async () => {

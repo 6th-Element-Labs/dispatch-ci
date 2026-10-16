@@ -52,6 +52,15 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
       expect(provider.beginGmailDraftSend('one', 'saved').id).toBe(receipt.id)
       expect(sends).toBe(1)
     }
+    if (outcome === 'save-failed' || outcome === 'unknown') {
+      expect(provider.failedSendDraft(receipt.id)?.bodyMarkdown).toBe('The exact reply')
+      await provider.discardGmailDraft('one', draft.id)
+      expect(provider.failedSendDraft(receipt.id)).toBeUndefined()
+      expect(provider.backgroundSends().map(item => item.status)).toEqual(outcome === 'unknown' ? ['unknown'] : [])
+      // Keep the delivery audit, including uncertain sends, without offering a discarded editor.
+      expect(provider.sendReceipt(receipt.id)?.status).toBe(outcome === 'unknown' ? 'unknown' : 'failed')
+      expect(sends).toBe(outcome === 'unknown' ? 1 : 0)
+    }
     if (outcome === 'rejected') {
       expect(provider.backgroundSends()).toHaveLength(1)
       deliveryOutcome = 'accepted'

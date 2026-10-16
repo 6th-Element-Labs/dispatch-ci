@@ -123,7 +123,7 @@ function inHeadStream(message: IndexedGmailMessage, stream: HeadStream): boolean
 const MAX_RATE_LIMIT_PAUSE_MS = 30 * 60_000
 
 /** How Gmail and the connector spell a rate limit (Gmail also says userRateLimitExceeded). */
-const RATE_LIMIT = /RATE_LIMITED|ratelimitexceeded|RESOURCE_EXHAUSTED|HTTP status: 429/i
+const RATE_LIMIT = /RATE_LIMIT(?:ED|_EXCEEDED)|ratelimitexceeded|RESOURCE_EXHAUSTED|HTTP status: 429/i
 
 /** A folder page's identity: its message IDs in any order, and whether more pages follow. */
 function headKey(ids: readonly string[], nextPageToken: string): string {
@@ -1905,12 +1905,16 @@ export class GmailConnectorProvider {
       const key = `${receipt.accountId}:${identity}`
       if (!latest.has(key)) latest.set(key, receipt)
     }
-    return [...latest.values()].filter(receipt => !['accepted', 'verified'].includes(receipt.status))
+    return [...latest.values()].filter(receipt => {
+      if (receipt.status === 'failed' && receipt.draftId && this.#local.draftSave(receipt.accountId, receipt.draftId)?.state === 'cancelled') return false
+      return !['accepted', 'verified'].includes(receipt.status)
+    })
   }
   failedSendDraft(id: string): DraftProjection | undefined {
     const receipt = this.#local.receipt(id)
     if (!receipt?.draftId || !['failed', 'unknown'].includes(receipt.status)) return undefined
     const job = this.#local.draftSave(receipt.accountId, receipt.draftId)
+    if (job?.state === 'cancelled') return undefined
     return job ? { ...job.draft, id: job.id, draftRevision: job.revision } : this.#local.draft(receipt.accountId, receipt.draftId)
   }
 

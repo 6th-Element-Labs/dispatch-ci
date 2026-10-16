@@ -640,7 +640,7 @@ export class DraftSaveQueue {
       const detail = error instanceof Error ? error.message : String(error)
       const conflict = conflictDetails(error)
       const errorCode = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
-      const invalid = Boolean(conflict) || errorCode === 'draft_attachment_too_large'
+      const invalid = Boolean(conflict) || ['draft_attachment_too_large', 'gmail_draft_not_found', 'gmail_draft_sent'].includes(String(errorCode))
         || /Unknown Gmail account|invalid.arguments|invalid.params|argument.binding|Invalid draft|gmail_draft_not_found|missing file bytes|draft_conflict/i.test(detail)
       const reconnect = /token_revoked|invalidated oauth|unauthorized|refresh.*(?:expired|revoked|invalid)|Reconnect your Codex/i.test(detail)
       const attempts = latest.attempts + 1
