@@ -18,7 +18,9 @@ async function executable(label: string, broken = false): Promise<string> {
   const command = join(root, 'codex')
   await writeFile(command, `#!${process.execPath}\nconst rl=require('node:readline').createInterface({input:process.stdin});
 rl.on('line', line=>{const m=JSON.parse(line); if(m.id===undefined)return;
-if(m.method==='initialize' && ${broken}) process.stdout.write(JSON.stringify({id:m.id,error:{message:'incompatible runtime'}})+'\\n');
+if(m.method==='config/read') process.stdout.write(JSON.stringify({id:m.id,result:{config:{model_provider:'openai'}}})+'\\n');
+else if(m.method==='thread/start'||m.method==='thread/resume') process.stdout.write(JSON.stringify({id:m.id,result:{...m.params,modelProvider:m.params.modelProvider??(m.method==='thread/resume'?'openai':m.params.config?.model_provider??'openai')}})+'\\n');
+else if(m.method==='initialize' && ${broken}) process.stdout.write(JSON.stringify({id:m.id,error:{message:'incompatible runtime'}})+'\\n');
 else if(m.method==='hold')setTimeout(()=>process.stdout.write(JSON.stringify({id:m.id,result:'${label}'})+'\\n'),150);
 else process.stdout.write(JSON.stringify({id:m.id,result:'${label}'})+'\\n');});\n`)
   await chmod(command, 0o755)
@@ -43,6 +45,19 @@ async function managed(broken = false) {
 }
 
 describe('CodexProcess', () => {
+  it('starts and resumes the same chat over HTTP while preserving its mail MCP settings', async () => {
+    const command = await executable('current')
+    const codex = new CodexProcess(command); processes.push(codex)
+    const config = { 'mcp_servers.dispatch_mail': { url: 'http://127.0.0.1:8412/mcp/dispatch-mail' } }
+    for (const method of ['thread/start', 'thread/resume']) {
+      expect(await codex.request(method, { threadId: 'original-chat', cwd: '/mail', config })).toMatchObject({
+        threadId: 'original-chat', cwd: '/mail', modelProvider: 'dispatch_openai_http', config: { ...config, model_provider: 'dispatch_openai_http',
+          'model_providers.dispatch_openai_http': { name: 'OpenAI', requires_openai_auth: true, supports_websockets: false },
+        },
+      })
+    }
+  })
+
   it('keeps background work and pending RPC intact, then switches the idle transport and announces reconnect', async () => {
     const { codex, manager, allow } = await managed()
     const events: string[] = []
@@ -57,6 +72,7 @@ describe('CodexProcess', () => {
     expect(await pending).toBe('previous')
     await codex.checkForUpdates()
     expect(await codex.request('model/list')).toBe('updated')
+    expect(await codex.request('thread/start')).toMatchObject({ config: { model_provider: 'dispatch_openai_http' } })
     expect(manager.activated).toHaveBeenCalledOnce()
     expect(events).toContain('dispatch/appServerDisconnected')
     expect(events).toContain('dispatch/appServerReconnected')
@@ -66,6 +82,7 @@ describe('CodexProcess', () => {
     const { codex, manager, allow } = await managed(true)
     allow(); await codex.checkForUpdates()
     expect(await codex.request('model/list')).toBe('previous')
+    expect(await codex.request('thread/resume', { threadId: 'original-chat' })).toMatchObject({ threadId: 'original-chat', config: { model_provider: 'dispatch_openai_http' } })
     expect(manager.activated).not.toHaveBeenCalled()
     expect(manager.reject).toHaveBeenCalledOnce()
     expect(codex.lastWarning()).toContain('incompatible runtime')

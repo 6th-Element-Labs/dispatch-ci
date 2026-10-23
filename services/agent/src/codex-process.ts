@@ -5,6 +5,7 @@ import { dirname, join, isAbsolute } from 'node:path'
 import { JsonLineRpc, type RpcMessage } from './json-line-rpc.js'
 import { ConnectorAuthRecovery, isRevokedConnectorToken } from './connector-auth.js'
 import { CodexRuntimeManager, UPDATE_INTERVAL_MS, UPDATE_RETRY_MS, type RuntimeRelease, type RuntimeUpdateStatus, type RuntimeUpdater } from './codex-runtime.js'
+import { httpThreadParams } from './codex-transport.js'
 
 const INITIAL_RESTART_DELAY_MS = 500
 const MAX_RESTART_DELAY_MS = 30_000
@@ -219,6 +220,11 @@ export class CodexProcess {
     try {
       await this.ready()
       if (!this.#rpc) throw new Error('Codex App Server transport is unavailable')
+      if (method === 'thread/start' || method === 'thread/resume') {
+        const cwd = params && typeof params === 'object' && 'cwd' in params && typeof params.cwd === 'string' ? params.cwd : undefined
+        const config = await this.#auth.call('config/read', { cwd, includeLayers: false })
+        params = httpThreadParams(params, config, this.#manager?.status.version)
+      }
       return await this.#auth.call(method, params)
     } finally { this.#pendingRequests-- }
   }
