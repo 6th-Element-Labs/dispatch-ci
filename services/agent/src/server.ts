@@ -481,7 +481,9 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
           server: gmail.server,
           threadId: await connectorThread(linkId),
           tool: gmail.tools.read,
-          arguments: { link_id: linkId, message_id: messageId, format },
+          arguments: gmail.readSupportsRawMime
+            ? { link_id: linkId, message_id: messageId, include_raw_mime: format !== 'metadata' }
+            : { link_id: linkId, message_id: messageId, format },
         })
         return json(response, 200, result)
       } catch (error) {

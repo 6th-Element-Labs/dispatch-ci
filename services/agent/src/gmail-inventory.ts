@@ -6,6 +6,7 @@ export interface GmailAccount {
 }
 
 export interface GmailInventory {
+  readonly readSupportsRawMime?: true
   readonly available: boolean
   readonly server: string | null
   readonly accounts: readonly GmailAccount[]
@@ -67,6 +68,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
   const data = Array.isArray(root?.data) ? root.data : []
   const accounts = new Map<string, GmailAccount>()
   const toolNames = new Set<string>()
+  let readSupportsRawMime = false
   let serverName: string | null = null
 
   for (const serverValue of data) {
@@ -80,6 +82,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
       if (text(meta?.connector_name) !== 'Gmail') continue
       serverName ??= text(server.name) || null
       toolNames.add(wireName)
+      if (wireName === 'gmail.read_email' && objectHasRawMime(tool)) readSupportsRawMime = true
       const profile = record(meta?.link_owner_profile)
       const linkId = text(meta?.link_id)
       const connectorId = text(meta?.connector_id)
@@ -100,6 +103,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
   const find = (suffix: string) => [...toolNames].find((name) => name === `gmail.${suffix}`) ?? null
   return {
     available: accounts.size > 0,
+    ...(readSupportsRawMime ? { readSupportsRawMime: true as const } : {}),
     server: serverName,
     accounts: [...accounts.values()],
     tools: {
@@ -119,4 +123,8 @@ export function readGmailInventory(value: unknown): GmailInventory {
       readAttachment: find('read_attachment'),
     },
   }
+}
+
+function objectHasRawMime(tool: Record<string, unknown>): boolean {
+  return Boolean(record(record(tool.inputSchema)?.properties)?.include_raw_mime)
 }

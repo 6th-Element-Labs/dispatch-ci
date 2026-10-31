@@ -32,6 +32,14 @@ Browser or Tauri WebKit
 
 ### Mail
 
+The Gmail adapter accepts both MIME payload responses and normalized connector
+emails (`from_`, recipient arrays, `labels`, `email_ts`). Agent detects the
+advertised `include_raw_mime` input capability instead of sending the older
+`format` argument to that connector. Full normalized thread reads retrieve MIME
+messages with at most four concurrent reads so HTML, declared charsets, CID
+images and attachment identities remain intact. Provider truncation signals
+remain partial even when fewer than 100 messages were returned.
+
 `dispatch-mail` owns browser-facing conversation, message, and draft view models plus the durable Gmail SQLite index. It calls the agent service's typed Gmail adapter, paginates the Inbox, Unread, Sent, Drafts, Spam, Trash, and archive-query streams for every connector account, atomically replaces each completed account snapshot, removes disconnected accounts, groups messages by account plus Gmail thread ID, and converts Gmail headers and MIME parts into safe view models. It owns All, Unread, and Read filter semantics. An accepted read-state write stays on the index until a later Gmail snapshot reports the same unread value. Demo mail is available only through the explicit development setting. Gmail writes remain guarded by Codex approvals. The six folder lists are indexed. Mail does not serve Sent, Drafts, Archive, Spam, or Trash from a one-page live fetch.
 
 The index bootstraps in the background. Full paginated synchronization runs every six hours, with bounded head refreshes between full scans. Index reads never wait for provider synchronization. The API exposes sync state, timestamps, indexed-message count, draft revisions, and failures. A repeated page token or pagination beyond the safety limit fails the sync instead of truncating it silently.
