@@ -14,7 +14,7 @@ export function httpThreadParams(params: unknown, effectiveConfig: unknown, vers
   const config = record(record(effectiveConfig).config)
   const overrides = record(input.config)
   const selected = input.modelProvider ?? overrides.model_provider ?? config.model_provider ?? 'openai'
-  if (selected !== 'openai') return input
+  if (selected !== 'openai' && selected !== HTTP_PROVIDER) return input
 
   const provider: Record<string, unknown> = {
     // Codex uses this name to retain its native auth, model catalog and backend routes.
@@ -34,4 +34,19 @@ export function httpThreadParams(params: unknown, effectiveConfig: unknown, vers
     modelProvider: HTTP_PROVIDER,
     config: { ...overrides, model_provider: HTTP_PROVIDER, [`model_providers.${HTTP_PROVIDER}`]: provider },
   }
+}
+
+function toml(value: unknown): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return `{${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)}=${toml(item)}`).join(',')}}`
+  }
+  if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return JSON.stringify(value)
+  throw new Error('Invalid HTTP provider configuration')
+}
+
+/** Codex validates turn input against its process provider, not just the thread override. */
+export function httpProcessArgs(effectiveConfig: unknown, version?: string | null): string[] {
+  const params = httpThreadParams({}, effectiveConfig, version)
+  if (params.modelProvider !== HTTP_PROVIDER) return []
+  return Object.entries(record(params.config)).flatMap(([key, value]) => ['-c', `${key}=${toml(value)}`])
 }

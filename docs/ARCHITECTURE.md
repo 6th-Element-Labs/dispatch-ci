@@ -32,6 +32,14 @@ Browser or Tauri WebKit
 
 ### Mail
 
+The Gmail adapter accepts both MIME payload responses and normalized connector
+emails (`from_`, recipient arrays, `labels`, `email_ts`). Agent detects the
+advertised `include_raw_mime` input capability instead of sending the older
+`format` argument to that connector. Full normalized thread reads retrieve MIME
+messages with at most four concurrent reads so HTML, declared charsets, CID
+images and attachment identities remain intact. Provider truncation signals
+remain partial even when fewer than 100 messages were returned.
+
 `dispatch-mail` owns browser-facing conversation, message, and draft view models plus the durable Gmail SQLite index. It calls the agent service's typed Gmail adapter, paginates the Inbox, Unread, Sent, Drafts, Spam, Trash, and archive-query streams for every connector account, atomically replaces each completed account snapshot, removes disconnected accounts, groups messages by account plus Gmail thread ID, and converts Gmail headers and MIME parts into safe view models. It owns All, Unread, and Read filter semantics. An accepted read-state write stays on the index until a later Gmail snapshot reports the same unread value. Demo mail is available only through the explicit development setting. Gmail writes remain guarded by Codex approvals. The six folder lists are indexed. Mail does not serve Sent, Drafts, Archive, Spam, or Trash from a one-page live fetch.
 
 The index bootstraps in the background. Full paginated synchronization runs every six hours, with bounded head refreshes between full scans. Index reads never wait for provider synchronization. The API exposes sync state, timestamps, indexed-message count, draft revisions, and failures. A repeated page token or pagination beyond the safety limit fails the sync instead of truncating it silently.
@@ -42,7 +50,7 @@ On macOS, the Gmail index is stored under `Library/Application Support/Dispatch`
 
 `dispatch-agent` is the only service that starts and communicates with Codex App Server. It exposes a small HTTP and server-sent-event adapter for account state, installed apps, threads, turns, and streamed items. It does not implement a model loop.
 
-New and resumed OpenAI chats select HTTPS streaming immediately through a per-thread `dispatch_openai_http` provider alias. This avoids a long sequence of failed WebSocket attempts before Codex's HTTP fallback. Agent reads effective Codex configuration for the thread's working directory before selecting this route. Explicit custom providers are preserved. The alias retains Codex's native OpenAI provider name, account authentication, backend routes, model catalog, organization/project headers and configured OpenAI base URL; it disables only Responses WebSockets. It does not write global Codex configuration, change permissions, replay a turn or replace the thread identity. The same selection runs after runtime upgrades, rollback and service restarts.
+New and resumed OpenAI chats select HTTPS streaming immediately through a `dispatch_openai_http` provider alias scoped to the Dispatch-owned Codex process. Before accepting work, agent reads effective configuration from an initialized child and replaces the idle child with command-line provider overrides when the native OpenAI route is selected. This makes Codex 0.166 provider validation agree for thread creation, resume and turn input. This avoids a long sequence of failed WebSocket attempts before Codex's HTTP fallback. Agent reads effective Codex configuration for the thread's working directory before selecting this route. Explicit custom providers are preserved. The alias retains Codex's native OpenAI provider name, account authentication, backend routes, model catalog, organization/project headers and configured OpenAI base URL; it disables only Responses WebSockets. It does not write global Codex configuration, change permissions, replay a turn or replace the thread identity. The same selection runs after runtime upgrades, rollback and service restarts.
 
 The agent renews a rejected first-party connector login through Codex's supported `account/read` token refresh. Concurrent failures share one refresh, with a 30-second backoff. Only rejected Gmail reads get one retry; sends and draft mutations are never replayed. Agent-driven tool failures also renew the login for subsequent operations without replaying the conversation. Google grant failures and other provider errors remain visible. Dispatch's internal create/update, attachment and conflict-choice tools use explicit per-tool approval for user-authorized unsent editing, including older chats with a `never` approval policy; send and global Codex policies are unchanged.
 

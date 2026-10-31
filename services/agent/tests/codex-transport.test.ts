@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { httpThreadParams } from '../src/codex-transport.js'
+import { httpProcessArgs, httpThreadParams } from '../src/codex-transport.js'
 
 describe('Codex HTTP transport', () => {
   it('keeps native OpenAI auth and backend capabilities while avoiding WebSocket retries', () => {
@@ -31,8 +31,17 @@ describe('Codex HTTP transport', () => {
     [{}, { config: { model_provider: 'company-gateway' } }],
     [{ config: { model_provider: 'company-gateway' } }, { config: { model_provider: 'openai' } }],
     [{ modelProvider: 'company-gateway' }, { config: { model_provider: 'openai' } }],
-    [{}, { config: { model_provider: 'dispatch_openai_http' } }],
   ])('leaves an explicitly selected custom provider intact: %j', (params, config) => {
     expect(httpThreadParams(params, config)).toBe(params)
+  })
+
+  it('selects the same provider for the owning process and resumed HTTP threads', () => {
+    const args = httpProcessArgs({ config: { model_provider: 'openai' } }, '0.166.0')
+    expect(args).toContain('model_provider="dispatch_openai_http"')
+    expect(args).toContainEqual(expect.stringContaining('"supports_websockets"=false'))
+    expect(httpThreadParams({ threadId: 'saved' }, { config: { model_provider: 'dispatch_openai_http' } })).toMatchObject({
+      threadId: 'saved', modelProvider: 'dispatch_openai_http',
+    })
+    expect(httpProcessArgs({ config: { model_provider: 'company-gateway' } })).toEqual([])
   })
 })

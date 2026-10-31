@@ -13,13 +13,18 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function executable(label: string, broken = false): Promise<string> {
+async function executable(label: string, broken = false, defaultProvider = 'openai'): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dispatch-codex-process-')); roots.push(root)
   const command = join(root, 'codex')
   await writeFile(command, `#!${process.execPath}\nconst rl=require('node:readline').createInterface({input:process.stdin});
+const providerArg=process.argv.find(arg=>arg.startsWith('model_provider='));
+const provider=providerArg?JSON.parse(providerArg.slice('model_provider='.length)):${JSON.stringify(defaultProvider)};
+const threads=new Map();
 rl.on('line', line=>{const m=JSON.parse(line); if(m.id===undefined)return;
-if(m.method==='config/read') process.stdout.write(JSON.stringify({id:m.id,result:{config:{model_provider:'openai'}}})+'\\n');
-else if(m.method==='thread/start'||m.method==='thread/resume') process.stdout.write(JSON.stringify({id:m.id,result:{...m.params,modelProvider:m.params.modelProvider??(m.method==='thread/resume'?'openai':m.params.config?.model_provider??'openai')}})+'\\n');
+if(m.method==='config/read') process.stdout.write(JSON.stringify({id:m.id,result:{config:{model_provider:provider}}})+'\\n');
+else if(m.method==='thread/start'||m.method==='thread/resume') {const selected=m.params.modelProvider??(m.method==='thread/resume'?'openai':m.params.config?.model_provider??provider);threads.set(m.params.threadId,selected);process.stdout.write(JSON.stringify({id:m.id,result:{...m.params,modelProvider:selected}})+'\\n');
+}
+else if(m.method==='turn/start') process.stdout.write(JSON.stringify({id:m.id,...(threads.get(m.params.threadId)!==provider?{error:{message:'Thread provider differs from process provider'}}:{result:{status:'completed'}})})+'\\n');
 else if(m.method==='initialize' && ${broken}) process.stdout.write(JSON.stringify({id:m.id,error:{message:'incompatible runtime'}})+'\\n');
 else if(m.method==='hold')setTimeout(()=>process.stdout.write(JSON.stringify({id:m.id,result:'${label}'})+'\\n'),150);
 else process.stdout.write(JSON.stringify({id:m.id,result:'${label}'})+'\\n');});\n`)
@@ -56,6 +61,20 @@ describe('CodexProcess', () => {
         },
       })
     }
+  })
+
+  it('accepts turn input only after the process and thread providers agree', async () => {
+    const codex = new CodexProcess(await executable('current')); processes.push(codex)
+    for (const method of ['thread/start', 'thread/resume']) {
+      await codex.request(method, { threadId: 'saved-chat' })
+      expect(await codex.request('turn/start', { threadId: 'saved-chat', input: [] })).toEqual({ status: 'completed' })
+    }
+  })
+
+  it('keeps an existing custom process provider for both threads and turns', async () => {
+    const codex = new CodexProcess(await executable('custom', false, 'company-gateway')); processes.push(codex)
+    expect(await codex.request('thread/start', { threadId: 'custom-chat' })).toMatchObject({ modelProvider: 'company-gateway' })
+    expect(await codex.request('turn/start', { threadId: 'custom-chat', input: [] })).toEqual({ status: 'completed' })
   })
 
   it('keeps background work and pending RPC intact, then switches the idle transport and announces reconnect', async () => {
@@ -107,15 +126,16 @@ const first=!fs.existsSync(${JSON.stringify(marker)});fs.writeFileSync(${JSON.st
 const rl=require('node:readline').createInterface({input:process.stdin});
 rl.on('line',line=>{const m=JSON.parse(line);if(m.id===undefined)return;
 if(first&&m.method==='initialize'){fs.closeSync(0);process.stdout.write(JSON.stringify({id:m.id,result:'first'})+'\\n');setInterval(()=>{},1000);}
+else if(m.method==='config/read')process.stdout.write(JSON.stringify({id:m.id,result:{config:{model_provider:'company-gateway'}}})+'\\n');
 else process.stdout.write(JSON.stringify({id:m.id,result:'recovered'})+'\\n');});\n`)
     await chmod(command, 0o755)
     const codex = new CodexProcess(command); processes.push(codex)
     const events: string[] = []
     codex.subscribe(message => { if (message.method) events.push(message.method) })
-    await codex.ready()
+    await codex.ready().catch(() => undefined)
     await vi.waitFor(() => expect(codex.lastError()).toMatch(/Codex App Server input failed:.*EPIPE/))
     expect(events.filter(event => event === 'dispatch/appServerDisconnected')).toHaveLength(1)
-    expect(await codex.request('model/list')).toBe('recovered')
+    await vi.waitFor(async () => expect(await codex.request('model/list')).toBe('recovered'))
     expect(events).toContain('dispatch/appServerReconnected')
     expect(codex.lastError()).toBeNull()
   })

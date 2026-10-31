@@ -410,6 +410,28 @@ describe('dispatch-agent', () => {
     }))
   })
 
+  it.each(['full', 'raw', 'metadata'])('uses the advertised raw-MIME option for normalized Gmail reads (%s)', async format => {
+    const { base, fake } = await start()
+    fake.request.mockImplementation(async (method: string) => {
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
+        'gmail.read_email': {
+          inputSchema: { properties: { include_raw_mime: { type: 'boolean' } } },
+          _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' },
+        },
+      } }] }
+      if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
+      return { structuredContent: { id: 'message' } }
+    })
+    const response = await fetch(`${base}/v1/connectors/gmail/read`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ linkId: 'link-one', messageId: 'message', format }),
+    })
+    expect(response.status).toBe(200)
+    expect(fake.request).toHaveBeenCalledWith('mcpServer/tool/call', expect.objectContaining({
+      arguments: { link_id: 'link-one', message_id: 'message', include_raw_mime: format !== 'metadata' },
+    }))
+  })
+
   it('passes exact Gmail system label IDs to message search', async () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {

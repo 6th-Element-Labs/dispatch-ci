@@ -16,6 +16,7 @@ import { GmailHistorySync, type GmailHistoryTransport, object as gmailObject } f
 import { GmailOAuth, loadGmailOAuthConfig, type GmailDirectSyncStatus } from './gmail-oauth.js'
 import type { AttachmentProjection, ConversationProjection, ConversationSummary, DraftAttachment, DraftProjection, GmailConversationAction, GmailMailbox, MailAddress, MailStateFilter, MailboxCounts, MessageProjection, MessageSummary } from './model.js'
 import { decodeRawMessage, decodeText, findPart, isUnicodeCharset, mimeCharset, parseMime, partAt, UnsupportedCharsetError } from './mime-part.js'
+import { normalizeGmailMessage, rawGmailMessage } from './gmail-message.js'
 
 export interface GmailAccountProjection {
   readonly id: string
@@ -405,7 +406,7 @@ function received(value: string, context?: { messageId?: string; account?: strin
 }
 
 export function projectGmailMessage(value: unknown, includeBody: boolean, account?: GmailAccountProjection): MessageProjection {
-  const message = structured(value)
+  const message = normalizeGmailMessage(structured(value), includeBody)
   const payload = record(message.payload) ?? {}
   const messageHeaders = headers(payload)
   if (message.label_ids !== null && message.label_ids !== undefined && !Array.isArray(message.label_ids)) throw new Error('Gmail message label_ids must be an array or null')
@@ -1252,7 +1253,7 @@ export class GmailConnectorProvider {
     const needed = bodyPartNeedingRawDecode(value)
     if (!needed) return body(record(structured(value).payload) ?? {})
     const messageId = text(structured(value).id)
-    const raw = text(structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'raw' })).raw)
+    const raw = rawGmailMessage(structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'raw' })))
     if (!raw) throw new Error(`Gmail returned no raw copy of message ${messageId}`)
     const part = partAt(parseMime(decodeRawMessage(raw)), needed.partId)
     if (!part || part.children.length) throw new Error(`Gmail message ${messageId} has no text part ${JSON.stringify(needed.partId)} in its raw copy`)
@@ -1302,7 +1303,14 @@ export class GmailConnectorProvider {
       const thread = structured(value)
       const rawMessages = array(thread.messages)
       // Raw reads for non-UTF-8 bodies run a few at a time, so a long thread does not burst Gmail.
-      const initialMessages = await mapLimit(rawMessages, 4, (message) => this.#projectMessage({ structuredContent: message }, accountId, account))
+      const initialMessages = await mapLimit(rawMessages, 4, (message) => {
+        const item = record(message) ?? {}
+        // Normalized thread rows contain plain text only. Read the full message
+        // through the same connector to retain MIME formatting and attachments.
+        return !record(item.payload) && typeof item.from_ === 'string' && !rawGmailMessage(item)
+          ? this.#readMessage(accountId, text(item.id), account)
+          : this.#projectMessage({ structuredContent: message }, accountId, account)
+      })
       const messagesById = new Map(initialMessages.map(message => [message.id, message]))
       const indexedIds = this.#index?.threadMessageIds(accountId, threadId) ?? []
       const missingIds = indexedIds.filter(id => !messagesById.has(id))
@@ -1314,13 +1322,14 @@ export class GmailConnectorProvider {
       const messages = [...messagesById.values()]
       if (messages.length === 0) throw new Error('Gmail thread contains no readable messages')
       const unavailableIds = supplements.filter((item): item is { id: string; error: string } => 'error' in item).map(item => item.id)
-      const capReached = rawMessages.length >= 100
-      const knownCount = Math.max(new Set(indexedIds).size, messagesById.size, rawMessages.length)
+      const remoteCount = typeof thread.total_messages === 'number' ? thread.total_messages : 0
+      const capReached = rawMessages.length >= 100 || thread.truncated === true || remoteCount > rawMessages.length
+      const knownCount = Math.max(new Set(indexedIds).size, messagesById.size, rawMessages.length, remoteCount)
       const unresolvedKnownIds = indexedIds.filter(id => !messagesById.has(id))
       const complete = !capReached && unresolvedKnownIds.length === 0 && unavailableIds.length === 0
       const reason = complete ? undefined : unavailableIds.length || unresolvedKnownIds.length
         ? `Some known messages could not be loaded (${new Set([...unavailableIds, ...unresolvedKnownIds]).size}). Go online and reopen this conversation to retry.`
-        : `Gmail returned the 100-message limit. ${knownCount} is a lower bound; reopen this conversation to check for more messages.`
+        : `${rawMessages.length >= 100 ? 'Gmail returned the 100-message limit.' : 'Gmail returned a partial thread.'} ${knownCount} is a lower bound; reopen this conversation to check for more messages.`
       const conversation = { ...projectConversation(messages, 'gmail'), completeness: { complete, knownCount, loadedCount: messages.length, ...(reason ? { reason } : {}) } }
       const preserveCompleteCache = cached?.conversation.completeness?.complete === true
         && (!complete || messages.length < cached.conversation.messages.length)
@@ -1999,7 +2008,7 @@ export class GmailConnectorProvider {
     // returning embedded bytes; missing content must never be treated as an empty file.
     const mimePartId = /^mime-part:(\d+(?:\.\d+)*)$/.exec(attachmentId)?.[1]
     if (mimePartId !== undefined) {
-      const message = structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'full' }))
+      const message = normalizeGmailMessage(structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'full' })))
       const part = parts(record(message.payload) ?? {}).find(item => text(item.part_id) === mimePartId && text(item.filename) === filename)
       if (!part) throw Object.assign(new Error(`Attachment ${filename} is not part of this message`), { code: 'attachment_not_found' })
       const partBody = record(part?.body)
@@ -2030,7 +2039,7 @@ export class GmailConnectorProvider {
     if (!target) throw Object.assign(new Error(`Attachment ${filename || attachmentId} is not part of this message`), { code: 'attachment_not_found' })
     const twins = message.attachments.filter((item) => item.name === target.name && item.mediaType === target.mediaType)
     const ordinal = Math.max(0, twins.indexOf(target))
-    const raw = text(structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'raw' })).raw)
+    const raw = rawGmailMessage(structured(await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId, format: 'raw' })))
     if (!raw) throw new Error('Gmail did not return the raw message, so the attachment could not be read')
     const part = findPart(parseMime(decodeRawMessage(raw)), { filename: target.name, mimeType: target.mediaType, ordinal })
     if (!part) throw Object.assign(new Error(`Attachment ${target.name} was not found in the raw message`), { code: 'attachment_not_found' })
@@ -2049,7 +2058,7 @@ export class GmailConnectorProvider {
     await this.#findGmailDraft(accountId, draft => { candidates.push(draft); return false })
     for (const candidate of candidates) {
       const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: candidate.messageId, format: 'full' })
-      const mime = record(structured(raw).payload) ?? {}
+      const mime = record(normalizeGmailMessage(structured(raw)).payload) ?? {}
       if ([mime, ...parts(mime)].some(part => partContentId(part) === `dispatch-${clientId}@draft.dispatch.local`)) return candidate.draftId
     }
     return undefined
