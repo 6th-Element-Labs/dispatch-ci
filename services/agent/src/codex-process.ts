@@ -5,7 +5,7 @@ import { dirname, join, isAbsolute } from 'node:path'
 import { JsonLineRpc, type RpcMessage } from './json-line-rpc.js'
 import { ConnectorAuthRecovery, isRevokedConnectorToken } from './connector-auth.js'
 import { CodexRuntimeManager, UPDATE_INTERVAL_MS, UPDATE_RETRY_MS, type RuntimeRelease, type RuntimeUpdateStatus, type RuntimeUpdater } from './codex-runtime.js'
-import { httpThreadParams } from './codex-transport.js'
+import { httpProcessArgs, httpThreadParams } from './codex-transport.js'
 
 const INITIAL_RESTART_DELAY_MS = 500
 const MAX_RESTART_DELAY_MS = 30_000
@@ -71,13 +71,13 @@ export class CodexProcess {
     return this.#restartDelayMs
   }
 
-  async #launch(): Promise<void> {
+  async #launch(transportArgs?: string[]): Promise<void> {
     this.#launching = true
     const env = { ...globalThis.process.env }
     delete env.DISPATCH_PARENT_PID
     const tools = join(dirname(this.#command), '..', 'codex-path')
     if (isAbsolute(this.#command) && existsSync(tools)) env.PATH = `${tools}:${env.PATH ?? ''}`
-    const process = spawn(this.#command, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], env })
+    const process = spawn(this.#command, ['app-server', ...(transportArgs ?? [])], { stdio: ['pipe', 'pipe', 'pipe'], env })
     const rpc = new JsonLineRpc(process.stdin)
     let terminated = false
     this.#process = process
@@ -104,6 +104,7 @@ export class CodexProcess {
       rpc.rejectAll(reason)
       if (this.#process !== process || this.#closed || this.#replacing) return
       this.#lastError = reason.message
+      this.#startedOnce = true
       this.#listeners.forEach((listener) => listener({ method: 'dispatch/appServerDisconnected', params: { reason: reason.message } }))
       const delay = this.#restartDelayMs
       this.#restartDelayMs = Math.min(this.#restartDelayMs * 2, MAX_RESTART_DELAY_MS)
@@ -128,13 +129,25 @@ export class CodexProcess {
         clientInfo: { name: 'dispatch', title: 'Dispatch', version: '0.1.10' },
         capabilities: { mcpServerOpenaiFormElicitation: true },
       })
+      rpc.notify('initialized', {})
+      if (!transportArgs) {
+        const config = await rpc.request('config/read', { includeLayers: false })
+        const args = httpProcessArgs(config, this.#manager?.status.version)
+        if (args.length) {
+          // No owner can use this child until ready() resolves. Replace it before
+          // accepting work, so thread/start and turn/start share one provider.
+          terminated = true
+          await this.#stopChild()
+          if (!this.#closed) await this.#launch(args)
+          return
+        }
+      }
     } catch (error) {
       handleFailure(error instanceof Error ? error : new Error(String(error)))
       if (!process.killed) process.kill('SIGTERM')
       this.#launching = false
       throw error
     }
-    rpc.notify('initialized', {})
     this.#lastError = null
     this.#lastWarning = null
     this.#launching = false
