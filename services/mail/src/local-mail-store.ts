@@ -139,13 +139,19 @@ export class LocalMailStore {
     this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES(?,?)').run(`draft-replacement:${value.accountId}:${value.originalId}`, JSON.stringify(value))
   }
   resolveReplacement(accountId: string, draftId: string): { id: string; baseline?: DraftProjection } {
-    const seen = new Set<string>()
+    const seen = new Set<string>(), chain: DraftReplacement[] = []
     let id = draftId, baseline: DraftProjection | undefined
     for (;;) {
-      if (seen.has(id) || seen.size >= 64) throw new Error('Invalid draft replacement chain. Your draft is kept.')
+      if (seen.has(id)) throw new Error('Invalid draft replacement chain. Your draft is kept.')
       seen.add(id)
       const item = this.replacement(accountId, id)
-      if (item?.state !== 'complete' || !item.replacementId) return { id, baseline }
+      if (item?.state !== 'complete' || !item.replacementId) {
+        // Long editing sessions can replace a file-bearing draft many times.
+        // Flatten old identities rather than imposing a save-count limit.
+        for (const prior of chain) if (prior.replacementId !== id) this.putReplacement({ ...prior, replacementId: id, target: baseline! })
+        return { id, baseline }
+      }
+      chain.push(item)
       id = item.replacementId; baseline = item.target
     }
   }

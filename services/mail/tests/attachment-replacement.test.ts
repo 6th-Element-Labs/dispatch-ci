@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { GmailConnectorProvider } from '../src/gmail-provider.js'
 import { LocalMailStore } from '../src/local-mail-store.js'
+import { projectDraft } from '../src/draft.js'
 import type { DraftAttachment } from '../src/model.js'
 
 const originalFile = { name: 'report.pdf', mediaType: 'application/pdf', contentBase64: Buffer.from('original bytes').toString('base64') }
@@ -133,4 +134,16 @@ it('cancels both physical drafts when Discard arrives during replacement', async
     expect(f.remote.size).toBe(0)
     expect(f.record(queued.id)).toMatchObject({ state: 'cancelled', cleanupDone: true })
   } finally { await f.close() }
+})
+
+it('keeps old draft identities valid through long attachment editing sessions and rejects cycles', () => {
+  const store = new LocalMailStore(':memory:')
+  const source = projectDraft({ id: '0', accountId: 'one', inReplyToMessageId: '', to: [], subject: 'Draft', bodyMarkdown: 'Body' })
+  try {
+    for (let index = 0; index < 80; index++) store.putReplacement({ accountId: 'one', originalId: String(index), marker: String(index), source, target: { ...source, id: String(index + 1) }, replacementId: String(index + 1), state: 'complete' })
+    expect(store.resolveReplacement('one', '0').id).toBe('80')
+    expect(store.replacement('one', '0')?.replacementId).toBe('80')
+    store.putReplacement({ accountId: 'one', originalId: '80', marker: 'cycle', source, target: source, replacementId: '0', state: 'complete' })
+    expect(() => store.resolveReplacement('one', '0')).toThrow('Invalid draft replacement chain')
+  } finally { store.close() }
 })
