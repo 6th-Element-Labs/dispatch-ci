@@ -17,9 +17,9 @@ const nativeInventory = { data: [{ name: 'codex_apps', tools }] }
 const servers: ReturnType<typeof createAgentServer>[] = []
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve())))) })
 
-async function start(fail = false) {
+async function start(fail = false, inventory = nativeInventory) {
   const request = vi.fn(async (method: string, raw?: unknown): Promise<unknown> => {
-    if (method === 'mcpServerStatus/list') return nativeInventory
+    if (method === 'mcpServerStatus/list') return inventory
     if (method === 'thread/start') return { thread: { id: 'connector' } }
     if (method === 'mcpServer/tool/call') {
       const params = raw as { tool: string; arguments: Record<string, unknown> }
@@ -109,4 +109,19 @@ it.each(['required-field', 'body-type', 'missing-file-metadata', 'file-type'] as
 it('accepts the captured current Gmail draft, attachment and send contracts', () => {
   const gmail = readGmailInventory(nativeInventory)
   expect(() => assertGmailCompatibility(gmail.contracts!, gmail.tools)).not.toThrow()
+})
+
+it('refreshes the native contract before the next write and rejects drift before another upload', async () => {
+  const inventory = structuredClone(nativeInventory)
+  const { post, request, uploadFiles } = await start(false, inventory)
+  const input = { ...body, attachments: [{ filename: 'review.txt', data: 'aGk=' }] }
+  expect((await post('create', input)).status).toBe(200)
+  const schema = inventory.data[0]!.tools['gmail.create_draft']!.inputSchema as { required: string[] }
+  schema.required.push('new_provider_requirement')
+  const rejected = await post('create', input)
+  expect(rejected.status).toBe(400)
+  expect(await rejected.json()).toMatchObject({ providerWriteStarted: false })
+  expect(uploadFiles).toHaveBeenCalledOnce()
+  expect(request.mock.calls.filter(([method]) => method === 'mcpServer/tool/call')).toHaveLength(1)
+  expect(request.mock.calls.filter(([method]) => method === 'mcpServerStatus/list')).toHaveLength(2)
 })

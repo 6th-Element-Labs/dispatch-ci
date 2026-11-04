@@ -554,8 +554,9 @@ export function createAgentServer(runtime: AgentRuntime, options: { uploadFiles?
         const gmail = await inventory(true)
         if (!gmail.server || !gmail.tools.createDraft) return json(response, 503, { error: 'gmail_draft_unavailable' })
         const args = await draftArgs(payload, gmail, 'create')
+        const threadId = await connectorThread(linkId)
         providerWriteStarted = true
-        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.createDraft, arguments: args }))
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId, tool: gmail.tools.createDraft, arguments: args }))
       } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error), providerWriteStarted }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/list') {
@@ -601,8 +602,9 @@ export function createAgentServer(runtime: AgentRuntime, options: { uploadFiles?
         }
         const args = payload.preserveContent === true ? { link_id: linkId, draft_id: draftId, ...partial } : await draftArgs(payload, gmail, 'update')
         assertToolArguments(gmail.tools.updateDraft, args, gmail.contracts?.[gmail.tools.updateDraft])
+        const threadId = await connectorThread(linkId)
         providerWriteStarted = true
-        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.updateDraft, arguments: args }))
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId, tool: gmail.tools.updateDraft, arguments: args }))
       } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error), providerWriteStarted }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/discard') {
