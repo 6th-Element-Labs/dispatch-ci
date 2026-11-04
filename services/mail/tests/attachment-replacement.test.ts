@@ -74,6 +74,7 @@ async function setup(mode: 'normal' | 'lost-create' | 'lost-cleanup' | 'gate' | 
   return { get provider() { return provider }, source, remote, deleted, get creates() { return creates }, get updates() { return updates }, release,
     restart() { provider.stopBackgroundSync(); provider = open(); provider.requestRefresh('manual') },
     async close() { release(); provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }) },
+    journal(id: string) { const store = new LocalMailStore(join(dir, 'mail.sqlite')); try { return store.replacement('one', id) } finally { store.close() } },
     record(id: string) { const store = new LocalMailStore(join(dir, 'mail.sqlite')); try { return store.draftSave('one', id) } finally { store.close() } },
   }
 }
@@ -89,6 +90,8 @@ it.each(['normal', 'lost-create', 'lost-cleanup'] as const)('preserves files, re
     expect(saved).toMatchObject({ id: 'replacement-1', gmailThreadId: 'same-thread', bodyMarkdown: 'Original body', cc: 'copy@example.com', bcc: 'hidden@example.com' })
     expect(saved.attachments).toMatchObject([{ name: originalFile.name, contentBase64: originalFile.contentBase64 }, { name: extraFile.name, contentBase64: extraFile.contentBase64 }])
     expect(f.creates).toBe(1); expect(f.updates).toBe(0)
+    expect(f.journal('original')?.target.attachments.every(file => file.id && file.sourceMessageId && file.contentSha256?.length === 64 && file.contentBase64 === undefined)).toBe(true)
+    expect(f.journal('original')?.source.attachments.every(file => file.id && file.sourceMessageId && file.contentSha256?.length === 64 && file.contentBase64 === undefined)).toBe(true)
     expect([...f.remote.keys()]).toEqual(['replacement-1'])
     expect((await f.provider.readGmailDraft('one', 'original', true)).id).toBe(saved.id)
     f.provider.enqueueDraftSave('one', '', { attachments: [saved.attachments[1]!] }, queued.id)

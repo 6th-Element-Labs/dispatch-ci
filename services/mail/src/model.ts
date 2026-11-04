@@ -43,6 +43,8 @@ export interface MessageProjection extends MessageSummary {
 }
 
 export interface DraftAttachment {
+  /** Mail-owned immutable baseline digest after verified bytes are compacted. */
+  readonly contentSha256?: string
   readonly contentId?: string
   readonly id?: string
   readonly name: string

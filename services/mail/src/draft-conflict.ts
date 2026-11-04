@@ -10,17 +10,20 @@ const markdown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-
 markdown.keep(['table', 'sub', 'sup'])
 const addresses = (value = '') => value.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(value => (value.match(/<([^>]+)>/)?.[1] ?? value).trim().toLowerCase()).filter(Boolean).sort().join(',')
 const text = (value = '') => markdown.turndown(renderDraftMarkdown(value)).replaceAll('\r\n', '\n').trim()
-const bytesHash = (file: DraftAttachment) => file.contentBase64 === undefined ? undefined : createHash('sha256').update(Buffer.from(file.contentBase64, 'base64')).digest('hex')
+const bytesHash = (file: DraftAttachment) => file.contentBase64 === undefined ? file.contentSha256 : createHash('sha256').update(Buffer.from(file.contentBase64, 'base64')).digest('hex')
 
 function sameFiles(a: readonly DraftAttachment[] = [], b: readonly DraftAttachment[] = []): boolean {
   if (a.length !== b.length) return false
   const remaining = [...b]
   for (const file of a) {
-    const match = remaining.findIndex(other => file.name === other.name && file.mediaType === other.mediaType
-      && file.contentId === other.contentId
-      && (file.contentBase64 !== undefined && other.contentBase64 !== undefined ? bytesHash(file) === bytesHash(other)
-        : file.id || other.id ? file.id === other.id && file.sourceMessageId === other.sourceMessageId
-          : file.contentBase64 === other.contentBase64 && file.sizeLabel === other.sizeLabel))
+    const expectedHash = bytesHash(file)
+    const match = remaining.findIndex(other => {
+      if (file.name !== other.name || file.mediaType !== other.mediaType || file.contentId !== other.contentId) return false
+      const actualHash = bytesHash(other)
+      if (expectedHash !== undefined && actualHash !== undefined) return expectedHash === actualHash
+      return file.id || other.id ? file.id === other.id && file.sourceMessageId === other.sourceMessageId
+        : file.contentBase64 === other.contentBase64 && file.sizeLabel === other.sizeLabel
+    })
     if (match < 0) return false
     remaining.splice(match, 1)
   }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { projectDraft } from '../src/draft.js'
 import { conflictingDraftFields, draftChanges } from '../src/draft-conflict.js'
@@ -30,5 +31,16 @@ it('compares attachment bytes and multiplicity, rather than only filenames', () 
   expect(draftChanges({ attachments: [{ ...file }] }, original)).toEqual({})
   const current = { ...original, attachments: [{ ...file, contentBase64: Buffer.from('external').toString('base64') }] }
   expect(conflictingDraftFields({ attachments: [] }, original, current)).toEqual(['attachments'])
+  expect(draftChanges({ attachments: [file, file] }, original)).toHaveProperty('attachments')
+})
+
+it('uses compact verified digests without losing file-conflict detection', () => {
+  const file = { id: 'immutable-file', sourceMessageId: 'immutable-message', name: 'same.txt', mediaType: 'text/plain', contentBase64: Buffer.from('original').toString('base64') }
+  const { contentBase64, ...reference } = file
+  const compact = { ...reference, contentSha256: createHash('sha256').update(Buffer.from(contentBase64, 'base64')).digest('hex') }
+  const original = { ...base(), attachments: [compact] }
+  expect(draftChanges({ attachments: [file] }, original)).toEqual({})
+  const external = { ...original, attachments: [{ ...file, sourceMessageId: 'new-message', contentBase64: Buffer.from('external').toString('base64') }] }
+  expect(conflictingDraftFields({ attachments: [] }, original, external)).toEqual(['attachments'])
   expect(draftChanges({ attachments: [file, file] }, original)).toHaveProperty('attachments')
 })

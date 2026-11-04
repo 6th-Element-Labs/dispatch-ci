@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { plainBodyFromMessage } from './draft.js'
 import type { ConversationProjection, DraftProjection } from './model.js'
 import type { DraftSaveJob } from './draft-save-queue.js'
@@ -136,6 +136,17 @@ export class LocalMailStore {
     return row ? JSON.parse(String(row.payload)) : undefined
   }
   putReplacement(value: DraftReplacement): void {
+    if (value.state === 'complete') {
+      // Gmail message/attachment identities are immutable. Completed aliases
+      // need that baseline, not another full copy of each uploaded file.
+      // Pending/retiring records retain all bytes until readback and cleanup.
+      const compact = (draft: DraftProjection): DraftProjection => ({ ...draft, attachments: draft.attachments.map(file => {
+        if (!file.id || !file.sourceMessageId) return file
+        const { contentBase64: _bytes, ...reference } = file
+        return { ...reference, ...(_bytes === undefined ? {} : { contentSha256: createHash('sha256').update(Buffer.from(_bytes, 'base64')).digest('hex') }) }
+      }) })
+      value = { ...value, source: compact(value.source), target: compact(value.target) }
+    }
     this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES(?,?)').run(`draft-replacement:${value.accountId}:${value.originalId}`, JSON.stringify(value))
   }
   resolveReplacement(accountId: string, draftId: string): { id: string; baseline?: DraftProjection } {
