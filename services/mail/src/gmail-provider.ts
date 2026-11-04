@@ -1967,7 +1967,8 @@ export class GmailConnectorProvider {
     const addresses = (value: string) => addressList(value).map(item => item.address.toLowerCase()).sort().join(',')
     for (const key of ['to', 'cc', 'bcc'] as const) if (addresses(fields[key]) !== addresses((sent[key] ?? []).map(item => item.address).join(', '))) return false
     if (fields.subject !== sent.subject) return false
-    const providerBody = this.#local.draftProviderBody(accountId, this.#local.resolveReplacement(accountId, draftId).id)
+    const physicalId = this.#local.draftSave(accountId, draftId)?.remoteId ?? draftId
+    const providerBody = this.#local.draftProviderBody(accountId, this.#local.resolveReplacement(accountId, physicalId).id)
     const sentBody = normalizedDraftBody(plainBodyFromMessage(sent))
     const authored = normalizedDraftBody(fields.bodyMarkdown)
     if (authored !== sentBody && !(providerBody && authored === normalizedDraftBody(providerBody.authored.bodyMarkdown) && sentBody === normalizedDraftBody(providerBody.providerMarkdown))) return false
@@ -1979,7 +1980,7 @@ export class GmailConnectorProvider {
       // The provider assigns a Content-ID to ordinary uploaded files. Only an
       // explicit editor CID is an identity to preserve (for inline references).
       const index = remaining.findIndex(candidate => fileMatches(file, candidate)
-        && (file.contentId === undefined || file.contentId === candidate.contentId))
+        && (file.contentId === undefined || /^dispatch-[a-zA-Z0-9-]+@draft\.dispatch\.local$/.test(file.contentId) || file.contentId === candidate.contentId))
       if (index < 0) return false
       remaining.splice(index, 1)
     }

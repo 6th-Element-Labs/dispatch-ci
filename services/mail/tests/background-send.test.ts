@@ -1,3 +1,8 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { LocalMailStore } from '../src/local-mail-store.js'
+import { projectDraft } from '../src/draft.js'
 import { expect, it } from 'vitest'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -117,4 +122,27 @@ it('consumes recovery only when Sent contains the same recipients, full body and
     expect(await provider.sentDraftMatches('one', 'remote', { ...fields, attachments: [{ ...file, contentId: 'generated@draft.dispatch.local' }] })).toBe(true)
     expect(await provider.sentDraftMatches('other', 'remote', fields)).toBe(false)
   } finally { provider.stopBackgroundSync() }
+})
+
+it('matches queued reply recovery against its exact recorded provider history and uploaded file bytes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dispatch-sent-quote-'))
+  const path = join(dir, 'mail.sqlite'), store = new LocalMailStore(path)
+  const provider = new GmailConnectorProvider('http://127.0.0.1:1', { indexPath: false, localPath: path })
+  provider.setRuntimeDraining(true)
+  const file = { name: 'check.txt', mediaType: 'text/plain', contentBase64: 'YWJj', contentId: 'dispatch-append-1@draft.dispatch.local' }
+  const fields = { to: 'test@example.com', cc: '', bcc: '', subject: 'Reply', bodyMarkdown: 'Authored reply', attachments: [file] }
+  const draft = projectDraft({ id: 'physical', accountId: 'one', inReplyToMessageId: 'received', ...fields, to: [{ address: fields.to, name: 'Test', initials: 'T' }] })
+  const full = 'Authored reply\n\nOn Tuesday Steve wrote:\nOriginal email'
+  store.putDraftProviderBody('one', 'physical', draft, full)
+  store.putDraftSave({ id: 'queued-client', accountId: 'one', remoteId: 'physical', messageId: 'received', fields, draft, revision: 1, state: 'saved', retryAt: 0, attempts: 0, reconnect: false, createdAt: new Date().toISOString() })
+  const message = { id: 'sent', threadId: 'thread', sender: { address: 'me@example.com', name: 'Me', initials: 'M' }, to: draft.to, cc: [], bcc: [], subject: fields.subject, receivedAt: new Date().toISOString(), receivedLabel: '', receivedFullLabel: '', preview: '', unread: false, accountId: 'one', labels: ['SENT'], source: 'gmail' as const, body: { kind: 'plain-text' as const, content: full }, attachments: [{ id: 'file', name: file.name, mediaType: file.mediaType, sizeLabel: '3 B', contentId: 'provider-generated' }] }
+  vi.spyOn(provider, 'readMessage').mockResolvedValue(message)
+  vi.spyOn(provider, 'readAttachment').mockResolvedValue({ structuredContent: { base64_url_content: 'YWJj' } })
+  provider.recordExternalSend('one', 'sent', 'queued-client')
+  try {
+    expect(await provider.sentDraftMatches('one', 'queued-client', fields)).toBe(true)
+    expect(await provider.sentDraftMatches('one', 'queued-client', { ...fields, bodyMarkdown: 'Authored reply plus unsent edits' })).toBe(false)
+    message.body.content = full + '\nUnexpected text'
+    expect(await provider.sentDraftMatches('one', 'queued-client', fields)).toBe(false)
+  } finally { provider.stopBackgroundSync(); store.close(); await rm(dir, { recursive: true, force: true }) }
 })
