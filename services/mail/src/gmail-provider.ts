@@ -169,7 +169,7 @@ function isGmailNotFound(error: unknown): boolean {
 
 function draftConnectorError(error: unknown): Error {
   // Gmail's own error text can name the tool (delete_draft); a rate limit stays a rate limit.
-  if ((error as { code?: unknown })?.code === 'gmail_backoff') return error as Error
+  if (['gmail_backoff', 'gmail_invalid_arguments'].includes(String((error as { code?: unknown })?.code))) return error as Error
   const detail = error instanceof Error ? error.message : String(error)
   if (/html|mime_type|text\/html/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_html_unsupported' })
   if (/attach/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_attachment_unsupported' })
@@ -1555,7 +1555,7 @@ export class GmailConnectorProvider {
       } catch (error) {
         if ((error as { code?: string }).code === 'gmail_backoff' || /HTTP status: 429|RATE_LIMITED|token_revoked/.test(String(error))) this.#local.putDraftCreate(accountId, clientId, { rejected: true })
         const connectionCode = (error as { cause?: { code?: string } })?.cause?.code
-        if (connectionCode === 'ECONNREFUSED' || connectionCode === 'ENOTFOUND' || /invalid.arguments|invalid.params|argument.binding|gmail_draft_create_unavailable|gmail_html_unsupported/i.test(String(error))) this.#local.removeDraftCreate(accountId, clientId)
+        if ((error as { code?: string })?.code === 'gmail_invalid_arguments' || connectionCode === 'ECONNREFUSED' || connectionCode === 'ENOTFOUND' || /invalid.arguments|invalid.params|argument.binding|gmail_draft_create_unavailable|gmail_html_unsupported/i.test(String(error))) this.#local.removeDraftCreate(accountId, clientId)
         throw error
       }
     })()
@@ -1633,9 +1633,10 @@ export class GmailConnectorProvider {
         cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject,
         bodyMarkdown: draft.bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: draft.bodyText,
         attachments: connectorAttachments(attachments),
+        attachmentsChanged: existing ? Boolean(draftChanges({ attachments }, existing).attachments) : attachments.length > 0,
       }))
       const message = record(result.message)
-      saved = { ...saved, gmailMessageId: text(message?.id) || saved.gmailMessageId, gmailThreadId: text(message?.thread_id) || text(message?.threadId) || saved.gmailThreadId }
+      saved = { ...saved, gmailMessageId: text(message?.id) || text(result.message_id) || saved.gmailMessageId, gmailThreadId: text(message?.thread_id) || text(message?.threadId) || saved.gmailThreadId }
       this.#rememberDraft(saved, true)
       void this.#refreshIndexedDrafts(draft.accountId)
       return saved
@@ -1971,7 +1972,7 @@ export class GmailConnectorProvider {
       // Durable intent is recorded before the provider call. A restart makes it unknown, never a retry.
       this.#local.putReceipt(receipt)
       const result = await this.#post('/v1/connectors/gmail/drafts/send', { linkId: accountId, draftId: remoteDraftId })
-      const messageId = text(structured(result).id)
+      const messageId = text(structured(result).id) || text(structured(result).message_id)
       if (record(result)?.isError || structured(result).error || !messageId) throw new Error('Gmail did not return a confirmed sent message ID.')
       receipt = { ...receipt, messageId, status: 'accepted', acceptedAt: new Date().toISOString() }
       for (const id of [draftId, remoteDraftId]) {
@@ -2059,7 +2060,8 @@ export class GmailConnectorProvider {
     for (const candidate of candidates) {
       const raw = await this.#post('/v1/connectors/gmail/read', { linkId: accountId, messageId: candidate.messageId, format: 'full' })
       const mime = record(normalizeGmailMessage(structured(raw)).payload) ?? {}
-      if ([mime, ...parts(mime)].some(part => partContentId(part) === `dispatch-${clientId}@draft.dispatch.local`)) return candidate.draftId
+      if ([mime, ...parts(mime)].some(part => partContentId(part) === `dispatch-${clientId}@draft.dispatch.local`
+        || text(part.mime_type) === 'text/html' && text(record(part.body)?.content).includes(`<!--dispatch-draft:dispatch-${clientId}@draft.dispatch.local-->`))) return candidate.draftId
     }
     return undefined
   }
@@ -2168,14 +2170,14 @@ export class GmailConnectorProvider {
       const retryAt = this.#pauseAccount(linkId, failure)
       throw Object.assign(new Error(`Gmail is rate limiting this account. Retry after ${new Date(retryAt).toISOString()}: ${JSON.stringify(value)}`), { code: 'gmail_backoff', connectorPayload: value })
     }
-    if (!response.ok) throw new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`)
+    if (!response.ok) throw Object.assign(new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`), response.status === 400 ? { code: 'gmail_invalid_arguments' } : {})
     if (record(value)?.isError || content.error) {
       const data = record(content.error_data)
       // Only the exact Gmail thread read's structured provider 404 retires evidence.
       // A missing connector route, unauthorized account, or error text alone must retry visibly.
       const missingThread = path === '/v1/connectors/gmail/read-thread' && content.error_code === 'NOT_FOUND'
         && data?.type === 'http_error' && (data.code === 404 || record(data.response)?.status === 404)
-      throw Object.assign(new Error(`Gmail connector rejected the request: ${JSON.stringify(value)}`), { connectorPayload: value, ...(missingThread ? { code: 'gmail_thread_not_found' } : {}) })
+      throw Object.assign(new Error(`Gmail connector rejected the request: ${JSON.stringify(value)}`), { connectorPayload: value, ...(content.error_code === 'INVALID_ARGUMENT' ? { code: 'gmail_invalid_arguments' } : {}), ...(missingThread ? { code: 'gmail_thread_not_found' } : {}) })
     }
     if (!array(content.responses).some(item => record(item)?.success === false)) this.#rateLimitStreak.delete(linkId)
     return value

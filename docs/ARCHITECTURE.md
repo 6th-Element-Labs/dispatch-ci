@@ -212,3 +212,23 @@ draft lists and attachment reads. HTTP provider errors, cancellation and expired
 deadlines are not retried. Create, update, label actions and delivery requests are
 never retried by this transport. Remaining failures identify the route and
 connection code, while retaining the original cause for uncertain-write handling.
+
+
+### Gmail draft input compatibility
+
+Agent selects create and update argument formats independently from each installed
+Gmail tool's input schema. Connectors advertising `body` plus `html_body` receive
+those fields, never the legacy `payload` or `response_fields`. Existing MIME
+connectors retain their multipart route. Empty Cc/Bcc values are forwarded on
+modern updates so clearing a recipient remains an actual change. Modern creates
+retain their stable recovery identity in an HTML comment; mail recognizes both
+that exact marker and the original MIME Content-ID during uncertain-create
+recovery. Known argument-binding rejection retires the unaccepted create intent;
+uncertain writes still require finding their existing draft before any retry.
+
+The direct App Server MCP route currently does not resolve the modern connector's
+`openai/fileParams` paths into hosted upload objects. New file attachments and
+attachment changes on existing drafts therefore fail explicitly before a provider
+write on this route. Body/header edits retain unchanged files. Legacy MIME
+connectors retain their existing attachment behavior. No file is silently omitted,
+no replacement draft is fabricated, and no failed send is automatically replayed.

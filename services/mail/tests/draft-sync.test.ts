@@ -27,7 +27,7 @@ it('can retry after the agent could not be reached at all', async () => {
   } finally { provider.stopBackgroundSync(); await rm(dir, { recursive: true, force: true }) }
 })
 
-it.each([false, true])('reuses one draft across response loss and restart (lost=%s)', async lost => {
+it.each([[false, false], [true, false], [false, true], [true, true]])('reuses one draft across response loss and restart (lost=%s, html=%s)', async (lost, html) => {
   const dir = await mkdtemp(join(tmpdir(), 'dispatch-draft-sync-'))
   let creates = 0
   let payload: Record<string, any> = {}
@@ -42,7 +42,7 @@ it.each([false, true])('reuses one draft across response loss and restart (lost=
       return res.end(JSON.stringify({ structuredContent: { draft_id: 'saved', message: { id: 'm1', thread_id: 't1' } } }))
     }
     if (req.url === '/v1/connectors/gmail/drafts/list') return res.end(JSON.stringify({ structuredContent: { drafts: creates ? [{ draft_id: 'saved', message_id: 'm1', thread_id: 't1', to: ['work@example.com'], subject: 'Subject' }] : [] } }))
-    if (req.url === '/v1/connectors/gmail/read') return res.end(JSON.stringify({ structuredContent: { id: 'm1', thread_id: 't1', label_ids: ['DRAFT'], internal_date: '1788486120000', payload: { mime_type: 'text/plain', headers: [{ name: 'From', value: 'work@example.com' }, { name: 'Subject', value: 'Subject' }, { name: 'Content-ID', value: `<${payload.draftContentId}>` }], body: { content: payload.bodyMarkdown } } } }))
+    if (req.url === '/v1/connectors/gmail/read') return res.end(JSON.stringify({ structuredContent: { id: 'm1', thread_id: 't1', label_ids: ['DRAFT'], internal_date: '1788486120000', payload: { mime_type: html ? 'text/html' : 'text/plain', headers: [{ name: 'From', value: 'work@example.com' }, { name: 'Subject', value: 'Subject' }, ...html ? [] : [{ name: 'Content-ID', value: `<${payload.draftContentId}>` }]], body: { content: html ? `<p>${payload.bodyMarkdown}</p><!--dispatch-draft:${payload.draftContentId}-->` : payload.bodyMarkdown } } } }))
     if (req.url === '/v1/connectors/gmail/drafts/update') { payload = { ...payload, ...input }; return res.end(JSON.stringify({ structuredContent: { id: 'saved' } })) }
     res.statusCode = 404; res.end('{}')
   })
@@ -106,4 +106,32 @@ it('updates the replacement draft when Gmail no longer knows the old draft id', 
     expect(updates).toEqual(['r-old', 'r-new'])
     await expect(provider.updateGmailDraft({ id: 'r-old', accountId: 'one', inReplyToMessageId: '', to: [], cc: '', bcc: '', subject: 'Subject', bodyMarkdown: 'x', bodyHtml: '', bodyText: 'x', attachments: [], state: 'draft', gmailThreadId: 't-other' })).rejects.toMatchObject({ code: 'gmail_draft_not_found' })
   } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }) }
+})
+
+
+it.each([200, 400])('allows a corrected draft after known argument rejection without duplicating an uncertain create (HTTP %s)', async status => {
+  let creates = 0
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* drain */ }
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/v1/connectors/gmail') return res.end(JSON.stringify({ accounts: [{ linkId: 'one', name: 'Work', email: 'work@example.com' }] }))
+    if (req.url === '/v1/connectors/gmail/drafts/create') {
+      creates++
+      if (creates === 1) {
+        res.statusCode = status
+        return res.end(JSON.stringify({ isError: true, structuredContent: { error: 'Unsupported argument', error_code: 'INVALID_ARGUMENT' } }))
+      }
+      return res.end(JSON.stringify({ structuredContent: { draft_id: 'saved', message_id: 'm1', thread_id: 't1' } }))
+    }
+    if (req.url === '/v1/connectors/gmail/drafts/list') return res.end(JSON.stringify({ structuredContent: { drafts: [] } }))
+    res.statusCode = 404; res.end('{}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const provider = new GmailConnectorProvider(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { indexPath: false, localPath: ':memory:' })
+  try {
+    const create = () => provider.createGmailDraft('one', '', 'work@example.com', '', '', 'Subject', 'Body', [], 'stable-key')
+    await expect(create()).rejects.toMatchObject({ code: 'gmail_invalid_arguments' })
+    expect(await create()).toMatchObject({ id: 'saved', gmailMessageId: 'm1', gmailThreadId: 't1' })
+    expect(creates).toBe(2)
+  } finally { provider.stopBackgroundSync(); await new Promise<void>(resolve => server.close(() => resolve())) }
 })

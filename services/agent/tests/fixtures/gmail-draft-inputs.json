@@ -1,0 +1,173 @@
+{
+  "gmail.create_draft": {
+    "properties": {
+      "to": {
+        "type": "string"
+      },
+      "subject": {
+        "type": "string"
+      },
+      "body": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "html_body": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "body_file": {
+        "type": "string"
+      },
+      "content_type": {
+        "default": "text/markdown",
+        "enum": [
+          "text/markdown",
+          "text/html",
+          "text/plain"
+        ],
+        "type": "string"
+      },
+      "cc": {
+        "default": "",
+        "type": "string"
+      },
+      "bcc": {
+        "default": "",
+        "type": "string"
+      },
+      "reply_message_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "attachment_files": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "link_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "to",
+      "subject",
+      "link_id"
+    ],
+    "type": "object"
+  },
+  "gmail.update_draft": {
+    "properties": {
+      "draft_id": {
+        "type": "string"
+      },
+      "to": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "subject": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "body": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "html_body": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "body_file": {
+        "type": "string"
+      },
+      "content_type": {
+        "default": "text/markdown",
+        "enum": [
+          "text/markdown",
+          "text/html",
+          "text/plain"
+        ],
+        "type": "string"
+      },
+      "cc": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "bcc": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "link_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "draft_id",
+      "link_id"
+    ],
+    "type": "object"
+  }
+}

@@ -1,3 +1,5 @@
+export interface GmailDraftWrite { readonly htmlBody: true; readonly attachmentFiles: boolean }
+
 export interface GmailAccount {
   readonly connectorId: string
   readonly linkId: string
@@ -6,6 +8,7 @@ export interface GmailAccount {
 }
 
 export interface GmailInventory {
+  readonly draftWrites?: { readonly create?: GmailDraftWrite; readonly update?: GmailDraftWrite }
   readonly readSupportsRawMime?: true
   readonly available: boolean
   readonly server: string | null
@@ -68,6 +71,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
   const data = Array.isArray(root?.data) ? root.data : []
   const accounts = new Map<string, GmailAccount>()
   const toolNames = new Set<string>()
+  const draftWrites: { create?: GmailDraftWrite; update?: GmailDraftWrite } = {}
   let readSupportsRawMime = false
   let serverName: string | null = null
 
@@ -82,6 +86,10 @@ export function readGmailInventory(value: unknown): GmailInventory {
       if (text(meta?.connector_name) !== 'Gmail') continue
       serverName ??= text(server.name) || null
       toolNames.add(wireName)
+      if (wireName === 'gmail.create_draft' || wireName === 'gmail.update_draft') {
+        const properties = record(record(tool.inputSchema)?.properties)
+        if (properties?.html_body && properties?.body) draftWrites[wireName === 'gmail.create_draft' ? 'create' : 'update'] = { htmlBody: true, attachmentFiles: Boolean(properties.attachment_files) }
+      }
       if (wireName === 'gmail.read_email' && objectHasRawMime(tool)) readSupportsRawMime = true
       const profile = record(meta?.link_owner_profile)
       const linkId = text(meta?.link_id)
@@ -103,6 +111,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
   const find = (suffix: string) => [...toolNames].find((name) => name === `gmail.${suffix}`) ?? null
   return {
     available: accounts.size > 0,
+    ...(Object.keys(draftWrites).length ? { draftWrites } : {}),
     ...(readSupportsRawMime ? { readSupportsRawMime: true as const } : {}),
     server: serverName,
     accounts: [...accounts.values()],

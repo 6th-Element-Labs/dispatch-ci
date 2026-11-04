@@ -9,3 +9,8 @@ it('never invents a send receipt from arguments, errors, incomplete calls, or ot
   for (const change of [{ status: 'failed' }, { tool: 'gmail.create_draft' }, { error: {} }, { result: {} }, { result: { isError: true, structuredContent: { id: 'sent' } } }]) expect(completedGmailSend({ method: 'item/completed', params: { item: { ...item, ...change } } })).toBeUndefined()
   expect(completedGmailSend({ method: 'item/started', params: { item } })).toBeUndefined()
 })
+
+it('observes normalized send results without mistaking a draft id for delivery', () => {
+  expect(completedGmailSend({ method: 'item/completed', params: { item: { ...item, result: { structuredContent: { message_id: 'sent-normalized' } } } } })).toEqual({ accountId: 'one', draftId: 'draft', messageId: 'sent-normalized' })
+  expect(completedGmailSend({ method: 'item/completed', params: { item: { ...item, result: { structuredContent: { draft_id: 'draft' } } } } })).toBeUndefined()
+})

@@ -9,7 +9,8 @@ export function completedGmailSend(message: RpcMessage): { accountId: string; me
   let args = object(item.arguments)
   if (!args && typeof item.arguments === 'string') { try { args = object(JSON.parse(item.arguments)) } catch { return undefined } }
   let content = object(result.structuredContent)
-  if (!content && Array.isArray(result.content)) for (const block of result.content) { try { content = object(JSON.parse(String(object(block)?.text ?? ''))); if (content?.id) break } catch {} }
-  if (!content || content.error || typeof content.id !== 'string' || !content.id || typeof args?.link_id !== 'string') return undefined
-  return { accountId: args.link_id, messageId: content.id, ...typeof args.draft_id === 'string' ? { draftId: args.draft_id } : {} }
+  if (!content && Array.isArray(result.content)) for (const block of result.content) { try { content = object(JSON.parse(String(object(block)?.text ?? ''))); if (content?.id || content?.message_id) break } catch {} }
+  const messageId = typeof content?.id === 'string' ? content.id : content?.message_id
+  if (!content || content.error || typeof messageId !== 'string' || !messageId || typeof args?.link_id !== 'string') return undefined
+  return { accountId: args.link_id, messageId, ...typeof args.draft_id === 'string' ? { draftId: args.draft_id } : {} }
 }

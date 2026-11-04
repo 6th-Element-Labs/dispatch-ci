@@ -11,6 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { fileURLToPath } from 'node:url'
 import { CodexProcess } from './codex-process.js'
 import type { RpcMessage } from './json-line-rpc.js'
+import { draftArgumentsForConnector } from './gmail-draft-arguments.js'
 import { readGmailInventory, type GmailInventory } from './gmail-inventory.js'
 import { readModelCatalog } from './model-catalog.js'
 import type { RuntimeUpdateStatus } from './codex-runtime.js'
@@ -54,51 +55,7 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
   return value as Record<string, unknown>
 }
 
-/**
- * Arguments the Gmail connector's create_draft / update_draft schema accepts.
- * The schema is strict: unknown keys (an earlier `text_plain`, a top-level
- * `attachments`) fail argument binding before the draft is touched. Text and
- * HTML travel as a multipart/alternative payload; attachments wrap it in
- * multipart/mixed as base64url parts. Empty cc/bcc and a missing reply id are
- * omitted rather than sent as '' or null.
- */
-export function draftArguments(payload: Record<string, unknown>): Record<string, unknown> {
-  const html = String(payload.bodyHtml ?? '')
-  const inlineContentIds = new Set([...html.matchAll(/cid:([^"'>\s]+)/gi)].map(match => match[1]))
-  const textBody = String(payload.bodyMarkdown ?? payload.bodyText ?? '')
-  const alternative = {
-    mime_type: 'multipart/alternative',
-    parts: [
-      { mime_type: 'text/plain', charset: 'UTF-8', body: { content: textBody }, ...typeof payload.draftContentId === 'string' ? { content_id: payload.draftContentId } : {} },
-      { mime_type: 'text/html', charset: 'UTF-8', body: { content: html } },
-    ],
-  }
-  const attachments = (Array.isArray(payload.attachments) ? payload.attachments : [])
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((item) => ({
-      mime_type: String(item.mime_type ?? item.mediaType ?? 'application/octet-stream'),
-      filename: String(item.filename ?? item.name ?? 'attachment'),
-      content_disposition: item.contentId && inlineContentIds.has(String(item.contentId)) ? 'inline' : 'attachment',
-      ...item.contentId ? { content_id: String(item.contentId) } : {},
-      body: { base64_url_content: base64Url(String(item.data ?? item.contentBase64 ?? '')) },
-    }))
-  const args: Record<string, unknown> = {
-    to: String(payload.to ?? ''),
-    subject: String(payload.subject ?? ''),
-    payload: attachments.length > 0 ? { mime_type: 'multipart/mixed', parts: [alternative, ...attachments] } : alternative,
-    response_fields: ['id', 'message'],
-  }
-  for (const key of ['cc', 'bcc'] as const) {
-    const value = String(payload[key] ?? '').trim()
-    if (value) args[key] = value
-  }
-  if (typeof payload.replyMessageId === 'string' && payload.replyMessageId) args.reply_message_id = payload.replyMessageId
-  return args
-}
-
-function base64Url(value: string): string {
-  return value.replaceAll(/\s/g, '').replaceAll('+', '-').replaceAll('/', '_').replaceAll(/=+$/g, '')
-}
+export { draftArguments } from './gmail-draft-arguments.js'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -560,9 +517,9 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
         if (typeof payload.bodyHtml !== 'string' || payload.bodyHtml.trim() === '') return json(response, 400, { error: 'gmail_html_unsupported' })
         const gmail = await inventory()
         if (!gmail.server || !gmail.tools.createDraft) return json(response, 503, { error: 'gmail_draft_unavailable' })
-        const args = { link_id: linkId, ...draftArguments(payload) }
-        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.createDraft, arguments: args }))
-      } catch (error) { return json(response, 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error) }) }
+        const args = { link_id: linkId, ...draftArgumentsForConnector(payload, gmail.draftWrites?.create, 'create') }
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.createDraft, arguments: args }))
+      } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error) }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/list') {
       try {
@@ -604,9 +561,9 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
           }
           if (!Object.keys(partial).length) return json(response, 400, { error: 'draft_headers_required' })
         }
-        const args = { link_id: linkId, draft_id: draftId, ...(payload.preserveContent === true ? partial : draftArguments(payload)) }
-        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.updateDraft, arguments: args }))
-      } catch (error) { return json(response, 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error) }) }
+        const args = { link_id: linkId, draft_id: draftId, ...(payload.preserveContent === true ? partial : draftArgumentsForConnector(payload, gmail.draftWrites?.update, 'update')) }
+        return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.updateDraft, arguments: args }))
+      } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error) }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/discard') {
       try {

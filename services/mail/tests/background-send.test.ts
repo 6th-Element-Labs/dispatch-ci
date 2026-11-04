@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { GmailConnectorProvider } from '../src/gmail-provider.js'
 import { vi } from 'vitest'
 
-it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send accepts immediately, preserves the submitted reply and does not replay %s', async outcome => {
+it.each(['accepted', 'normalized', 'unknown', 'save-failed', 'rejected'])('background Send accepts immediately, preserves the submitted reply and does not replay %s', async outcome => {
   let releaseCreate!: () => void
   const createGate = new Promise<void>(resolve => { releaseCreate = resolve })
   let sends = 0
@@ -27,7 +27,7 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
       sends++; expect(input.draftId ?? input.draft_id).toBe('saved')
       if (deliveryOutcome === 'rejected') { res.statusCode = 403; return res.end(JSON.stringify({ error: 'Provider rejected the send' })) }
       if (deliveryOutcome === 'unknown') { res.statusCode = 502; return res.end(JSON.stringify({ error: 'timeout after provider accepted send' })) }
-      return res.end(JSON.stringify({ structuredContent: { id: 'sent' } }))
+      return res.end(JSON.stringify({ structuredContent: outcome === 'normalized' ? { message_id: 'sent' } : { id: 'sent' } }))
     }
     res.statusCode = 404; res.end('{}')
   })
@@ -43,11 +43,11 @@ it.each(['accepted', 'unknown', 'save-failed', 'rejected'])('background Send acc
     expect(sends).toBe(0)
     expect(() => provider.enqueueDraftSave('one', '', { bodyMarkdown: 'Stale edit' }, draft.id)).toThrow('already sending')
     releaseCreate()
-    await expect.poll(() => provider.sendReceipt(receipt.id)?.status).toBe(outcome === 'accepted' ? 'accepted' : outcome === 'unknown' ? 'unknown' : 'failed')
+    await expect.poll(() => provider.sendReceipt(receipt.id)?.status).toBe(['accepted', 'normalized'].includes(outcome) ? 'accepted' : outcome === 'unknown' ? 'unknown' : 'failed')
     expect(payload.bodyMarkdown).toBe('The exact reply')
     expect(creates).toBe(1)
     expect(sends).toBe(outcome === 'save-failed' ? 0 : 1)
-    if (outcome === 'accepted' || outcome === 'unknown') {
+    if (['accepted', 'normalized', 'unknown'].includes(outcome)) {
       expect(provider.beginGmailDraftSend('one', draft.id).id).toBe(receipt.id)
       expect(provider.beginGmailDraftSend('one', 'saved').id).toBe(receipt.id)
       expect(sends).toBe(1)
