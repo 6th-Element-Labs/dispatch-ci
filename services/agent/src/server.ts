@@ -11,6 +11,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { fileURLToPath } from 'node:url'
 import { CodexProcess } from './codex-process.js'
 import type { RpcMessage } from './json-line-rpc.js'
+import { CodexFileUploader, type ProvidedFile } from './codex-file-upload.js'
+import { assertToolArguments, assertGmailCompatibility } from './gmail-contract.js'
+import { createHash } from 'node:crypto'
 import { draftArgumentsForConnector } from './gmail-draft-arguments.js'
 import { readGmailInventory, type GmailInventory } from './gmail-inventory.js'
 import { readModelCatalog } from './model-catalog.js'
@@ -171,8 +174,11 @@ async function readApps(runtime: AgentRuntime): Promise<unknown> {
   }
 }
 
-export function createAgentServer(runtime: AgentRuntime, options: { bindings?: CodexBindingStore; mailBase?: string; workBase?:string } = {}) {
+export function createAgentServer(runtime: AgentRuntime, options: { uploadFiles?: (files: readonly Record<string, unknown>[]) => Promise<ProvidedFile[]>; bindings?: CodexBindingStore; mailBase?: string; workBase?:string } = {}) {
   const bindings = options.bindings ?? new CodexBindingStore(defaultBindingsPath())
+  let inventoryLoadedAt = 0
+  let inventoryLoading = false
+  const uploadFiles = options.uploadFiles ?? ((files: readonly Record<string, unknown>[]) => new CodexFileUploader(runtime).upload(files))
   let gmailInventory: Promise<GmailInventory> | undefined
   const connectorThreadIds = new Map<string, Promise<string>>()
   // Threads this service drives itself (mail connector calls). The App Server
@@ -230,15 +236,33 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     if (activity.resolve(message.id)) publishActivity()
   })
 
-  const inventory = async (): Promise<GmailInventory> => {
-    gmailInventory ??= runtime
-      .request('mcpServerStatus/list', { cursor: null, limit: 100, detail: 'toolsAndAuthOnly' })
-      .then(readGmailInventory)
-      .catch((error) => {
-        gmailInventory = undefined
-        throw error
-      })
-    return gmailInventory
+  const inventory = async (fresh = false): Promise<GmailInventory> => {
+    if ((!gmailInventory || fresh || Date.now() - inventoryLoadedAt > 60_000) && !inventoryLoading) {
+      inventoryLoading = true
+      gmailInventory = runtime.request('mcpServerStatus/list', { cursor: null, limit: 100, detail: 'toolsAndAuthOnly' })
+        .then(value => { inventoryLoadedAt = Date.now(); return readGmailInventory(value) })
+        .catch(error => { gmailInventory = undefined; throw error })
+        .finally(() => { inventoryLoading = false })
+    }
+    return gmailInventory!
+  }
+
+  const draftArgs = async (payload: Record<string, unknown>, gmail: GmailInventory, kind: 'create' | 'update') => {
+    const capability = gmail.draftWrites?.[kind]
+    const tool = kind === 'create' ? gmail.tools.createDraft : gmail.tools.updateDraft
+    if (!tool) throw new Error('Gmail draft tool unavailable')
+    const files = Array.isArray(payload.attachments) ? payload.attachments as Record<string, unknown>[] : []
+    const identity = { link_id: String(payload.linkId ?? ''), ...(kind === 'update' ? { draft_id: String(payload.draftId ?? '') } : {}) }
+    if (!gmail.accounts.some(account => account.linkId === identity.link_id)) throw Object.assign(new Error('Unknown Gmail account'), { code: 'gmail_invalid_arguments' })
+    const usesUploads = capability?.attachmentFiles && files.length > 0
+    if (usesUploads && /cid:/i.test(String(payload.bodyHtml ?? ''))) throw Object.assign(new Error('The Gmail connector cannot preserve inline image identities when replacing attachments. Your original draft and edits are kept.'), { code: 'gmail_invalid_arguments' })
+    // Validate the advertised contract before allocating/uploading remote files.
+    const placeholder = usesUploads ? files.map(() => ({ file_id: 'file_contract', download_url: 'https://example.invalid/file', file_name: 'contract.txt' })) : []
+    assertToolArguments(tool, { ...identity, ...draftArgumentsForConnector(payload, capability, kind, placeholder) }, gmail.contracts?.[tool])
+    const uploaded = usesUploads ? await uploadFiles(files) : []
+    const args = { ...identity, ...draftArgumentsForConnector(payload, capability, kind, uploaded) }
+    assertToolArguments(tool, args, gmail.contracts?.[tool])
+    return args
   }
 
   const connectorThread = async (scope: string): Promise<string> => {
@@ -373,6 +397,17 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
       } catch (error) {
         return json(response, 502, { error: 'gmail_inventory_failed', detail: errorMessage(error) })
       }
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/connectors/gmail/compatibility') {
+      try {
+        const gmail = await inventory(true)
+        if (!gmail.available) return json(response, 503, { compatible: false, error: 'gmail_not_connected' })
+        assertGmailCompatibility(gmail.contracts ?? {}, gmail.tools)
+        const auth = await runtime.request('getAuthStatus', { includeToken: false, refreshToken: false }) as { authMethod?: unknown }
+        if (!auth || !('authMethod' in auth)) throw new Error('Native attachment upload authorization RPC is unavailable')
+        const fingerprint = createHash('sha256').update(JSON.stringify(Object.entries(gmail.contracts ?? {}).sort(([a], [b]) => a.localeCompare(b)))).digest('hex')
+        return json(response, 200, { compatible: true, checkedAt: new Date().toISOString(), fingerprint, attachmentUpload: 'native-codex-auth', existingAttachmentEdits: gmail.draftWrites?.update?.attachmentFiles ? 'update' : 'verified-replacement' })
+      } catch (error) { return json(response, 409, { compatible: false, error: 'gmail_contract_changed', detail: errorMessage(error) }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/search') {
       try {
@@ -510,16 +545,18 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
       } catch (error) { return json(response, 502, { error: 'gmail_delete_failed', detail: errorMessage(error) }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/create') {
+      let providerWriteStarted = false
       try {
         const payload = await body(request)
         const linkId = String(payload.linkId ?? '')
         if (!linkId) return json(response, 400, { error: 'linkId_required' })
         if (typeof payload.bodyHtml !== 'string' || payload.bodyHtml.trim() === '') return json(response, 400, { error: 'gmail_html_unsupported' })
-        const gmail = await inventory()
+        const gmail = await inventory(true)
         if (!gmail.server || !gmail.tools.createDraft) return json(response, 503, { error: 'gmail_draft_unavailable' })
-        const args = { link_id: linkId, ...draftArgumentsForConnector(payload, gmail.draftWrites?.create, 'create') }
+        const args = await draftArgs(payload, gmail, 'create')
+        providerWriteStarted = true
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.createDraft, arguments: args }))
-      } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error) }) }
+      } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_create_failed', detail: errorMessage(error), providerWriteStarted }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/list') {
       try {
@@ -542,6 +579,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
       }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/update') {
+      let providerWriteStarted = false
       try {
         const payload = await body(request)
         const linkId = String(payload.linkId ?? '')
@@ -549,7 +587,7 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
         if (!linkId) return json(response, 400, { error: 'linkId_required' })
         if (!draftId) return json(response, 400, { error: 'draftId_required' })
         if (payload.preserveContent !== true && (typeof payload.bodyHtml !== 'string' || payload.bodyHtml.trim() === '')) return json(response, 400, { error: 'gmail_html_unsupported' })
-        const gmail = await inventory()
+        const gmail = await inventory(true)
         if (!gmail.server || !gmail.tools.updateDraft) return json(response, 503, { error: 'gmail_draft_update_unavailable' })
         const partial: Record<string, string> = {}
         if (payload.preserveContent === true) {
@@ -561,9 +599,11 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
           }
           if (!Object.keys(partial).length) return json(response, 400, { error: 'draft_headers_required' })
         }
-        const args = { link_id: linkId, draft_id: draftId, ...(payload.preserveContent === true ? partial : draftArgumentsForConnector(payload, gmail.draftWrites?.update, 'update')) }
+        const args = payload.preserveContent === true ? { link_id: linkId, draft_id: draftId, ...partial } : await draftArgs(payload, gmail, 'update')
+        assertToolArguments(gmail.tools.updateDraft, args, gmail.contracts?.[gmail.tools.updateDraft])
+        providerWriteStarted = true
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(linkId), tool: gmail.tools.updateDraft, arguments: args }))
-      } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error) }) }
+      } catch (error) { return json(response, (error as { code?: string })?.code === 'gmail_invalid_arguments' ? 400 : 502, { error: 'gmail_draft_update_failed', detail: errorMessage(error), providerWriteStarted }) }
     }
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/discard') {
       try {
@@ -581,9 +621,10 @@ export function createAgentServer(runtime: AgentRuntime, options: { bindings?: C
     if (request.method === 'POST' && url.pathname === '/v1/connectors/gmail/drafts/send') {
       try {
         const payload = await body(request)
-        const gmail = await inventory()
+        const gmail = await inventory(true)
         if (!gmail.server || !gmail.tools.sendDraft) return json(response, 503, { error: 'gmail_draft_send_unavailable' })
         const args = { link_id: String(payload.linkId ?? ''), draft_id: String(payload.draftId ?? '') }
+        assertToolArguments(gmail.tools.sendDraft, args, gmail.contracts?.[gmail.tools.sendDraft])
         return json(response, 200, await runtime.request('mcpServer/tool/call', { server: gmail.server, threadId: await connectorThread(args.link_id), tool: gmail.tools.sendDraft, arguments: args }))
       } catch (error) { return json(response, 502, { error: 'gmail_draft_send_failed', detail: errorMessage(error) }) }
     }

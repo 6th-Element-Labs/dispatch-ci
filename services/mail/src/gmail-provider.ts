@@ -1,6 +1,6 @@
-import { LocalMailStore, type SendReceipt, type ReceiptDetails, type OfflineDownload, type DraftConflictCopy } from './local-mail-store.js'
+import { LocalMailStore, type SendReceipt, type ReceiptDetails, type OfflineDownload, type DraftConflictCopy, type DraftReplacement } from './local-mail-store.js'
 import { DraftSaveQueue, type DraftSaveFields, type DraftSaveJob } from './draft-save-queue.js'
-import { conflictingDraftFields, draftChanges, DraftConflictError } from './draft-conflict.js'
+import { conflictingDraftFields, draftChanges, DraftConflictError, type DraftField } from './draft-conflict.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { ResumeClock } from './resume-clock.js'
 import { groupConversations, projectConversation, conversationForMailbox } from './conversation.js'
@@ -169,7 +169,7 @@ function isGmailNotFound(error: unknown): boolean {
 
 function draftConnectorError(error: unknown): Error {
   // Gmail's own error text can name the tool (delete_draft); a rate limit stays a rate limit.
-  if (['gmail_backoff', 'gmail_invalid_arguments'].includes(String((error as { code?: unknown })?.code))) return error as Error
+  if (['gmail_backoff', 'gmail_invalid_arguments', 'gmail_write_not_started'].includes(String((error as { code?: unknown })?.code))) return error as Error
   const detail = error instanceof Error ? error.message : String(error)
   if (/html|mime_type|text\/html/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_html_unsupported' })
   if (/attach/i.test(detail)) return Object.assign(new Error(detail), { code: 'gmail_attachment_unsupported' })
@@ -477,6 +477,8 @@ export class GmailConnectorProvider {
   readonly #syncContext = new AsyncLocalStorage<AbortSignal>()
   #syncController: AbortController | undefined
   readonly #syncTimeouts = new Map<AbortSignal, ReturnType<typeof setTimeout>>()
+  #draftWriteCapabilities: UnknownRecord = {}
+  readonly #replacementFlights = new Map<string, Promise<DraftProjection>>()
   #inventoryError: string | undefined
   #inventorySnapshot: readonly GmailAccountProjection[] | undefined
   #inventoryRefresh: Promise<void> | undefined
@@ -557,8 +559,9 @@ export class GmailConnectorProvider {
       create: job => this.createGmailDraft(job.accountId, job.messageId, job.fields.to ?? '', job.fields.cc ?? '', job.fields.bcc ?? '', job.fields.subject ?? '', job.fields.bodyMarkdown ?? '', appendMissingFiles(job.fields.attachments ?? [], pendingAttachmentAppendFiles(job)), job.id),
       read: (accountId, id) => this.readGmailDraft(accountId, id, true),
       update: async (job, current) => {
-        const fields = draftChanges(job.fields, job.base)
-        const conflicts = conflictingDraftFields(fields, job.base, current)
+        const base = this.#local.resolveReplacement(job.accountId, job.remoteId ?? current.id).baseline ?? job.base
+        const fields = draftChanges(job.fields, base)
+        const conflicts = conflictingDraftFields(fields, base, current)
         if (conflicts.length) throw new DraftConflictError(conflicts, current)
         const additions = pendingAttachmentAppendFiles(job)
         if (!Object.keys(fields).length && additions.length === 0) return current
@@ -811,7 +814,7 @@ export class GmailConnectorProvider {
     if (!account?.email) throw new Error('Select a connected Gmail account before authorizing direct sync')
     return this.#oauth.beginConnect(account)
   }
-  runtimeStatus(): { activeOperations: number } { return { activeOperations: this.#sendFlights.size + this.#draftCreates.size + this.#actionWorkers.size + Number(this.#draftQueue.active) + this.#oauth.activeOperations } }
+  runtimeStatus(): { activeOperations: number } { return { activeOperations: this.#replacementFlights.size + this.#sendFlights.size + this.#draftCreates.size + this.#actionWorkers.size + Number(this.#draftQueue.active) + this.#oauth.activeOperations } }
 
   async accounts(): Promise<readonly GmailAccountProjection[]> {
     try {
@@ -819,6 +822,7 @@ export class GmailConnectorProvider {
       if (!response.ok) throw new Error(`Gmail inventory failed (${response.status})`)
       const inventory = record(value)
       this.#inventoryError = undefined
+      this.#draftWriteCapabilities = record(inventory?.draftWrites) ?? {}
       const accounts = array(inventory?.accounts).map((account) => {
         const item = record(account)
         const id = text(item?.linkId)
@@ -1524,8 +1528,8 @@ export class GmailConnectorProvider {
     }
   }
 
-  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[] = [], clientId?: string): Promise<DraftProjection> {
-    if (!clientId) return this.#createGmailDraft(accountId, messageId, to, cc, bcc, subject, bodyMarkdown, draftAttachments)
+  async createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[] = [], clientId?: string, rendered?: { html: string; text: string }): Promise<DraftProjection> {
+    if (!clientId) return this.#createGmailDraft(accountId, messageId, to, cc, bcc, subject, bodyMarkdown, draftAttachments, undefined, rendered)
     if (!/^[a-zA-Z0-9-]{1,100}$/.test(clientId)) throw new Error('Invalid draft save identity')
     const key = `${accountId}:${clientId}`
     while (this.#draftCreates.has(key)) await this.#draftCreates.get(key)!.catch(() => undefined)
@@ -1540,7 +1544,7 @@ export class GmailConnectorProvider {
       }
       if (id) {
         const existing = await this.readGmailDraft(accountId, id)
-        return this.updateGmailDraft({ ...projectDraft({ id, accountId, inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments: draftAttachments }), gmailThreadId: existing.gmailThreadId, gmailMessageId: existing.gmailMessageId }, undefined, true)
+        return this.updateGmailDraft({ ...projectDraft({ id, accountId, inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments: draftAttachments }), ...(rendered ? { bodyHtml: rendered.html, bodyText: rendered.text } : {}), gmailThreadId: existing.gmailThreadId, gmailMessageId: existing.gmailMessageId }, undefined, true)
       }
       // Resolve account/connectivity before recording a provider write intent.
       await this.#account(accountId)
@@ -1549,13 +1553,13 @@ export class GmailConnectorProvider {
       const readyAttachments = await this.#resolveDraftAttachments(accountId, draftAttachments)
       this.#local.putDraftCreate(accountId, clientId, {})
       try {
-        const saved = await this.#createGmailDraft(accountId, messageId, to, cc, bcc, subject, bodyMarkdown, readyAttachments, `dispatch-${clientId}@draft.dispatch.local`)
+        const saved = await this.#createGmailDraft(accountId, messageId, to, cc, bcc, subject, bodyMarkdown, readyAttachments, `dispatch-${clientId}@draft.dispatch.local`, rendered)
         this.#local.putDraftCreate(accountId, clientId, { draftId: saved.id })
         return saved
       } catch (error) {
         if ((error as { code?: string }).code === 'gmail_backoff' || /HTTP status: 429|RATE_LIMITED|token_revoked/.test(String(error))) this.#local.putDraftCreate(accountId, clientId, { rejected: true })
         const connectionCode = (error as { cause?: { code?: string } })?.cause?.code
-        if ((error as { code?: string })?.code === 'gmail_invalid_arguments' || connectionCode === 'ECONNREFUSED' || connectionCode === 'ENOTFOUND' || /invalid.arguments|invalid.params|argument.binding|gmail_draft_create_unavailable|gmail_html_unsupported/i.test(String(error))) this.#local.removeDraftCreate(accountId, clientId)
+        if (['gmail_invalid_arguments', 'gmail_write_not_started'].includes(String((error as { code?: string })?.code)) || connectionCode === 'ECONNREFUSED' || connectionCode === 'ENOTFOUND' || /invalid.arguments|invalid.params|argument.binding|gmail_draft_create_unavailable|gmail_html_unsupported/i.test(String(error))) this.#local.removeDraftCreate(accountId, clientId)
         throw error
       }
     })()
@@ -1563,13 +1567,13 @@ export class GmailConnectorProvider {
     try { return await operation } finally { this.#draftCreates.delete(key) }
   }
 
-  async #createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[], draftContentId?: string): Promise<DraftProjection> {
+  async #createGmailDraft(accountId: string, messageId: string, to: string, cc: string, bcc: string, subject: string, bodyMarkdown: string, draftAttachments: readonly DraftAttachment[], draftContentId?: string, rendered?: { html: string; text: string }): Promise<DraftProjection> {
     const attachments = await this.#resolveDraftAttachments(accountId, draftAttachments)
-    const draft = projectDraft({ id: '', inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments, accountId })
+    const draft = { ...projectDraft({ id: '', inReplyToMessageId: messageId, to: addressList(to), cc, bcc, subject, bodyMarkdown, attachments, accountId }), ...(rendered ? { bodyHtml: rendered.html, bodyText: rendered.text } : {}) }
     try {
       const value = structured(await this.#post('/v1/connectors/gmail/drafts/create', {
         linkId: accountId, replyMessageId: messageId || null, to, cc, bcc, subject,
-        bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: bodyMarkdown,
+        bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: draft.bodyText,
         ...(draftContentId ? { draftContentId } : {}),
         ...attachments.length > 0 ? { attachments: connectorAttachments(attachments) } : {},
       }))
@@ -1586,6 +1590,7 @@ export class GmailConnectorProvider {
   }
 
   enqueueDraftSave(accountId: string, messageId: string, fields: DraftSaveFields, draftId?: string, clientDraftId?: string, seedOverride?: DraftProjection): DraftProjection {
+    if (draftId) draftId = this.#local.resolveReplacement(accountId, draftId).id
     if (!accountId || !Object.keys(fields).length) throw new Error('Account and draft fields are required')
     if (['accepted', 'verified'].includes(this.existingDraftSend(accountId, draftId, clientDraftId)?.status ?? '')) throw Object.assign(new Error('This draft was already sent. Your later edits are kept on this device.'), { code: 'gmail_draft_sent' })
     const identity = draftId ?? (clientDraftId ? `queued-${clientDraftId}` : '')
@@ -1624,45 +1629,161 @@ export class GmailConnectorProvider {
       }), draft.id)
     }
     if (!draft.accountId) throw new Error('Gmail draft is missing account identity')
-    const existing = this.#drafts.get(`${draft.accountId}:${draft.id}`) ?? this.#local.draft(draft.accountId, draft.id)
-    const attachments = await this.#resolveDraftAttachments(draft.accountId, draft.attachments, existing?.attachments ?? [])
+    const accountId = draft.accountId
+    const resolved = this.#local.resolveReplacement(accountId, draft.id).id
+    if (resolved !== draft.id) draft = { ...draft, id: resolved }
+    const existing = this.#drafts.get(`${draft.accountId}:${draft.id}`) ?? this.#local.draft(accountId, draft.id)
+    const attachments = await this.#resolveDraftAttachments(accountId, draft.attachments, existing?.attachments ?? [])
     let saved = { ...draft, cachedAt: undefined, gmailThreadId: draft.gmailThreadId ?? existing?.gmailThreadId, gmailMessageId: draft.gmailMessageId ?? existing?.gmailMessageId, attachments }
     try {
+      const before = existing ? await this.#resolveDraftAttachments(accountId, existing.attachments) : []
+      const remaining = [...before]
+      const attachmentsChanged = attachments.some(file => {
+        const index = remaining.findIndex(other => fileMatches(file, other)); if (index < 0) return true
+        remaining.splice(index, 1); return false
+      }) || remaining.length > 0
+      if (attachmentsChanged || attachments.length || before.length) {
+        await this.accounts()
+        const capability = record(this.#draftWriteCapabilities.update)
+        if (capability?.htmlBody === true && capability.attachmentFiles !== true) {
+          const current = existing ?? await this.readGmailDraft(accountId, draft.id, true)
+          return this.#replaceAttachmentDraft({ ...saved, attachments }, current)
+        }
+      }
       const result = structured(await this.#post('/v1/connectors/gmail/drafts/update', {
         linkId: draft.accountId, draftId: draft.id, to: draft.to.map((item) => item.address).join(', '),
         cc: draft.cc ?? '', bcc: draft.bcc ?? '', subject: draft.subject,
         bodyMarkdown: draft.bodyMarkdown, bodyHtml: draft.bodyHtml, bodyText: draft.bodyText,
         attachments: connectorAttachments(attachments),
-        attachmentsChanged: existing ? Boolean(draftChanges({ attachments }, existing).attachments) : attachments.length > 0,
+        attachmentsChanged,
       }))
       const message = record(result.message)
       saved = { ...saved, gmailMessageId: text(message?.id) || text(result.message_id) || saved.gmailMessageId, gmailThreadId: text(message?.thread_id) || text(message?.threadId) || saved.gmailThreadId }
       this.#rememberDraft(saved, true)
-      void this.#refreshIndexedDrafts(draft.accountId)
+      void this.#refreshIndexedDrafts(accountId)
       return saved
     } catch (error) {
       if (isGmailNotFound(error)) {
-        const replacement = await this.#replacementDraftId(draft.accountId, draft.id, saved.gmailThreadId, clientId)
+        const replacement = await this.#replacementDraftId(accountId, draft.id, saved.gmailThreadId, clientId)
         if (replacement) {
           this.#drafts.delete(`${draft.accountId}:${draft.id}`)
-          this.#local.removeDraft(draft.accountId, draft.id)
+          this.#local.removeDraft(accountId, draft.id)
           return this.updateGmailDraft({ ...draft, id: replacement })
         }
-        this.#local.removeDraft(draft.accountId, draft.id)
+        this.#local.removeDraft(accountId, draft.id)
         throw Object.assign(new Error(`Gmail draft ${draft.id} was not found`), { code: 'gmail_draft_not_found' })
       }
       throw draftConnectorError(error)
     }
   }
 
+  #hasProviderQuote(authored: string, provider: string): boolean {
+    const wanted = normalizedDraftBody(authored), actual = normalizedDraftBody(provider)
+    return actual.startsWith(wanted) && /^(?:>\s*)?On .+ wrote:/.test(actual.slice(wanted.length).trim())
+  }
+
+  #snapshotChanges(expected: DraftProjection, actual: DraftProjection): DraftField[] {
+    const fields = draftChanges({ to: actual.to.map(item => item.address).join(', '), cc: actual.cc ?? '', bcc: actual.bcc ?? '', subject: actual.subject, bodyMarkdown: actual.bodyMarkdown }, expected)
+    const remaining = [...actual.attachments]
+    const filesMatch = expected.attachments.every(file => {
+      const index = remaining.findIndex(other => fileMatches(file, other))
+      if (index < 0) return false
+      remaining.splice(index, 1); return true
+    }) && remaining.length === 0
+    return [...Object.keys(fields) as DraftField[], ...filesMatch ? [] : ['attachments' as const]]
+  }
+
+  /** The modern tool cannot replace MIME. Keep the original until a full new
+   * snapshot is verified, then retire only its exact draft message. Each stage
+   * and the physical-ID alias survive response loss, restart and newer edits.
+   */
+  async #replaceAttachmentDraft(desired: DraftProjection, source: DraftProjection): Promise<DraftProjection> {
+    const accountId = desired.accountId!
+    const key = `${accountId}:${source.id}`
+    let flight = this.#replacementFlights.get(key)
+    if (!flight) {
+      let journal = this.#local.replacement(accountId, source.id)
+      if (!journal) {
+        journal = { accountId, originalId: source.id, marker: randomUUID(), source, target: desired, state: 'creating' }
+        this.#local.putReplacement(journal)
+      }
+      flight = this.#completeAttachmentReplacement(journal)
+      this.#replacementFlights.set(key, flight)
+    }
+    let confirmed: DraftProjection
+    try { confirmed = await flight } finally { if (this.#replacementFlights.get(key) === flight) this.#replacementFlights.delete(key) }
+    // A newer accepted revision may arrive while recovering an earlier create.
+    // Finish that immutable stage, then apply the newer snapshot to its result.
+    if (this.#snapshotChanges(desired, confirmed).length) return this.updateGmailDraft({ ...desired, id: confirmed.id, gmailMessageId: confirmed.gmailMessageId, gmailThreadId: confirmed.gmailThreadId }, undefined, true)
+    return confirmed
+  }
+
+  async #completeAttachmentReplacement(journal: DraftReplacement): Promise<DraftProjection> {
+    if (journal.state === 'complete') return this.readGmailDraft(journal.accountId, journal.replacementId!, true)
+    if (journal.state === 'retiring') return this.#finishAttachmentReplacement(journal)
+    const { target, source, accountId } = journal
+    if (/cid:/i.test(target.bodyHtml)) throw Object.assign(new Error('The Gmail connector cannot preserve inline image identities while replacing attachments. The original draft and your edits are kept.'), { code: 'gmail_invalid_arguments' })
+    // Replying to the original draft message retains even a compose draft's
+    // Gmail thread. An existing reply uses its original received-message anchor.
+    let anchor = source.inReplyToMessageId
+    if (anchor && anchor === source.gmailMessageId) {
+      // A reopened third-party draft has no stored reply anchor. Resolve an
+      // actual message in its conversation; never quote the unsent draft itself.
+      const thread = structured(await this.#post('/v1/connectors/gmail/read-thread', { linkId: accountId, threadId: source.gmailThreadId, maxMessages: 100 }))
+      if (!Array.isArray(thread.messages)) throw new Error('Gmail did not return the draft conversation')
+      anchor = [...thread.messages].reverse().map(value => record(normalizeGmailMessage(value)) ?? {}).find(value => !array(value.label_ids).includes('DRAFT') && text(value.id) !== source.gmailMessageId)?.id as string || ''
+    }
+    const intent = this.#local.draftCreate(accountId, journal.marker)
+    let candidateId = journal.replacementId ?? intent?.draftId
+    if (!candidateId && intent && !intent.rejected) {
+      candidateId = await this.#findDraftByClientMarker(accountId, journal.marker)
+      if (!candidateId) throw new Error('Waiting for Gmail to confirm the replacement draft. The original is kept.')
+    }
+    const created = candidateId ? await this.readGmailDraft(accountId, candidateId, true, true)
+      : await this.createGmailDraft(accountId, anchor, target.to.map(item => item.address).join(', '), target.cc ?? '', target.bcc ?? '', target.subject, target.bodyMarkdown, target.attachments, journal.marker, { html: target.bodyHtml, text: target.bodyText })
+    journal = { ...journal, replacementId: created.id }
+    this.#local.putReplacement(journal)
+    let confirmed = await this.readGmailDraft(accountId, created.id, true, true)
+    const mismatches = this.#snapshotChanges(target, confirmed)
+    if (mismatches.length === 1 && mismatches[0] === 'bodyMarkdown' && anchor && this.#hasProviderQuote(target.bodyMarkdown, confirmed.bodyMarkdown)) {
+      // Gmail adds its own reply history. Record the full provider body for
+      // exact future readback, and keep authored text separate in the editor.
+      this.#local.putDraftProviderBody(accountId, confirmed.id, target, confirmed.bodyMarkdown)
+      confirmed = { ...confirmed, bodyMarkdown: target.bodyMarkdown, bodyHtml: target.bodyHtml, bodyText: target.bodyText }
+      this.#rememberDraft(confirmed, true)
+    } else if (mismatches.length) throw new Error(`Gmail has not confirmed the replacement draft (${mismatches.join(', ')}). The original is kept.`)
+    if (anchor && source.gmailThreadId && confirmed.gmailThreadId !== source.gmailThreadId) throw new Error('Gmail did not retain this reply thread. The original draft is kept; nothing was sent.')
+    const current = await this.readGmailDraft(accountId, source.id, true, true)
+    const conflicts = this.#snapshotChanges(source, current)
+    if (conflicts.length) throw new DraftConflictError(conflicts, current)
+    journal = { ...journal, state: 'retiring', target: confirmed }
+    this.#local.putReplacement(journal)
+    return this.#finishAttachmentReplacement(journal)
+  }
+
+  async #finishAttachmentReplacement(journal: DraftReplacement): Promise<DraftProjection> {
+    const confirmed = await this.readGmailDraft(journal.accountId, journal.replacementId!, true, true)
+    const conflicts = this.#snapshotChanges(journal.target, confirmed)
+    if (conflicts.length) throw new DraftConflictError(conflicts, confirmed)
+    // The durable retiring record precedes deletion. If its response is lost,
+    // readers finish this cleanup and follow the verified replacement identity.
+    await this.discardGmailDraft(journal.accountId, journal.originalId, true, true)
+    this.#local.putReplacement({ ...journal, target: confirmed, state: 'complete' })
+    return { ...confirmed, resolvedFromDraftId: journal.originalId }
+  }
+
   async patchGmailDraft(accountId: string, draftId: string, fields: { to?: string; cc?: string; bcc?: string; subject?: string }, queuedWrite = false): Promise<DraftProjection> {
     if (!queuedWrite && (this.#draftQueue.owns(accountId, draftId) || this.#draftQueue.pendingRemote(accountId, draftId))) return this.enqueueDraftSave(accountId, '', fields, draftId)
+    draftId = this.#local.resolveReplacement(accountId, draftId).id
+    const current = this.#drafts.get(`${accountId}:${draftId}`) ?? await this.readGmailDraft(accountId, draftId, true)
+    if (current.attachments.length) return this.updateGmailDraft({ ...current, ...fields, to: fields.to === undefined ? current.to : addressList(fields.to) }, undefined, true)
     if (!accountId || !draftId || !Object.keys(fields).length) throw new Error('Draft identity and at least one header are required')
     await this.#post('/v1/connectors/gmail/drafts/update', { linkId: accountId, draftId, preserveContent: true, ...fields })
     return this.readGmailDraft(accountId, draftId)
   }
 
   async attachDraftFiles(accountId: string, draftId: string, paths: readonly string[], operationId: string = randomUUID()) {
+    draftId = this.#local.resolveReplacement(accountId, draftId).id
     if (!paths.length || paths.some(path => !isAbsolute(path))) throw new Error('Supply absolute file paths to attach.')
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)) throw new Error('Attachment operation ID must be a UUID.')
     const media: Record<string, string> = { '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }
@@ -1705,7 +1826,13 @@ export class GmailConnectorProvider {
     }
   }
 
-  async readGmailDraft(accountId: string, draftId: string, authoritative = false): Promise<DraftProjection> {
+  async readGmailDraft(accountId: string, draftId: string, authoritative = false, exact = false): Promise<DraftProjection> {
+    if (!exact) {
+      const pending = this.#local.replacement(accountId, draftId)
+      if (pending?.state === 'retiring') await this.#finishAttachmentReplacement(pending)
+      const resolved = this.#local.resolveReplacement(accountId, draftId).id
+      if (resolved !== draftId) return { ...await this.readGmailDraft(accountId, resolved, authoritative), resolvedFromDraftId: draftId }
+    }
     if (['accepted', 'verified'].includes(this.existingDraftSend(accountId, draftId)?.status ?? '')) throw Object.assign(new Error('This draft was sent.'), { code: 'gmail_draft_not_found' })
     if (this.#draftQueue.owns(accountId, draftId)) return this.#draftQueue.read(accountId, draftId)
     const key = `${accountId}:${draftId}`
@@ -1722,11 +1849,17 @@ export class GmailConnectorProvider {
       throw Object.assign(new Error(`Gmail draft ${draftId} was not found`), { code: 'gmail_draft_not_found' })
     }
     const message = await this.readMessage(accountId, summary.messageId)
-    const existing = this.#drafts.get(`${accountId}:${draftId}`)
+    const existing = this.#drafts.get(`${accountId}:${draftId}`) ?? this.#local.draft(accountId, draftId)
     let draft = this.#projectGmailDraft(summary, message, existing?.inReplyToMessageId ?? summary.messageId, accountId, authoritative ? undefined : existing)
     if (authoritative) {
       draft = { ...draft, to: message.to ?? [], cc: message.cc?.map(item => item.address).join(', ') ?? '', bcc: message.bcc?.map(item => item.address).join(', ') ?? '', subject: message.subject,
         attachments: await this.#resolveDraftAttachments(accountId, draft.attachments) }
+    }
+    const providerBody = this.#local.draftProviderBody(accountId, draftId)
+    if (providerBody && normalizedDraftBody(draft.bodyMarkdown) === normalizedDraftBody(providerBody.providerMarkdown)) draft = { ...draft, ...providerBody.authored }
+    else if (existing?.inReplyToMessageId && existing.inReplyToMessageId !== draft.gmailMessageId && this.#hasProviderQuote(existing.bodyMarkdown, draft.bodyMarkdown)) {
+      this.#local.putDraftProviderBody(accountId, draftId, existing, draft.bodyMarkdown)
+      draft = { ...draft, bodyMarkdown: existing.bodyMarkdown, bodyHtml: existing.bodyHtml, bodyText: existing.bodyText }
     }
     this.#rememberDraft(draft, false, request)
     return authoritative || this.#draftCacheRequests.get(key) === request ? draft : this.#drafts.get(key) ?? draft
@@ -1761,7 +1894,18 @@ export class GmailConnectorProvider {
     return { ...(this.#draftCacheRequests.get(key) === request ? result : this.#drafts.get(key) ?? result), resolvedFromDraftId: result.resolvedFromDraftId }
   }
 
-  async discardGmailDraft(accountId: string, draftId: string, queuedWrite = false): Promise<void> {
+  async discardGmailDraft(accountId: string, draftId: string, queuedWrite = false, exact = false): Promise<void> {
+    if (!exact) {
+      const replacement = this.#local.replacement(accountId, draftId)
+      if (replacement) {
+        const intent = this.#local.draftCreate(accountId, replacement.marker)
+        const child = replacement.replacementId ?? intent?.draftId ?? (intent ? await this.#findDraftByClientMarker(accountId, replacement.marker) : undefined)
+        if (intent && !child && !intent.rejected) throw new Error('Waiting for Gmail to confirm the replacement draft before discarding it.')
+        if (child) await this.discardGmailDraft(accountId, child, true)
+        await this.discardGmailDraft(accountId, draftId, true, true)
+        return
+      }
+    }
     if (!queuedWrite) {
       const queued = this.#draftQueue.pendingRemote(accountId, draftId)
       if (queued || this.#draftQueue.owns(accountId, draftId)) return this.#draftQueue.discard(accountId, queued?.id ?? draftId)
@@ -1822,7 +1966,11 @@ export class GmailConnectorProvider {
     if (!sent.labels?.includes('SENT')) return false
     const addresses = (value: string) => addressList(value).map(item => item.address.toLowerCase()).sort().join(',')
     for (const key of ['to', 'cc', 'bcc'] as const) if (addresses(fields[key]) !== addresses((sent[key] ?? []).map(item => item.address).join(', '))) return false
-    if (fields.subject !== sent.subject || normalizedDraftBody(fields.bodyMarkdown) !== normalizedDraftBody(plainBodyFromMessage(sent))) return false
+    if (fields.subject !== sent.subject) return false
+    const providerBody = this.#local.draftProviderBody(accountId, this.#local.resolveReplacement(accountId, draftId).id)
+    const sentBody = normalizedDraftBody(plainBodyFromMessage(sent))
+    const authored = normalizedDraftBody(fields.bodyMarkdown)
+    if (authored !== sentBody && !(providerBody && authored === normalizedDraftBody(providerBody.authored.bodyMarkdown) && sentBody === normalizedDraftBody(providerBody.providerMarkdown))) return false
     if (fields.attachments.length !== sent.attachments.length) return false
     const expected = await this.#resolveDraftAttachments(accountId, fields.attachments)
     const actual = await this.#resolveDraftAttachments(accountId, sent.attachments.map(file => ({ ...file, sourceMessageId: sent.id })))
@@ -1890,6 +2038,7 @@ export class GmailConnectorProvider {
   }
 
   async sendGmailDraft(accountId: string, draftId: string): Promise<unknown> {
+    draftId = this.#local.resolveReplacement(accountId, draftId).id
     if (this.#draftQueue.pendingRemote(accountId, draftId)) throw new Error('Draft is still syncing. Nothing was sent.')
     if (this.#draftQueue.owns(accountId, draftId)) {
       const resolved = await this.#draftQueue.read(accountId, draftId)
@@ -1929,6 +2078,7 @@ export class GmailConnectorProvider {
   }
 
   existingDraftSend(accountId: string, draftId?: string, clientDraftId?: string): SendReceipt | undefined {
+    if (draftId) draftId = this.#local.resolveReplacement(accountId, draftId).id
     const identities = [draftId ? this.#local.draftSave(accountId, draftId)?.remoteId : undefined, clientDraftId ? `queued-${clientDraftId}` : undefined, draftId, draftId ? this.#draftQueue.origin(accountId, draftId) : undefined, draftId ? this.#draftQueue.pendingRemote(accountId, draftId)?.id : undefined]
     const receipt = identities.flatMap(id => id ? [this.#local.receiptForDraft(accountId, id)] : []).filter((value): value is SendReceipt => Boolean(value)).sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))[0]
     return receipt?.status !== 'failed' ? receipt : undefined
@@ -1936,6 +2086,7 @@ export class GmailConnectorProvider {
 
   /** Persist one explicit send attempt before returning; Gmail work runs independently of the window. */
   beginGmailDraftSend(accountId: string, draftId: string, expectedRevision?: number): SendReceipt {
+    draftId = this.#local.resolveReplacement(accountId, draftId).id
     if (!accountId || !draftId) throw new Error('Account and draft ID are required')
     if (this.#actionsPaused || this.#stopped) throw new Error('Dispatch is updating. Your reply is kept; try Send again when the update finishes.')
     const previous = this.existingDraftSend(accountId, draftId)
@@ -2170,7 +2321,7 @@ export class GmailConnectorProvider {
       const retryAt = this.#pauseAccount(linkId, failure)
       throw Object.assign(new Error(`Gmail is rate limiting this account. Retry after ${new Date(retryAt).toISOString()}: ${JSON.stringify(value)}`), { code: 'gmail_backoff', connectorPayload: value })
     }
-    if (!response.ok) throw Object.assign(new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`), response.status === 400 ? { code: 'gmail_invalid_arguments' } : {})
+    if (!response.ok) throw Object.assign(new Error(`Gmail connector request failed (${response.status}): ${JSON.stringify(value)}`), response.status === 400 ? { code: 'gmail_invalid_arguments' } : record(value)?.providerWriteStarted === false ? { code: 'gmail_write_not_started' } : {})
     if (record(value)?.isError || content.error) {
       const data = record(content.error_data)
       // Only the exact Gmail thread read's structured provider 404 retires evidence.
@@ -2188,7 +2339,7 @@ export class GmailConnectorProvider {
     const readOnly = ['/v1/connectors/gmail', '/v1/connectors/gmail/search', '/v1/connectors/gmail/search-messages',
       '/v1/connectors/gmail/read', '/v1/connectors/gmail/read-thread', '/v1/connectors/gmail/drafts/list', '/v1/connectors/gmail/attachment'].includes(path)
     const scan = this.#syncContext.getStore()
-    const deadline = AbortSignal.timeout(30_000)
+    const deadline = AbortSignal.timeout(/drafts\/(?:create|update)$/.test(path) && Array.isArray(bodyValue?.attachments) && bodyValue.attachments.length > 0 ? 180_000 : 30_000)
     const signal = scan ? AbortSignal.any([scan, deadline]) : deadline
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined

@@ -17,6 +17,10 @@ export interface SendReceipt {
 }
 export interface OfflineDownload { id: string; state: 'running' | 'complete' | 'partial' | 'cancelled' | 'interrupted'; mailbox: string; accountId?: string; total: number; completed: number; errors: string[]; startedAt: string }
 export interface DraftConflictCopy { id: string; accountId: string; draftId: string; local: DraftProjection; remote: DraftProjection; choice: 'keep-local' | 'use-remote'; createdAt: string }
+export interface DraftReplacement {
+  accountId: string; originalId: string; marker: string; source: DraftProjection; target: DraftProjection
+  replacementId?: string; state: 'creating' | 'retiring' | 'complete'
+}
 
 /** Mail alone owns downloaded message bodies and provider send receipts. */
 export class LocalMailStore {
@@ -119,6 +123,32 @@ export class LocalMailStore {
     this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES(?,?)').run(`draft-create:${accountId}:${clientId}`, JSON.stringify(value))
   }
   removeDraftCreate(accountId: string, clientId: string): void { this.#db.prepare('DELETE FROM local_state WHERE key=?').run(`draft-create:${accountId}:${clientId}`) }
+  draftProviderBody(accountId: string, draftId: string): { authored: Pick<DraftProjection, 'bodyMarkdown' | 'bodyHtml' | 'bodyText'>; providerMarkdown: string } | undefined {
+    const row = this.#db.prepare('SELECT payload FROM local_state WHERE key=?').get(`draft-provider-body:${accountId}:${draftId}`)
+    return row ? JSON.parse(String(row.payload)) : undefined
+  }
+  putDraftProviderBody(accountId: string, draftId: string, authored: DraftProjection, providerMarkdown: string): void {
+    const { bodyMarkdown, bodyHtml, bodyText } = authored
+    this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES(?,?)').run(`draft-provider-body:${accountId}:${draftId}`, JSON.stringify({ authored: { bodyMarkdown, bodyHtml, bodyText }, providerMarkdown }))
+  }
+  replacement(accountId: string, draftId: string): DraftReplacement | undefined {
+    const row = this.#db.prepare('SELECT payload FROM local_state WHERE key=?').get(`draft-replacement:${accountId}:${draftId}`)
+    return row ? JSON.parse(String(row.payload)) : undefined
+  }
+  putReplacement(value: DraftReplacement): void {
+    this.#db.prepare('INSERT OR REPLACE INTO local_state VALUES(?,?)').run(`draft-replacement:${value.accountId}:${value.originalId}`, JSON.stringify(value))
+  }
+  resolveReplacement(accountId: string, draftId: string): { id: string; baseline?: DraftProjection } {
+    const seen = new Set<string>()
+    let id = draftId, baseline: DraftProjection | undefined
+    for (;;) {
+      if (seen.has(id) || seen.size >= 64) throw new Error('Invalid draft replacement chain. Your draft is kept.')
+      seen.add(id)
+      const item = this.replacement(accountId, id)
+      if (item?.state !== 'complete' || !item.replacementId) return { id, baseline }
+      id = item.replacementId; baseline = item.target
+    }
+  }
   cache(conversation: ConversationProjection): string {
     if (!conversation.accountId) throw new Error('A downloaded conversation requires an account')
     const cachedAt = new Date().toISOString()

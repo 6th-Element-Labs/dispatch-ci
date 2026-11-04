@@ -13,7 +13,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function executable(label: string, broken = false, defaultProvider = 'openai'): Promise<string> {
+async function executable(label: string, broken = false, defaultProvider = 'openai', contractDrift = false): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dispatch-codex-process-')); roots.push(root)
   const command = join(root, 'codex')
   await writeFile(command, `#!${process.execPath}\nconst rl=require('node:readline').createInterface({input:process.stdin});
@@ -26,14 +26,15 @@ else if(m.method==='thread/start'||m.method==='thread/resume') {const selected=m
 }
 else if(m.method==='turn/start') process.stdout.write(JSON.stringify({id:m.id,...(threads.get(m.params.threadId)!==provider?{error:{message:'Thread provider differs from process provider'}}:{result:{status:'completed'}})})+'\\n');
 else if(m.method==='initialize' && ${broken}) process.stdout.write(JSON.stringify({id:m.id,error:{message:'incompatible runtime'}})+'\\n');
+else if(m.method==='mcpServerStatus/list' && ${contractDrift})process.stdout.write(JSON.stringify({id:m.id,result:{data:[{name:'codex_apps',tools:{'gmail.create_draft':{_meta:{connector_name:'Gmail',link_id:'account'},inputSchema:{type:'object',properties:{new_body:{type:'string'}},required:['new_body']}}}}]}})+'\\n');
 else if(m.method==='hold')setTimeout(()=>process.stdout.write(JSON.stringify({id:m.id,result:'${label}'})+'\\n'),150);
 else process.stdout.write(JSON.stringify({id:m.id,result:'${label}'})+'\\n');});\n`)
   await chmod(command, 0o755)
   return command
 }
 
-async function managed(broken = false) {
-  const previous = await executable('previous'), updated = await executable('updated', broken)
+async function managed(broken = false, drift = false) {
+  const previous = await executable('previous'), updated = await executable('updated', broken, 'openai', drift)
   const release = { command: updated, version: '0.160.0' }
   const manager: RuntimeUpdater = {
     status: { automatic: true, command: previous, version: '0.159.0', checkedAt: null, availableVersion: null, state: 'idle', error: null },
@@ -139,4 +140,13 @@ else process.stdout.write(JSON.stringify({id:m.id,result:'recovered'})+'\\n');})
     expect(events).toContain('dispatch/appServerReconnected')
     expect(codex.lastError()).toBeNull()
   })
+})
+
+it('rolls back a runtime candidate whose Gmail write contract is incompatible', async () => {
+  const { codex, manager, allow } = await managed(false, true)
+  allow(); await codex.checkForUpdates()
+  expect(await codex.request('model/list')).toBe('previous')
+  expect(manager.activated).not.toHaveBeenCalled()
+  expect(manager.reject).toHaveBeenCalledOnce()
+  expect(codex.lastWarning()).toContain('Gmail connector changed')
 })

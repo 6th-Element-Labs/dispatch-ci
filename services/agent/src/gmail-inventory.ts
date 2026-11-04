@@ -1,3 +1,4 @@
+import { toolContract, type GmailToolContract } from './gmail-contract.js'
 export interface GmailDraftWrite { readonly htmlBody: true; readonly attachmentFiles: boolean }
 
 export interface GmailAccount {
@@ -8,6 +9,7 @@ export interface GmailAccount {
 }
 
 export interface GmailInventory {
+  readonly contracts?: Readonly<Record<string, GmailToolContract>>
   readonly draftWrites?: { readonly create?: GmailDraftWrite; readonly update?: GmailDraftWrite }
   readonly readSupportsRawMime?: true
   readonly available: boolean
@@ -71,6 +73,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
   const data = Array.isArray(root?.data) ? root.data : []
   const accounts = new Map<string, GmailAccount>()
   const toolNames = new Set<string>()
+  const contracts: Record<string, GmailToolContract> = {}
   const draftWrites: { create?: GmailDraftWrite; update?: GmailDraftWrite } = {}
   let readSupportsRawMime = false
   let serverName: string | null = null
@@ -86,6 +89,8 @@ export function readGmailInventory(value: unknown): GmailInventory {
       if (text(meta?.connector_name) !== 'Gmail') continue
       serverName ??= text(server.name) || null
       toolNames.add(wireName)
+      const contract = toolContract(tool)
+      if (contract) contracts[wireName] = contract
       if (wireName === 'gmail.create_draft' || wireName === 'gmail.update_draft') {
         const properties = record(record(tool.inputSchema)?.properties)
         if (properties?.html_body && properties?.body) draftWrites[wireName === 'gmail.create_draft' ? 'create' : 'update'] = { htmlBody: true, attachmentFiles: Boolean(properties.attachment_files) }
@@ -111,6 +116,7 @@ export function readGmailInventory(value: unknown): GmailInventory {
   const find = (suffix: string) => [...toolNames].find((name) => name === `gmail.${suffix}`) ?? null
   return {
     available: accounts.size > 0,
+    ...(Object.keys(contracts).length ? { contracts } : {}),
     ...(Object.keys(draftWrites).length ? { draftWrites } : {}),
     ...(readSupportsRawMime ? { readSupportsRawMime: true as const } : {}),
     server: serverName,

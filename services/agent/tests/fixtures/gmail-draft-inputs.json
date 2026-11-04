@@ -169,5 +169,20 @@
       "link_id"
     ],
     "type": "object"
+  },
+  "gmail.send_draft": {
+    "type": "object",
+    "properties": {
+      "draft_id": {
+        "type": "string"
+      },
+      "link_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "draft_id",
+      "link_id"
+    ]
   }
 }

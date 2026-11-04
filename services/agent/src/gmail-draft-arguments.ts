@@ -1,3 +1,4 @@
+import type { ProvidedFile } from './codex-file-upload.js'
 import type { GmailDraftWrite } from './gmail-inventory.js'
 
 /**
@@ -48,11 +49,11 @@ function base64Url(value: string): string {
 
 
 /** Select the installed connector contract before any write; never retry with another format. */
-export function draftArgumentsForConnector(payload: Record<string, unknown>, capability: GmailDraftWrite | undefined, operation: 'create' | 'update') {
+export function draftArgumentsForConnector(payload: Record<string, unknown>, capability: GmailDraftWrite | undefined, operation: 'create' | 'update', uploaded: readonly ProvidedFile[] = []) {
   if (!capability) return draftArguments(payload)
   const files = Array.isArray(payload.attachments) ? payload.attachments : []
-  if (operation === 'update' && (payload.attachmentsChanged === true || files.length > 0 && payload.attachmentsChanged !== false)) {
-    throw Object.assign(new Error('gmail_attachment_unsupported: The installed Gmail connector cannot change attachments on an existing draft. Your files and edits are kept; nothing was sent.'), { code: 'gmail_invalid_arguments' })
+  if (operation === 'update' && !capability.attachmentFiles && (payload.attachmentsChanged === true || files.length > 0)) {
+    throw Object.assign(new Error('gmail_attachment_unsupported: The installed Gmail connector cannot edit a draft with attachments. Your files and edits are kept; nothing was sent.'), { code: 'gmail_invalid_arguments' })
   }
   const html = String(payload.bodyHtml ?? '')
   // The modern API cannot set MIME Content-ID. A non-rendered HTML marker provides
@@ -68,6 +69,9 @@ export function draftArgumentsForConnector(payload: Record<string, unknown>, cap
   if (operation === 'create' && typeof payload.replyMessageId === 'string' && payload.replyMessageId) args.reply_message_id = payload.replyMessageId
   // App Server's direct MCP route does not resolve openai/fileParams paths to
   // hosted file objects. Never send raw paths/base64 or silently drop files.
-  if (operation === 'create' && files.length) throw Object.assign(new Error('gmail_attachment_unsupported: This Gmail connector requires uploaded file handles for new attachments. Dispatch cannot attach these files through its direct connector route. Your files and edits are kept; nothing was sent.'), { code: 'gmail_invalid_arguments' })
+  if (files.length && (operation === 'create' || capability.attachmentFiles)) {
+    if (!capability.attachmentFiles || uploaded.length !== files.length) throw Object.assign(new Error('Gmail attachment upload is incomplete. Your files and edits are kept; nothing was sent.'), { code: 'gmail_invalid_arguments' })
+    args.attachment_files = uploaded
+  }
   return args
 }

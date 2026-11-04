@@ -1,3 +1,5 @@
+import { readGmailInventory } from './gmail-inventory.js'
+import { assertGmailCompatibility } from './gmail-contract.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import readline from 'node:readline'
 import { existsSync } from 'node:fs'
@@ -213,6 +215,12 @@ export class CodexProcess {
       this.#command = release.command
       try {
         await this.#launch()
+        const gmail = readGmailInventory(await this.#auth.call('mcpServerStatus/list', { cursor: null, limit: 100, detail: 'toolsAndAuthOnly' }))
+        if (gmail.available) {
+          assertGmailCompatibility(gmail.contracts ?? {}, gmail.tools)
+          const auth = await this.#auth.call('getAuthStatus', { includeToken: false, refreshToken: false })
+          if (!auth || typeof auth !== 'object' || !('authMethod' in auth)) throw new Error('Codex runtime no longer supports attachment upload authorization')
+        }
         await this.#manager!.activated(release)
       } catch (error) {
         await this.#stopChild()

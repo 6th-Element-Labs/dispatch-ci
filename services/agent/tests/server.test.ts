@@ -24,6 +24,8 @@ it('keeps append markers as normal attachments while preserving images reference
   expect(payload.parts[2]).toMatchObject({ content_id: 'logo@example.com', content_disposition: 'inline' })
 })
 
+const legacyDraftInput = { type: 'object', properties: Object.fromEntries(['link_id', 'draft_id', 'to', 'cc', 'bcc', 'subject', 'reply_message_id'].map(key => [key, { type: 'string' }]).concat([['payload', { type: 'object' }], ['response_fields', { type: 'array' }]])), required: ['link_id'] }
+
 const servers: ReturnType<typeof createAgentServer>[] = []
 let executionDirectory: string
 let executionPath: string
@@ -512,7 +514,7 @@ describe('dispatch-agent', () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
-        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.create_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
       } }] }
       if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
       return { ok: true }
@@ -562,8 +564,8 @@ describe('dispatch-agent', () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
-        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
-        'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.create_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.update_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
       } }] }
       if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
       return { ok: true }
@@ -604,7 +606,7 @@ describe('dispatch-agent', () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
-        'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.update_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
       } }] }
       if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
       return { ok: true }
@@ -652,7 +654,7 @@ describe('dispatch-agent', () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
-        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.create_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
       } }] }
       return { ok: true }
     })
@@ -669,8 +671,8 @@ describe('dispatch-agent', () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
-        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
-        'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.create_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.update_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
       } }] }
       if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
       return { ok: true }
@@ -711,7 +713,7 @@ describe('dispatch-agent', () => {
     const { base, fake } = await start()
     fake.request.mockImplementation(async (method: string) => {
       if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: {
-        'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
+        'gmail.create_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } },
       } }] }
       return { ok: true }
     })
@@ -873,7 +875,7 @@ describe('connector threads', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     fake.request.mockImplementation(async (method: string) => {
-      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: { 'gmail.create_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } } } }] }
+      if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: { 'gmail.create_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } } } }] }
       if (method === 'thread/start') return { thread: { id: 'connector-thread' } }
       return { structuredContent: { id: 'draft-1' } }
     })
@@ -931,7 +933,7 @@ it('passes a file only with its matching account and conversation context', asyn
 it('updates only draft headers without replacing the MIME body or attachments', async () => {
   const { base, fake } = await start()
   fake.request.mockImplementation(async (method: string) => {
-    if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: { 'gmail.update_draft': { _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } } } }] }
+    if (method === 'mcpServerStatus/list') return { data: [{ name: 'codex_apps', tools: { 'gmail.update_draft': { inputSchema: legacyDraftInput, _meta: { connector_name: 'Gmail', connector_id: 'gmail', link_id: 'link-one' } } } }] }
     if (method === 'thread/start') return { thread: { id: 'connector-task' } }
     return { structuredContent: { id: 'draft-one' } }
   })
